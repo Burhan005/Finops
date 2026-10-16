@@ -1299,7 +1299,7 @@ def get_overview(
             if r.get('date') in date_set:
                 c = float(r.get('cost', 0.0) or 0.0)
                 lt = r.get('line_type', '')
-                if lt not in ('Tax', 'Credit', 'Refund', 'SavingsPlanNegation') and c > 0:
+                if lt not in ('Credit', 'Refund', 'SavingsPlanNegation') and c > 0:
                     s = r.get('service', 'Other')
                     agg_services[s] += c
                 if c != 0:

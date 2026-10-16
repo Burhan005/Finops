@@ -1202,7 +1202,7 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
               </div>
 
               {/* Visual 3-Stage Movement Bar */}
-              <div className="p-4 rounded-2xl bg-zorvex-surface-secondary/40 border border-zorvex-border/60 flex flex-col md:flex-row items-center justify-between gap-4 font-mono">
+              <div className="p-4 rounded-2xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary/50 border border-zorvex-border/60 dark:border-zorvex-dark-border/60 flex flex-col md:flex-row items-center justify-between gap-4 font-mono">
                 <div className="text-center md:text-left space-y-0.5">
                   <span className="text-[10px] uppercase font-bold text-zorvex-text-secondary block">Baseline Day Spend</span>
                   <div className="text-xl font-black text-zorvex-text dark:text-zorvex-dark-text">
@@ -1291,7 +1291,7 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
                           setCustomTargetEnd(d.date);
                           setComparisonType('prev_equivalent');
                         }}
-                        className="px-2.5 py-1 rounded-clay-pill text-[11px] font-mono font-bold bg-zorvex-surface-secondary text-zorvex-text-secondary hover:text-zorvex-text hover:bg-zorvex-surface transition-all border border-zorvex-border/40 cursor-pointer shadow-xs"
+                        className="px-2.5 py-1 rounded-clay-pill text-[11px] font-mono font-bold bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary hover:text-zorvex-text dark:hover:text-zorvex-dark-text hover:bg-zorvex-surface dark:hover:bg-zorvex-dark-surface transition-all border border-zorvex-border/40 dark:border-zorvex-dark-border/40 cursor-pointer shadow-xs"
                         title={`Analyze single day: ${d.date}`}
                       >
                         {d.date.slice(5)}: {formatMoney(d.total_cost)}
@@ -1428,12 +1428,12 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
                           className={`transition-colors cursor-pointer ${
                             isSelected
                               ? 'bg-zorvex-forest-soft/70 dark:bg-zorvex-dark-forest-soft/40 border-l-4 border-l-zorvex-forest'
-                              : 'hover:bg-zorvex-surface-secondary/40'
+                              : 'hover:bg-zorvex-surface-secondary/40 dark:hover:bg-zorvex-dark-surface-secondary/40'
                           }`}
                         >
                           <td className="py-3 px-4 font-sans font-bold text-zorvex-text dark:text-zorvex-dark-text flex items-center gap-2.5">
                             <span className={`p-1.5 rounded-lg flex-shrink-0 ${
-                              isSelected ? 'bg-zorvex-forest text-white' : 'bg-zorvex-surface-secondary text-zorvex-text-secondary'
+                              isSelected ? 'bg-zorvex-forest text-white' : 'bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary'
                             }`}>
                               <Icon className="w-3.5 h-3.5" />
                             </span>
@@ -1470,7 +1470,7 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
                               className={`px-3 py-1 rounded-clay-pill text-[10px] font-sans font-extrabold cursor-pointer transition-all ${
                                 isSelected
                                   ? 'bg-zorvex-forest text-white shadow-sm'
-                                  : 'bg-zorvex-surface-secondary text-zorvex-text-secondary hover:text-zorvex-text hover:bg-zorvex-surface'
+                                  : 'bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary hover:text-zorvex-text dark:hover:text-zorvex-dark-text hover:bg-zorvex-surface dark:hover:bg-zorvex-dark-surface border border-zorvex-border/40 dark:border-zorvex-dark-border/40'
                               }`}
                             >
                               {isSelected ? 'Active Filter ✓' : 'Filter Resources'}
@@ -1492,7 +1492,7 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
                 <h3 className="text-base font-extrabold text-zorvex-text dark:text-zorvex-dark-text flex items-center gap-2">
                   <Server className="w-4 h-4 text-zorvex-forest dark:text-zorvex-forest-highlight" />
                   <span>Step 2: Resource-Level Engineering Root Cause</span>
-                  <span className="text-xs font-mono font-bold px-2.5 py-0.5 rounded-full bg-zorvex-surface-secondary text-zorvex-text border border-zorvex-border">
+                  <span className="text-xs font-mono font-bold px-2.5 py-0.5 rounded-full bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text dark:text-zorvex-dark-text border border-zorvex-border dark:border-zorvex-dark-border">
                     {filteredAndSortedResources.length} Billable Resources
                   </span>
                   {selectedServiceFilter !== 'ALL' && (
@@ -1555,12 +1555,12 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
                   className={`px-3 py-1 rounded-clay-pill text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-xs ${
                     selectedSubtypeFilter === 'ALL'
                       ? 'bg-zorvex-forest text-white'
-                      : 'bg-zorvex-surface-secondary text-zorvex-text-secondary hover:text-zorvex-text hover:bg-zorvex-surface border border-zorvex-border/40'
+                      : 'bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary hover:text-zorvex-text dark:hover:text-zorvex-dark-text hover:bg-zorvex-surface dark:hover:bg-zorvex-dark-surface border border-zorvex-border/40 dark:border-zorvex-dark-border/40'
                   }`}
                 >
                   <span>All Workloads</span>
                   <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
-                    selectedSubtypeFilter === 'ALL' ? 'bg-white/20 text-white' : 'bg-zorvex-border text-zorvex-text-secondary'
+                    selectedSubtypeFilter === 'ALL' ? 'bg-white/20 text-white' : 'bg-zorvex-border dark:bg-zorvex-dark-border text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary'
                   }`}>
                     {baseFilteredResources.length}
                   </span>
@@ -1580,7 +1580,7 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
                       className={`px-3 py-1 rounded-clay-pill text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-xs ${
                         isSelected
                           ? 'bg-zorvex-forest text-white'
-                          : 'bg-zorvex-surface-secondary text-zorvex-text-secondary hover:text-zorvex-text hover:bg-zorvex-surface border border-zorvex-border/40'
+                          : 'bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary hover:text-zorvex-text dark:hover:text-zorvex-dark-text hover:bg-zorvex-surface dark:hover:bg-zorvex-dark-surface border border-zorvex-border/40 dark:border-zorvex-dark-border/40'
                       }`}
                     >
                       <SubIcon className="w-3.5 h-3.5" />

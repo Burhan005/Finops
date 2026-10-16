@@ -412,6 +412,7 @@ def parse_cur_files(filepaths: List[str]) -> Dict[str, Any]:
                     monthly_totals[month] += c_val
                     account_totals[account_id] += c_val
                     region_totals[region_val] += c_val
+                    service_totals['Taxes & Surcharges'] += c_val
                 else:
                     total_cost += c_val
                     daily_gross_totals[day] += c_val
