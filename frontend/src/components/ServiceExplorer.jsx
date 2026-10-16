@@ -413,7 +413,7 @@ export default function ServiceExplorer({
   }, [selectedService, serviceCatalog, activeServiceKey, activeService]);
 
   // Top Spenders vs Secondary Services Partitioning (Executive compact view)
-  const TOP_SERVICES_LIMIT = 7;
+  const TOP_SERVICES_LIMIT = 4;
   const { topServices, moreServices } = useMemo(() => {
     // Primary services slice
     const top = serviceCatalog.slice(0, TOP_SERVICES_LIMIT);
@@ -656,43 +656,40 @@ export default function ServiceExplorer({
         </div>
       </div>
 
-      {/* ==================== 2. HORIZONTAL SERVICE SELECTION TABS RIBBON ==================== */}
+      {/* ==================== 2. SERVICE SELECTION TABS RIBBON (NO HORIZONTAL SCROLL) ==================== */}
       <div className="clay-card p-3">
-        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5">
-          {/* Scrollable / Row of Active and Top Services */}
-          <div className={`flex items-center gap-2 ${showAllServices ? 'flex-wrap' : 'overflow-x-auto no-scrollbar py-0.5'}`}>
-            {(showAllServices ? serviceCatalog : topServices).map((svc) => {
-              const Icon = svc.icon;
-              const isSelected = activeServiceKey === svc.key;
+        <div className="flex flex-wrap items-center gap-2">
+          {(showAllServices ? serviceCatalog : topServices).map((svc) => {
+            const Icon = svc.icon;
+            const isSelected = activeServiceKey === svc.key;
 
-              return (
-                <button
-                  key={svc.key}
-                  type="button"
-                  onClick={() => handleSelectService(svc.key)}
-                  className={`flex items-center gap-2 px-3.5 py-2 rounded-clay-pill text-xs font-extrabold transition-all cursor-pointer flex-shrink-0 ${
-                    isSelected
-                      ? 'clay-pill-active text-white shadow-md'
-                      : 'bg-zorvex-surface-secondary/70 dark:bg-zorvex-dark-surface-secondary/70 text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary hover:text-zorvex-text dark:hover:text-zorvex-dark-text hover:bg-zorvex-surface-secondary'
-                  }`}
-                >
-                  <Icon className="w-3.5 h-3.5 flex-shrink-0" />
-                  <span className="whitespace-nowrap">{svc.title}</span>
-                  <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono font-black ${
-                    isSelected
-                      ? 'bg-white/20 text-white'
-                      : 'bg-zorvex-surface dark:bg-zorvex-dark-surface text-zorvex-forest dark:text-zorvex-forest-highlight border border-zorvex-border dark:border-zorvex-dark-border'
-                  }`}>
-                    ${svc.spend.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
+            return (
+              <button
+                key={svc.key}
+                type="button"
+                onClick={() => handleSelectService(svc.key)}
+                className={`flex items-center gap-2 px-3.5 py-2 rounded-clay-pill text-xs font-extrabold transition-all cursor-pointer ${
+                  isSelected
+                    ? 'clay-pill-active text-white shadow-md'
+                    : 'bg-zorvex-surface-secondary/70 dark:bg-zorvex-dark-surface-secondary/70 text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary hover:text-zorvex-text dark:hover:text-zorvex-dark-text hover:bg-zorvex-surface-secondary'
+                }`}
+              >
+                <Icon className="w-3.5 h-3.5 flex-shrink-0" />
+                <span className="whitespace-nowrap">{svc.title}</span>
+                <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono font-black ${
+                  isSelected
+                    ? 'bg-white/20 text-white'
+                    : 'bg-zorvex-surface dark:bg-zorvex-dark-surface text-zorvex-forest dark:text-zorvex-forest-highlight border border-zorvex-border dark:border-zorvex-dark-border'
+                }`}>
+                  ${svc.spend.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>
+              </button>
+            );
+          })}
 
-          {/* Right Action: More Services Dropdown & View Mode Toggle */}
-          <div className="flex items-center gap-2 flex-shrink-0 self-end sm:self-center">
-            {!showAllServices && moreServices.length > 0 && (
+          {/* More Services Dropdown */}
+          {!showAllServices && moreServices.length > 0 && (
+            <div className="flex-shrink-0">
               <ClayDropdown
                 options={moreServiceOptions}
                 value=""
@@ -701,18 +698,19 @@ export default function ServiceExplorer({
                 searchable={true}
                 width="w-48 sm:w-52"
               />
-            )}
+            </div>
+          )}
 
-            <button
-              type="button"
-              onClick={() => setShowAllServices(!showAllServices)}
-              title={showAllServices ? "Collapse to Top Spenders" : `Show All ${serviceCatalog.length} Services`}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-clay-pill text-xs font-extrabold bg-zorvex-surface-secondary/60 dark:bg-zorvex-dark-surface-secondary/60 hover:bg-zorvex-surface-secondary text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary border border-zorvex-border dark:border-zorvex-dark-border transition-all cursor-pointer flex-shrink-0"
-            >
-              <SlidersHorizontal className="w-3.5 h-3.5 text-zorvex-forest dark:text-zorvex-forest-highlight" />
-              <span className="hidden sm:inline">{showAllServices ? 'Compact' : `All (${serviceCatalog.length})`}</span>
-            </button>
-          </div>
+          {/* View Mode Toggle */}
+          <button
+            type="button"
+            onClick={() => setShowAllServices(!showAllServices)}
+            title={showAllServices ? "Collapse to Top Spenders" : `Show All ${serviceCatalog.length} Services`}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-clay-pill text-xs font-extrabold bg-zorvex-surface-secondary/60 dark:bg-zorvex-dark-surface-secondary/60 hover:bg-zorvex-surface-secondary text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary border border-zorvex-border dark:border-zorvex-dark-border transition-all cursor-pointer flex-shrink-0 ml-auto sm:ml-0"
+          >
+            <SlidersHorizontal className="w-3.5 h-3.5 text-zorvex-forest dark:text-zorvex-forest-highlight" />
+            <span>{showAllServices ? 'Compact' : `All (${serviceCatalog.length})`}</span>
+          </button>
         </div>
       </div>
 
