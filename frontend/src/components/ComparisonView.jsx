@@ -789,7 +789,7 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
               <div>
                 <h2 className="text-xl sm:text-2xl font-black text-zorvex-text dark:text-zorvex-dark-text tracking-tight flex items-center gap-2">
                   <span>Cost Investigation & Variance Attribution</span>
-                  <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded-full bg-zorvex-forest-soft text-zorvex-forest dark:text-zorvex-forest-highlight font-bold border border-zorvex-forest/20">
+                  <span className="text-[10px] uppercase font-mono px-2.5 py-0.5 rounded-full bg-zorvex-forest-soft dark:bg-zorvex-forest-dark-soft text-zorvex-forest dark:text-zorvex-forest-highlight font-black border border-zorvex-forest/20 dark:border-zorvex-forest-highlight/30 shadow-xs">
                     CUR Forensics
                   </span>
                 </h2>
@@ -1336,10 +1336,10 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
                     setSelectedSubtypeFilter('ALL');
                     setResourcePage(1);
                   }}
-                  className="px-3.5 py-1.5 rounded-clay-pill bg-zorvex-surface hover:bg-zorvex-border text-zorvex-text text-xs font-bold flex items-center gap-1.5 cursor-pointer border border-zorvex-border shadow-xs transition-all"
+                  className="px-3.5 py-1.5 rounded-clay-pill bg-zorvex-surface dark:bg-zorvex-dark-surface hover:bg-zorvex-border dark:hover:bg-zorvex-dark-surface-secondary text-zorvex-text dark:text-zorvex-dark-text text-xs font-bold flex items-center gap-1.5 cursor-pointer border border-zorvex-border dark:border-zorvex-dark-border shadow-xs transition-all"
                   title="Show all services"
                 >
-                  <Eye className="w-3.5 h-3.5 text-zorvex-forest" />
+                  <Eye className="w-3.5 h-3.5 text-zorvex-forest dark:text-zorvex-forest-highlight" />
                   <span>Switch / View All Services</span>
                 </button>
                 <button
@@ -1496,7 +1496,7 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
                     {filteredAndSortedResources.length} Billable Resources
                   </span>
                   {selectedServiceFilter !== 'ALL' && (
-                    <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-zorvex-forest-soft text-zorvex-forest dark:text-zorvex-forest-highlight">
+                    <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-zorvex-forest-soft dark:bg-zorvex-forest-dark-soft text-zorvex-forest dark:text-zorvex-forest-highlight border border-zorvex-forest/20 dark:border-zorvex-forest-highlight/30">
                       Scoped to {selectedServiceFilter}
                     </span>
                   )}
@@ -1540,9 +1540,9 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
 
             {/* Quick Workload Subtype Tabs / Filter Pills */}
             {availableSubtypes.length > 1 && (
-              <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-zorvex-border/40">
-                <span className="text-[10px] font-black uppercase text-zorvex-text-secondary mr-1 flex items-center gap-1">
-                  <Filter className="w-3 h-3 text-zorvex-forest" />
+              <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-zorvex-border/40 dark:border-zorvex-dark-border/40">
+                <span className="text-[10px] font-black uppercase text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary mr-1 flex items-center gap-1">
+                  <Filter className="w-3 h-3 text-zorvex-forest dark:text-zorvex-forest-highlight" />
                   <span>Workload Type:</span>
                 </span>
 
@@ -1559,8 +1559,10 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
                   }`}
                 >
                   <span>All Workloads</span>
-                  <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
-                    selectedSubtypeFilter === 'ALL' ? 'bg-white/20 text-white' : 'bg-zorvex-border dark:bg-zorvex-dark-border text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary'
+                  <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono font-black ${
+                    selectedSubtypeFilter === 'ALL'
+                      ? 'bg-white/20 text-white'
+                      : 'bg-zorvex-border/60 dark:bg-black/35 text-zorvex-text dark:text-zorvex-dark-text border border-zorvex-border/30 dark:border-zorvex-dark-border/60'
                   }`}>
                     {baseFilteredResources.length}
                   </span>
@@ -1586,7 +1588,9 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
                       <SubIcon className="w-3.5 h-3.5" />
                       <span>{sub.label}</span>
                       <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono font-black ${
-                        isSelected ? 'bg-white/20 text-white' : 'bg-zorvex-border text-zorvex-text-secondary'
+                        isSelected
+                          ? 'bg-white/20 text-white'
+                          : 'bg-zorvex-border/60 dark:bg-black/35 text-zorvex-text dark:text-zorvex-dark-text border border-zorvex-border/30 dark:border-zorvex-dark-border/60'
                       }`}>
                         {sub.count}
                       </span>
@@ -1963,7 +1967,9 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
                             <td className="py-2 px-3 font-bold text-zorvex-text dark:text-zorvex-dark-text whitespace-nowrap">{li.date}</td>
                             <td className="py-2 px-3">
                               <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${
-                                li.period === 'target' ? 'bg-zorvex-forest-soft text-zorvex-forest' : 'bg-zorvex-surface-secondary text-zorvex-text-secondary'
+                                li.period === 'target'
+                                  ? 'bg-zorvex-forest-soft dark:bg-zorvex-forest-dark-soft text-zorvex-forest dark:text-zorvex-forest-highlight border border-zorvex-forest/20 dark:border-zorvex-forest-highlight/30'
+                                  : 'bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary border border-zorvex-border/40 dark:border-zorvex-dark-border/40'
                               }`}>
                                 {li.period || 'current'}
                               </span>
