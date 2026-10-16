@@ -276,6 +276,9 @@ export default function ServiceExplorer({
   const [detailData, setDetailData] = useState(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
 
+  // Service Selector Ribbon View Mode (Compact vs All)
+  const [showAllServices, setShowAllServices] = useState(false);
+
   // Sync external selectedAccount
   useEffect(() => {
     if (selectedAccount && selectedAccount !== accountFilter) {
@@ -394,6 +397,34 @@ export default function ServiceExplorer({
   }, [selectedService, serviceCatalog]);
 
   const activeService = serviceCatalog.find((s) => s.key === activeServiceKey) || serviceCatalog[0];
+
+  // Top Spenders vs Secondary Services Partitioning (Executive compact view)
+  const TOP_SERVICES_LIMIT = 7;
+  const { topServices, moreServices } = useMemo(() => {
+    // Primary services slice
+    const top = serviceCatalog.slice(0, TOP_SERVICES_LIMIT);
+    const activeInTop = top.some((s) => s.key === activeServiceKey);
+
+    // If active service is not among top spenders, ensure it is visible in the quick-access row
+    if (!activeInTop) {
+      const activeItem = serviceCatalog.find((s) => s.key === activeServiceKey);
+      if (activeItem) {
+        top.push(activeItem);
+      }
+    }
+
+    const more = serviceCatalog.filter((s) => !top.some((t) => t.key === s.key));
+    return { topServices: top, moreServices: more };
+  }, [serviceCatalog, activeServiceKey]);
+
+  const moreServiceOptions = useMemo(() => {
+    return moreServices.map((svc) => ({
+      value: svc.key,
+      label: svc.title,
+      icon: svc.icon,
+      subtext: `$${svc.spend.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    }));
+  }, [moreServices]);
 
   // Fetch Resources for Selected Service
   const fetchServiceResources = async () => {
@@ -617,34 +648,61 @@ export default function ServiceExplorer({
 
       {/* ==================== 2. HORIZONTAL SERVICE SELECTION TABS RIBBON ==================== */}
       <div className="clay-card p-3">
-        <div className="flex flex-wrap items-center gap-2">
-          {serviceCatalog.map((svc) => {
-            const Icon = svc.icon;
-            const isSelected = activeServiceKey === svc.key;
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5">
+          {/* Scrollable / Row of Active and Top Services */}
+          <div className={`flex items-center gap-2 ${showAllServices ? 'flex-wrap' : 'overflow-x-auto no-scrollbar py-0.5'}`}>
+            {(showAllServices ? serviceCatalog : topServices).map((svc) => {
+              const Icon = svc.icon;
+              const isSelected = activeServiceKey === svc.key;
 
-            return (
-              <button
-                key={svc.key}
-                type="button"
-                onClick={() => handleSelectService(svc.key)}
-                className={`flex items-center gap-2.5 px-4 py-2.5 rounded-clay-pill text-xs font-extrabold transition-all cursor-pointer flex-shrink-0 ${
-                  isSelected
-                    ? 'clay-pill-active text-white shadow-md'
-                    : 'bg-zorvex-surface-secondary/70 dark:bg-zorvex-dark-surface-secondary/70 text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary hover:text-zorvex-text dark:hover:text-zorvex-dark-text hover:bg-zorvex-surface-secondary'
-                }`}
-              >
-                <Icon className="w-4 h-4 flex-shrink-0" />
-                <span>{svc.title}</span>
-                <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-black ${
-                  isSelected
-                    ? 'bg-white/20 text-white'
-                    : 'bg-zorvex-surface dark:bg-zorvex-dark-surface text-zorvex-forest dark:text-zorvex-forest-highlight border border-zorvex-border dark:border-zorvex-dark-border'
-                }`}>
-                  ${svc.spend.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                </span>
-              </button>
-            );
-          })}
+              return (
+                <button
+                  key={svc.key}
+                  type="button"
+                  onClick={() => handleSelectService(svc.key)}
+                  className={`flex items-center gap-2 px-3.5 py-2 rounded-clay-pill text-xs font-extrabold transition-all cursor-pointer flex-shrink-0 ${
+                    isSelected
+                      ? 'clay-pill-active text-white shadow-md'
+                      : 'bg-zorvex-surface-secondary/70 dark:bg-zorvex-dark-surface-secondary/70 text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary hover:text-zorvex-text dark:hover:text-zorvex-dark-text hover:bg-zorvex-surface-secondary'
+                  }`}
+                >
+                  <Icon className="w-3.5 h-3.5 flex-shrink-0" />
+                  <span className="whitespace-nowrap">{svc.title}</span>
+                  <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono font-black ${
+                    isSelected
+                      ? 'bg-white/20 text-white'
+                      : 'bg-zorvex-surface dark:bg-zorvex-dark-surface text-zorvex-forest dark:text-zorvex-forest-highlight border border-zorvex-border dark:border-zorvex-dark-border'
+                  }`}>
+                    ${svc.spend.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Right Action: More Services Dropdown & View Mode Toggle */}
+          <div className="flex items-center gap-2 flex-shrink-0 self-end sm:self-center">
+            {!showAllServices && moreServices.length > 0 && (
+              <ClayDropdown
+                options={moreServiceOptions}
+                value=""
+                onChange={(val) => handleSelectService(val)}
+                placeholder={`+ More (${moreServices.length})`}
+                searchable={true}
+                width="w-48 sm:w-52"
+              />
+            )}
+
+            <button
+              type="button"
+              onClick={() => setShowAllServices(!showAllServices)}
+              title={showAllServices ? "Collapse to Top Spenders" : `Show All ${serviceCatalog.length} Services`}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-clay-pill text-xs font-extrabold bg-zorvex-surface-secondary/60 dark:bg-zorvex-dark-surface-secondary/60 hover:bg-zorvex-surface-secondary text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary border border-zorvex-border dark:border-zorvex-dark-border transition-all cursor-pointer flex-shrink-0"
+            >
+              <SlidersHorizontal className="w-3.5 h-3.5 text-zorvex-forest dark:text-zorvex-forest-highlight" />
+              <span className="hidden sm:inline">{showAllServices ? 'Compact' : `All (${serviceCatalog.length})`}</span>
+            </button>
+          </div>
         </div>
       </div>
 
