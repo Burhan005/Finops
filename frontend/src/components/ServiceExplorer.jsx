@@ -377,6 +377,10 @@ export default function ServiceExplorer({
     return [...list, ...dynamicItems];
   }, [effectiveServices, masterServices, hierarchiesData, resourceData]);
 
+  const activeService = useMemo(() => {
+    return serviceCatalog.find((s) => s.key === activeServiceKey) || serviceCatalog[0];
+  }, [serviceCatalog, activeServiceKey]);
+
   // Two-way synchronization with external selectedService
   useEffect(() => {
     if (selectedService && selectedService !== 'All') {
@@ -407,8 +411,6 @@ export default function ServiceExplorer({
       }
     }
   }, [selectedService, serviceCatalog, activeServiceKey, activeService]);
-
-  const activeService = serviceCatalog.find((s) => s.key === activeServiceKey) || serviceCatalog[0];
 
   // Top Spenders vs Secondary Services Partitioning (Executive compact view)
   const TOP_SERVICES_LIMIT = 7;
