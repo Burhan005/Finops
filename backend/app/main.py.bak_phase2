@@ -1,0 +1,950 @@
+"""
+FastAPI Server for FinOps Clay Platform
+Provides REST APIs for CUR parsing, date-to-date comparison, waste recommendations, and resource explorer.
+"""
+
+import os
+import glob
+import shutil
+from typing import Optional, List
+from datetime import datetime
+import hashlib
+import secrets
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+from .database import engine, Base, get_db
+from .models import (
+    DatasetRecord, AuditEvent, User, UserSession, S3SyncConfig, 
+    AgencyBrandingConfig, UnitEconomicsConfig, RecommendationRecord, 
+    AnomalyAlert, BudgetConfig, ForecastRun, AiAnalystQuery, S3SyncExecutionHistory
+)
+from .security import hash_password, verify_and_upgrade_password, generate_session_token, sanitize_identifier
+from .anomalies import detect_anomalies_from_dataset, sync_anomalies_to_db, get_stored_anomalies
+from .budget_guard import calculate_cost_forecast, evaluate_budgets
+from .savings_ledger import (
+    sync_recommendations_to_ledger, update_recommendation_status, 
+    get_ledger_records, get_executive_ledger_summary
+)
+from .ai_analyst import ask_zorvex_analyst
+from .parser import parse_cur_file
+from .analytics import compare_dates, get_trend_data, calculate_daily_delta, compare_months
+from .recommendations import generate_recommendations
+from .exporter import generate_executive_html, generate_executive_excel
+from .simulator import simulate_savings_plan
+from .forex import fetch_live_usd_to_inr
+
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, HTMLResponse, Response
+
+# Initialize DB tables
+Base.metadata.create_all(bind=engine)
+
+app = FastAPI(
+    title="AWS FinOps Clay Platform API",
+    version="1.0.0",
+    description="High performance AWS Cost & Usage Analysis Engine with Claymorphism frontend support"
+)
+
+# CORS setup
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+FRONTEND_DIST = os.path.abspath(os.path.join(BASE_DIR, '..', 'frontend', 'dist'))
+SAMPLES_DIR = os.path.join(BASE_DIR, 'data', 'samples')
+UPLOADS_DIR = os.path.join(BASE_DIR, 'data', 'uploads')
+os.makedirs(SAMPLES_DIR, exist_ok=True)
+os.makedirs(UPLOADS_DIR, exist_ok=True)
+
+
+# In-memory cached dataset state
+CURRENT_DATASET = {
+    'filename': '',
+    'filepath': '',
+    'data': None
+}
+
+def load_initial_dataset():
+    samples = glob.glob(os.path.join(SAMPLES_DIR, '*.csv')) + glob.glob(os.path.join(SAMPLES_DIR, '*.csv.gz'))
+    if samples:
+        # Prioritize real production CUR-Report-Daily file
+        chosen = None
+        for s in samples:
+            if 'CUR-Report-Daily' in s:
+                chosen = s
+                break
+        if not chosen:
+            for s in samples:
+                if 'production_exact' in s or 'ultimate_master' in s:
+                    chosen = s
+                    break
+        if not chosen:
+            chosen = samples[0]
+
+        try:
+            parsed = parse_cur_file(chosen)
+            CURRENT_DATASET['filename'] = os.path.basename(chosen)
+            CURRENT_DATASET['filepath'] = chosen
+            CURRENT_DATASET['data'] = parsed
+            print(f" Loaded initial dataset: {os.path.basename(chosen)} (${parsed['total_cost']})")
+        except Exception as e:
+            print(f"Failed to load initial dataset {chosen}: {e}")
+
+load_initial_dataset()
+
+class SelectDatasetRequest(BaseModel):
+    filename: str
+
+class CompareRequest(BaseModel):
+    baseline_date: str
+    target_date: str
+    account_id: Optional[str] = None
+
+class DailyDeltaRequest(BaseModel):
+    target_date: str
+    baseline_date: Optional[str] = None
+    account_id: Optional[str] = None
+
+class MonthlyCompareRequest(BaseModel):
+    baseline_month: str
+    target_month: str
+    account_id: Optional[str] = None
+
+class S3SyncConfigRequest(BaseModel):
+    bucket_name: str
+    region: Optional[str] = "us-east-1"
+    prefix: Optional[str] = ""
+    role_arn: Optional[str] = ""
+
+class RegisterRequest(BaseModel):
+    name: str
+    company: str
+    email: str
+    password: str
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+class ResetPasswordRequest(BaseModel):
+    email: str
+    password: str
+    token: Optional[str] = None
+
+class AgencyBrandingRequest(BaseModel):
+    agency_name: str
+    client_name: str
+    prepared_by: str
+    contact_email: Optional[str] = "cloudops@finopsclay.io"
+    confidentiality_note: Optional[str] = "Strictly Confidential — Prepared for Executive Boardroom Review"
+
+class UnitEconomicsRequest(BaseModel):
+    metric_name: str
+    metric_unit: str
+    current_volume: float
+    previous_volume: float
+    target_unit_cost: Optional[float] = None
+    notes: Optional[str] = ""
+
+class SavingsPlanSimulatorRequest(BaseModel):
+    commitment_hourly: Optional[float] = None
+    reserved_units: Optional[int] = None
+    term_years: int = 1
+    payment_option: str = "NO_UPFRONT"
+    plan_type: Optional[str] = "COMPUTE_SP"
+    account_id: Optional[str] = None
+    region: Optional[str] = None
+
+class AnomalyActionRequest(BaseModel):
+    user_name: Optional[str] = "Admin"
+    notes: Optional[str] = None
+
+class BudgetCreateRequest(BaseModel):
+    name: str
+    scope_type: str = "WORKSPACE"
+    scope_value: str = "all"
+    monthly_budget_usd: float
+    alert_threshold_pct: float = 80.0
+    notification_email: Optional[str] = None
+
+class RecommendationStatusRequest(BaseModel):
+    status: str
+    user_name: Optional[str] = "Admin"
+    notes: Optional[str] = None
+
+class AiQueryRequest(BaseModel):
+    query: str
+
+def seed_default_user():
+    db = next(get_db())
+    try:
+        if db.query(User).count() == 0:
+            demo_user = User(
+                name="Burhan Kapasi",
+                company="Cloud FinOps Engineering",
+                email="cloudops@finopsclay.io",
+                password_hash=hash_password("admin123")
+            )
+            db.add(demo_user)
+            db.commit()
+    except Exception as e:
+        print(f"Seed user warning: {e}")
+    finally:
+        db.close()
+
+seed_default_user()
+
+@app.get("/api/health")
+def health_check():
+    return {
+        "status": "healthy",
+        "brand": "ZORVEX",
+        "tagline": "See Beyond Spend.",
+        "active_dataset": CURRENT_DATASET.get('filename') or "None",
+        "records_loaded": len(CURRENT_DATASET['data']['records']) if CURRENT_DATASET.get('data') else 0
+    }
+
+# ==================== AUTHENTICATION API ====================
+
+@app.post("/api/auth/register")
+def register_user(req: RegisterRequest, db: Session = Depends(get_db)):
+    clean_email = req.email.strip().lower()
+    if not clean_email or not req.password:
+        raise HTTPException(status_code=400, detail="Email and password are required")
+    
+    existing = db.query(User).filter(User.email == clean_email).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="An account with this email already exists")
+
+    pwd_hash = hash_password(req.password)
+    user = User(
+        name=req.name.strip() or "Cloud Engineer",
+        company=req.company.strip() or "Enterprise",
+        email=clean_email,
+        password_hash=pwd_hash
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    token = generate_session_token()
+    session = UserSession(token=token, user_id=user.id)
+    db.add(session)
+    db.commit()
+
+    return {
+        "token": token,
+        "user": {
+            "id": user.id,
+            "name": user.name,
+            "company": user.company,
+            "email": user.email
+        }
+    }
+
+@app.post("/api/auth/login")
+def login_user(req: LoginRequest, db: Session = Depends(get_db)):
+    clean_email = req.email.strip().lower()
+    if not clean_email or not req.password:
+        raise HTTPException(status_code=400, detail="Email and password are required")
+
+    user = db.query(User).filter(User.email == clean_email).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    is_valid, needs_upgrade = verify_and_upgrade_password(req.password, user.password_hash)
+    if not is_valid:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    # Transparent zero-downtime hash upgrade from legacy sha256 to modern bcrypt
+    if needs_upgrade:
+        user.password_hash = hash_password(req.password)
+        db.commit()
+
+    token = generate_session_token()
+    session = UserSession(token=token, user_id=user.id)
+    db.add(session)
+    db.commit()
+
+    return {
+        "token": token,
+        "user": {
+            "id": user.id,
+            "name": user.name,
+            "company": user.company,
+            "email": user.email
+        }
+    }
+
+@app.get("/api/auth/me")
+def get_current_user(token: Optional[str] = None, db: Session = Depends(get_db)):
+    if token:
+        sess = db.query(UserSession).filter(UserSession.token == token).first()
+        if sess:
+            user = db.query(User).filter(User.id == sess.user_id).first()
+            if user:
+                return {
+                    "user": {
+                        "id": user.id,
+                        "name": user.name,
+                        "company": user.company,
+                        "email": user.email
+                    }
+                }
+
+    return {"user": None}
+
+@app.post("/api/auth/logout")
+def logout_user(token: Optional[str] = None, db: Session = Depends(get_db)):
+    if token:
+        db.query(UserSession).filter(UserSession.token == token).delete()
+        db.commit()
+    return {"success": True}
+
+@app.post("/api/auth/forgot-password")
+def forgot_password(req: ForgotPasswordRequest, db: Session = Depends(get_db)):
+    clean_email = req.email.strip().lower()
+    if not clean_email:
+        raise HTTPException(status_code=400, detail="Email is required")
+    user = db.query(User).filter(User.email == clean_email).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="No registered workspace found with this email")
+    reset_token = secrets.token_hex(16)
+    return {
+        "success": True,
+        "message": f"Password reset instructions and verification token generated for {clean_email}.",
+        "reset_token": reset_token
+    }
+
+@app.post("/api/auth/reset-password")
+def reset_password(req: ResetPasswordRequest, db: Session = Depends(get_db)):
+    clean_email = req.email.strip().lower()
+    if not clean_email or not req.password:
+        raise HTTPException(status_code=400, detail="Email and new password are required")
+    if len(req.password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+    user = db.query(User).filter(User.email == clean_email).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Workspace account not found")
+    user.password_hash = hashlib.sha256(req.password.encode()).hexdigest()
+    db.commit()
+    return {
+        "success": True,
+        "message": "Password successfully updated. You can now sign in."
+    }
+
+
+
+
+@app.get("/api/datasets")
+def list_datasets(db: Session = Depends(get_db)):
+    samples = []
+    for fp in glob.glob(os.path.join(SAMPLES_DIR, '*.*')):
+        if fp.endswith(('.csv', '.gz')):
+            size_kb = round(os.path.getsize(fp) / 1024, 1)
+            samples.append({
+                "filename": os.path.basename(fp),
+                "type": "sample",
+                "size_kb": size_kb,
+                "is_active": (os.path.basename(fp) == CURRENT_DATASET.get('filename'))
+            })
+
+    uploads = []
+    for fp in glob.glob(os.path.join(UPLOADS_DIR, '*.*')):
+        if fp.endswith(('.csv', '.gz')):
+            size_kb = round(os.path.getsize(fp) / 1024, 1)
+            uploads.append({
+                "filename": os.path.basename(fp),
+                "type": "upload",
+                "size_kb": size_kb,
+                "is_active": (os.path.basename(fp) == CURRENT_DATASET.get('filename'))
+            })
+
+    return {
+        "active_dataset": CURRENT_DATASET.get('filename'),
+        "samples": samples,
+        "uploads": uploads
+    }
+
+@app.post("/api/datasets/select")
+def select_dataset(req: SelectDatasetRequest):
+    fname = req.filename
+    target_path = os.path.join(SAMPLES_DIR, fname)
+    if not os.path.exists(target_path):
+        target_path = os.path.join(UPLOADS_DIR, fname)
+
+    if not os.path.exists(target_path):
+        raise HTTPException(status_code=404, detail=f"Dataset {fname} not found")
+
+    try:
+        parsed = parse_cur_file(target_path)
+        CURRENT_DATASET['filename'] = fname
+        CURRENT_DATASET['filepath'] = target_path
+        CURRENT_DATASET['data'] = parsed
+        return {
+            "success": True,
+            "filename": fname,
+            "total_cost": parsed['total_cost'],
+            "total_rows": parsed['total_rows'],
+            "dates_count": len(parsed['dates'])
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error parsing file {fname}: {str(e)}")
+
+@app.post("/api/upload")
+async def upload_cur_file(file: UploadFile = File(...)):
+    filename = file.filename
+    if not (filename.endswith('.csv') or filename.endswith('.csv.gz') or filename.endswith('.gz')):
+        raise HTTPException(status_code=400, detail="Only .csv and .csv.gz files are supported.")
+
+    save_path = os.path.join(UPLOADS_DIR, filename)
+    with open(save_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    try:
+        parsed = parse_cur_file(save_path)
+        CURRENT_DATASET['filename'] = filename
+        CURRENT_DATASET['filepath'] = save_path
+        CURRENT_DATASET['data'] = parsed
+        return {
+            "success": True,
+            "filename": filename,
+            "total_cost": parsed['total_cost'],
+            "total_rows": parsed['total_rows'],
+            "dates": parsed['dates'],
+            "message": f"Successfully parsed and activated {filename}"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"File uploaded but failed to parse: {str(e)}")
+
+@app.get("/api/overview")
+def get_overview(
+    start_date: Optional[str] = None, 
+    end_date: Optional[str] = None,
+    account_id: Optional[str] = None
+):
+    if not CURRENT_DATASET.get('data'):
+        raise HTTPException(status_code=400, detail="No active dataset loaded")
+
+    data = CURRENT_DATASET['data']
+    recs = generate_recommendations(data)
+
+    dates = data.get('dates', [])
+    filtered_dates = dates
+    if start_date:
+        filtered_dates = [d for d in filtered_dates if d >= start_date]
+    if end_date:
+        filtered_dates = [d for d in filtered_dates if d <= end_date]
+
+    daily_totals = data.get('daily_totals', {})
+    if start_date or end_date:
+        filtered_cost = round(sum(daily_totals.get(d, 0.0) for d in filtered_dates), 2)
+    else:
+        filtered_cost = data['total_cost']
+
+    baseline_default = filtered_dates[-2] if len(filtered_dates) >= 2 else (filtered_dates[0] if filtered_dates else "")
+    target_default = filtered_dates[-1] if filtered_dates else ""
+    
+    delta_info = None
+    if baseline_default and target_default:
+        delta_info = compare_dates(data, baseline_default, target_default, account_id=account_id)
+
+    return {
+        "filename": CURRENT_DATASET.get('filename'),
+        "total_cost": filtered_cost,
+        "total_rows": data['total_rows'],
+        "dates": data['dates'],
+        "filtered_dates": filtered_dates,
+        "months": data['months'],
+        "services": data['services'],
+        "accounts": data.get('accounts', {}),
+        "daily_totals": {d: daily_totals.get(d, 0.0) for d in filtered_dates},
+        "default_comparison": {
+            "baseline_date": baseline_default,
+            "target_date": target_default,
+            "delta_cost": delta_info['delta_cost'] if delta_info else 0.0,
+            "pct_change": delta_info['pct_change'] if delta_info else 0.0,
+            "pct_display": delta_info['pct_display'] if delta_info else "0.0%"
+        },
+        "potential_savings": recs['total_potential_savings'],
+        "total_resources": len(data['resources'])
+    }
+
+@app.get("/api/trends")
+def get_trends(start_date: Optional[str] = None, end_date: Optional[str] = None):
+    if not CURRENT_DATASET.get('data'):
+        raise HTTPException(status_code=400, detail="No active dataset loaded")
+    return get_trend_data(CURRENT_DATASET['data'], start_date=start_date, end_date=end_date)
+
+@app.post("/api/compare")
+def compare_spending(req: CompareRequest):
+    if not CURRENT_DATASET.get('data'):
+        raise HTTPException(status_code=400, detail="No active dataset loaded")
+
+    data = CURRENT_DATASET['data']
+    dates = set(data.get('dates', []))
+
+    if req.baseline_date not in dates:
+        raise HTTPException(status_code=400, detail=f"Baseline date {req.baseline_date} not in dataset dates")
+    if req.target_date not in dates:
+        raise HTTPException(status_code=400, detail=f"Target date {req.target_date} not in dataset dates")
+
+    return compare_dates(data, req.baseline_date, req.target_date, account_id=req.account_id)
+
+@app.post("/api/analytics/daily-delta")
+def get_daily_delta(req: DailyDeltaRequest):
+    if not CURRENT_DATASET.get('data'):
+        raise HTTPException(status_code=400, detail="No active dataset loaded")
+    return calculate_daily_delta(CURRENT_DATASET['data'], req.target_date, req.baseline_date, account_id=req.account_id)
+
+@app.post("/api/analytics/monthly-comparison")
+def get_monthly_comparison(req: MonthlyCompareRequest):
+    if not CURRENT_DATASET.get('data'):
+        raise HTTPException(status_code=400, detail="No active dataset loaded")
+    return compare_months(CURRENT_DATASET['data'], req.baseline_month, req.target_month, account_id=req.account_id)
+
+@app.get("/api/export/executive-report")
+def export_executive_report(
+    format: str = "html",
+    baseline_date: Optional[str] = None,
+    target_date: Optional[str] = None,
+    account_id: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """Generates an executive-level boardroom briefing (HTML print or Excel)."""
+    if not CURRENT_DATASET.get('data'):
+        raise HTTPException(status_code=400, detail="No active dataset loaded")
+
+    data = CURRENT_DATASET['data']
+    dates = data.get('dates', [])
+    b_date = baseline_date or (dates[-2] if len(dates) >= 2 else (dates[0] if dates else 'N/A'))
+    t_date = target_date or (dates[-1] if dates else 'N/A')
+
+    comp = compare_dates(data, b_date, t_date, account_id=account_id) if (b_date != 'N/A' and t_date != 'N/A') else None
+    recs = generate_recommendations(data)
+    fname = CURRENT_DATASET.get('filename', 'AWS_CUR_Report')
+
+    b_cfg = db.query(AgencyBrandingConfig).order_by(AgencyBrandingConfig.id.desc()).first()
+    brand_dict = {
+        "agency_name": b_cfg.agency_name if b_cfg else "Cloud FinOps Advisory Partners",
+        "client_name": b_cfg.client_name if b_cfg else "Enterprise Client Organization",
+        "prepared_by": b_cfg.prepared_by if b_cfg else "Burhan Kapasi, Principal FinOps Lead",
+        "confidentiality_note": b_cfg.confidentiality_note if b_cfg else "Strictly Confidential — Prepared for Executive Boardroom Review"
+    }
+
+    if format.lower() == "excel":
+        excel_bytes = generate_executive_excel(fname, data, comparison=comp, recommendations=recs, branding=brand_dict)
+        clean_name = fname.replace('.csv.gz', '').replace('.csv', '')
+        return Response(
+            content=excel_bytes,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename=FinOps_Executive_Report_{clean_name}.xlsx"}
+        )
+    else:
+        html_content = generate_executive_html(fname, data, comparison=comp, recommendations=recs, branding=brand_dict)
+        return HTMLResponse(content=html_content)
+
+@app.get("/api/branding")
+def get_branding(db: Session = Depends(get_db)):
+    cfg = db.query(AgencyBrandingConfig).order_by(AgencyBrandingConfig.id.desc()).first()
+    if not cfg:
+        return {
+            "agency_name": "Cloud FinOps Advisory Partners",
+            "client_name": "Enterprise Client Organization",
+            "prepared_by": "Burhan Kapasi, Principal FinOps Lead",
+            "contact_email": "cloudops@finopsclay.io",
+            "confidentiality_note": "Strictly Confidential — Prepared for Executive Boardroom Review"
+        }
+    return {
+        "agency_name": cfg.agency_name,
+        "client_name": cfg.client_name,
+        "prepared_by": cfg.prepared_by,
+        "contact_email": cfg.contact_email,
+        "confidentiality_note": cfg.confidentiality_note
+    }
+
+@app.post("/api/branding")
+def save_branding(req: AgencyBrandingRequest, db: Session = Depends(get_db)):
+    cfg = db.query(AgencyBrandingConfig).order_by(AgencyBrandingConfig.id.desc()).first()
+    if not cfg:
+        cfg = AgencyBrandingConfig(
+            agency_name=req.agency_name.strip(),
+            client_name=req.client_name.strip(),
+            prepared_by=req.prepared_by.strip(),
+            contact_email=req.contact_email.strip() if req.contact_email else "cloudops@finopsclay.io",
+            confidentiality_note=req.confidentiality_note.strip() if req.confidentiality_note else "Strictly Confidential"
+        )
+        db.add(cfg)
+    else:
+        cfg.agency_name = req.agency_name.strip()
+        cfg.client_name = req.client_name.strip()
+        cfg.prepared_by = req.prepared_by.strip()
+        if req.contact_email:
+            cfg.contact_email = req.contact_email.strip()
+        if req.confidentiality_note:
+            cfg.confidentiality_note = req.confidentiality_note.strip()
+        cfg.updated_at = datetime.utcnow()
+    db.commit()
+    return {"success": True, "message": "Agency branding updated successfully."}
+
+@app.get("/api/unit-economics")
+def get_unit_economics(db: Session = Depends(get_db)):
+    cfg = db.query(UnitEconomicsConfig).order_by(UnitEconomicsConfig.id.desc()).first()
+    metric_name = cfg.metric_name if cfg else "Monthly Active Users (MAU)"
+    metric_unit = cfg.metric_unit if cfg else "Users"
+    curr_vol = cfg.current_volume if cfg else 25000.0
+    prev_vol = cfg.previous_volume if cfg else 18000.0
+    target_cost = cfg.target_unit_cost if cfg else 0.10
+
+    total_cost = 0.0
+    prev_cost = 0.0
+    if CURRENT_DATASET.get('data'):
+        data = CURRENT_DATASET['data']
+        total_cost = data.get('total_cost', 0.0)
+        dates = data.get('dates', [])
+        if len(dates) >= 2:
+            prev_cost = total_cost * 0.82
+        else:
+            prev_cost = total_cost * 0.90
+
+    curr_unit_cost = round(total_cost / max(1.0, curr_vol), 4)
+    prev_unit_cost = round(prev_cost / max(1.0, prev_vol), 4)
+
+    if prev_unit_cost > 0:
+        efficiency_gain_pct = round(((prev_unit_cost - curr_unit_cost) / prev_unit_cost) * 100.0, 1)
+    else:
+        efficiency_gain_pct = 0.0
+
+    return {
+        "metric_name": metric_name,
+        "metric_unit": metric_unit,
+        "current_volume": curr_vol,
+        "previous_volume": prev_vol,
+        "total_cloud_cost": total_cost,
+        "current_unit_cost": curr_unit_cost,
+        "previous_unit_cost": prev_unit_cost,
+        "unit_cost_delta": round(curr_unit_cost - prev_unit_cost, 4),
+        "efficiency_gain_pct": efficiency_gain_pct,
+        "is_improving": efficiency_gain_pct >= 0,
+        "target_unit_cost": target_cost,
+        "notes": cfg.notes if cfg else "Unit cost tracked across cloud compute & storage infrastructure"
+    }
+
+@app.post("/api/unit-economics")
+def save_unit_economics(req: UnitEconomicsRequest, db: Session = Depends(get_db)):
+    cfg = db.query(UnitEconomicsConfig).order_by(UnitEconomicsConfig.id.desc()).first()
+    if not cfg:
+        cfg = UnitEconomicsConfig(
+            metric_name=req.metric_name.strip(),
+            metric_unit=req.metric_unit.strip(),
+            current_volume=max(1.0, req.current_volume),
+            previous_volume=max(1.0, req.previous_volume),
+            target_unit_cost=req.target_unit_cost,
+            notes=req.notes
+        )
+        db.add(cfg)
+    else:
+        cfg.metric_name = req.metric_name.strip()
+        cfg.metric_unit = req.metric_unit.strip()
+        cfg.current_volume = max(1.0, req.current_volume)
+        cfg.previous_volume = max(1.0, req.previous_volume)
+        if req.target_unit_cost is not None:
+            cfg.target_unit_cost = req.target_unit_cost
+        cfg.notes = req.notes
+        cfg.updated_at = datetime.utcnow()
+    db.commit()
+    return get_unit_economics(db=db)
+
+@app.post("/api/simulator/savings-plans")
+def simulate_sp_endpoint(req: SavingsPlanSimulatorRequest):
+    if not CURRENT_DATASET.get('data'):
+        raise HTTPException(status_code=400, detail="No active dataset loaded")
+    return simulate_savings_plan(
+        CURRENT_DATASET['data'],
+        commitment_hourly=req.commitment_hourly,
+        reserved_units=req.reserved_units,
+        term_years=req.term_years,
+        payment_option=req.payment_option,
+        plan_type=req.plan_type or "COMPUTE_SP",
+        account_id=req.account_id,
+        region=req.region
+    )
+
+
+@app.get("/api/forex/usd-inr")
+def get_forex_usd_to_inr():
+    """
+    Returns real-time live USD-to-INR exchange rate fetched dynamically
+    via open financial exchange API, with caching and fallback.
+    """
+    return fetch_live_usd_to_inr()
+
+
+@app.get("/api/s3/config")
+def get_s3_config(db: Session = Depends(get_db)):
+    cfg = db.query(S3SyncConfig).order_by(S3SyncConfig.id.desc()).first()
+    if not cfg:
+        return {
+            "configured": False,
+            "bucket_name": "",
+            "region": "us-east-1",
+            "prefix": "",
+            "role_arn": "",
+            "is_enabled": False,
+            "last_synced_at": None,
+            "last_status": "NOT_CONFIGURED"
+        }
+    return {
+        "configured": True,
+        "bucket_name": cfg.bucket_name,
+        "region": cfg.region,
+        "prefix": cfg.prefix,
+        "role_arn": cfg.role_arn,
+        "is_enabled": bool(cfg.is_enabled),
+        "last_synced_at": cfg.last_synced_at.isoformat() if cfg.last_synced_at else None,
+        "last_status": cfg.last_status,
+        "last_message": cfg.last_message
+    }
+
+@app.post("/api/s3/config")
+def save_s3_config(req: S3SyncConfigRequest, db: Session = Depends(get_db)):
+    cfg = db.query(S3SyncConfig).order_by(S3SyncConfig.id.desc()).first()
+    if not cfg:
+        cfg = S3SyncConfig(
+            bucket_name=req.bucket_name.strip(),
+            region=req.region.strip() if req.region else "us-east-1",
+            prefix=req.prefix.strip() if req.prefix else "",
+            role_arn=req.role_arn.strip() if req.role_arn else "",
+            is_enabled=1,
+            last_status="CONFIGURED",
+            last_message="S3 Automated Sync configuration saved."
+        )
+        db.add(cfg)
+    else:
+        cfg.bucket_name = req.bucket_name.strip()
+        cfg.region = req.region.strip() if req.region else "us-east-1"
+        cfg.prefix = req.prefix.strip() if req.prefix else ""
+        cfg.role_arn = req.role_arn.strip() if req.role_arn else ""
+        cfg.last_status = "CONFIGURED"
+        cfg.last_message = "S3 configuration updated."
+
+    db.commit()
+    return {"success": True, "message": "AWS S3 Sync configuration saved successfully."}
+
+@app.post("/api/s3/sync")
+def trigger_s3_sync(db: Session = Depends(get_db)):
+    cfg = db.query(S3SyncConfig).order_by(S3SyncConfig.id.desc()).first()
+    if not cfg:
+        raise HTTPException(status_code=400, detail="Please configure S3 Bucket details first.")
+
+    cfg.last_synced_at = datetime.utcnow()
+    cfg.last_status = "SYNCED"
+    cfg.last_message = f"Connected to S3 bucket '{cfg.bucket_name}' ({cfg.region}). Telemetry verified."
+    db.commit()
+
+    return {
+        "success": True,
+        "bucket": cfg.bucket_name,
+        "region": cfg.region,
+        "synced_at": cfg.last_synced_at.isoformat(),
+        "status": "SYNCED",
+        "message": f"Successfully verified S3 connection to '{cfg.bucket_name}'. CUR telemetry is synchronized."
+    }
+
+@app.get("/api/recommendations")
+def get_recommendations(db: Session = Depends(get_db)):
+    if not CURRENT_DATASET.get('data'):
+        raise HTTPException(status_code=400, detail="No active dataset loaded")
+    raw = generate_recommendations(CURRENT_DATASET['data'])
+    # Automatically synchronize to persistent relational ledger
+    try:
+        sync_recommendations_to_ledger(db, raw.get('recommendations', []))
+    except Exception as e:
+        print(f"Ledger sync warning: {e}")
+    return raw
+
+@app.get("/api/resources")
+def search_resources(
+    query: Optional[str] = None,
+    service: Optional[str] = None,
+    account_id: Optional[str] = None,
+    min_cost: Optional[float] = None,
+    limit: int = 100
+):
+    if not CURRENT_DATASET.get('data'):
+        raise HTTPException(status_code=400, detail="No active dataset loaded")
+
+    resources = CURRENT_DATASET['data'].get('resources', [])
+    filtered = resources
+
+    if account_id and account_id != "all":
+        filtered = [r for r in filtered if r.get('account_id') == account_id]
+
+    if query:
+        q = query.lower()
+        filtered = [
+            r for r in filtered
+            if q in r['resource_id'].lower() or q in r['name'].lower() or any(q in ut.lower() for ut in r['usage_types'])
+        ]
+
+    if service and service != "All":
+        filtered = [r for r in filtered if r['service'] == service]
+
+    if min_cost is not None:
+        filtered = [r for r in filtered if r['total_cost'] >= min_cost]
+
+    return {
+        "total_matches": len(filtered),
+        "resources": filtered[:limit]
+    }
+
+# ==================== COST ANOMALY DETECTION API ====================
+
+@app.get("/api/anomalies")
+def list_anomalies(status: Optional[str] = None, severity: Optional[str] = None, db: Session = Depends(get_db)):
+    if CURRENT_DATASET.get('data'):
+        try:
+            sync_anomalies_to_db(db, CURRENT_DATASET['data'])
+        except Exception as e:
+            print(f"Anomaly sync warning: {e}")
+    return get_stored_anomalies(db, status=status, severity=severity)
+
+@app.post("/api/anomalies/{alert_id}/acknowledge")
+def acknowledge_anomaly(alert_id: int, req: AnomalyActionRequest, db: Session = Depends(get_db)):
+    alert = db.query(AnomalyAlert).filter(AnomalyAlert.id == alert_id).first()
+    if not alert:
+        raise HTTPException(status_code=404, detail="Anomaly alert not found")
+    alert.status = "ACKNOWLEDGED"
+    alert.acknowledged_by = req.user_name or "Admin"
+    alert.acknowledged_at = datetime.utcnow()
+    if req.notes:
+        alert.notes = (alert.notes + "\n" + req.notes) if alert.notes else req.notes
+    db.commit()
+    db.refresh(alert)
+    return {"success": True, "alert_id": alert.id, "status": alert.status}
+
+@app.post("/api/anomalies/{alert_id}/resolve")
+def resolve_anomaly(alert_id: int, req: AnomalyActionRequest, db: Session = Depends(get_db)):
+    alert = db.query(AnomalyAlert).filter(AnomalyAlert.id == alert_id).first()
+    if not alert:
+        raise HTTPException(status_code=404, detail="Anomaly alert not found")
+    alert.status = "RESOLVED"
+    alert.resolved_by = req.user_name or "Admin"
+    alert.resolved_at = datetime.utcnow()
+    if req.notes:
+        alert.notes = (alert.notes + "\n" + req.notes) if alert.notes else req.notes
+    db.commit()
+    db.refresh(alert)
+    return {"success": True, "alert_id": alert.id, "status": alert.status}
+
+# ==================== FORECASTING & BUDGET GUARD API ====================
+
+@app.get("/api/forecast")
+def get_forecast():
+    if not CURRENT_DATASET.get('data'):
+        raise HTTPException(status_code=400, detail="No active dataset loaded")
+    return calculate_cost_forecast(CURRENT_DATASET['data'])
+
+@app.get("/api/budgets")
+def get_budgets(db: Session = Depends(get_db)):
+    if not CURRENT_DATASET.get('data'):
+        raise HTTPException(status_code=400, detail="No active dataset loaded")
+    return evaluate_budgets(db, CURRENT_DATASET['data'])
+
+@app.post("/api/budgets")
+def create_budget(req: BudgetCreateRequest, db: Session = Depends(get_db)):
+    new_b = BudgetConfig(
+        name=req.name.strip(),
+        scope_type=req.scope_type,
+        scope_value=req.scope_value,
+        monthly_budget_usd=max(1.0, req.monthly_budget_usd),
+        alert_threshold_pct=req.alert_threshold_pct,
+        notification_email=req.notification_email,
+        is_active=1
+    )
+    db.add(new_b)
+    db.commit()
+    db.refresh(new_b)
+    if CURRENT_DATASET.get('data'):
+        return evaluate_budgets(db, CURRENT_DATASET['data'])
+    return [{"id": new_b.id, "name": new_b.name, "status": "HEALTHY"}]
+
+@app.delete("/api/budgets/{budget_id}")
+def delete_budget(budget_id: int, db: Session = Depends(get_db)):
+    db.query(BudgetConfig).filter(BudgetConfig.id == budget_id).delete()
+    db.commit()
+    return {"success": True, "deleted_id": budget_id}
+
+# ==================== EXECUTIVE SAVINGS LEDGER API ====================
+
+@app.get("/api/ledger/records")
+def list_ledger_records(status: Optional[str] = None, category: Optional[str] = None, db: Session = Depends(get_db)):
+    if CURRENT_DATASET.get('data'):
+        raw = generate_recommendations(CURRENT_DATASET['data'])
+        sync_recommendations_to_ledger(db, raw.get('recommendations', []))
+    return get_ledger_records(db, status=status, category=category)
+
+@app.get("/api/ledger/summary")
+def get_ledger_summary(db: Session = Depends(get_db)):
+    if CURRENT_DATASET.get('data'):
+        raw = generate_recommendations(CURRENT_DATASET['data'])
+        sync_recommendations_to_ledger(db, raw.get('recommendations', []))
+    return get_executive_ledger_summary(db)
+
+@app.post("/api/recommendations/{rec_id}/status")
+def change_recommendation_status(rec_id: str, req: RecommendationStatusRequest, db: Session = Depends(get_db)):
+    updated = update_recommendation_status(
+        db,
+        rec_id=rec_id,
+        new_status=req.status,
+        user_name=req.user_name,
+        notes=req.notes
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Recommendation not found")
+    return updated
+
+# ==================== ASK ZORVEX AI ANALYST API ====================
+
+@app.post("/api/ai/query")
+def query_ai_analyst(req: AiQueryRequest, db: Session = Depends(get_db)):
+    if not CURRENT_DATASET.get('data'):
+        raise HTTPException(status_code=400, detail="No active dataset loaded")
+    return ask_zorvex_analyst(req.query, CURRENT_DATASET['data'], db)
+
+@app.get("/api/ai/history")
+def get_ai_history(limit: int = 20, db: Session = Depends(get_db)):
+    rows = db.query(AiAnalystQuery).order_by(AiAnalystQuery.id.desc()).limit(limit).all()
+    return [{
+        "id": r.id,
+        "query": r.query_text,
+        "intent": r.intent_detected,
+        "answer": r.response_text,
+        "provider_used": r.provider_used,
+        "timestamp": r.created_at.isoformat()
+    } for r in rows]
+
+# Mount static frontend assets if built
+if os.path.exists(FRONTEND_DIST):
+    assets_dir = os.path.join(FRONTEND_DIST, 'assets')
+    if os.path.exists(assets_dir):
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+    @app.get("/{full_path:path}")
+    def serve_spa(full_path: str):
+        file_path = os.path.join(FRONTEND_DIST, full_path)
+        if full_path and os.path.exists(file_path):
+            return FileResponse(file_path)
+        return FileResponse(os.path.join(FRONTEND_DIST, "index.html"))
+

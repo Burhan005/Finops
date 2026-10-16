@@ -1,0 +1,622 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    color-scheme: light;
+    scroll-behavior: smooth;
+    transition: color-scheme 0.25s ease;
+    overflow-x: clip;
+    max-width: 100vw;
+  }
+
+  html.dark {
+    color-scheme: dark;
+  }
+
+  body {
+    background-color: #F3F0E7;
+    background-image: 
+      radial-gradient(at 0% 0%, rgba(255, 252, 245, 0.95) 0px, transparent 55%),
+      radial-gradient(at 100% 100%, rgba(230, 233, 221, 0.6) 0px, transparent 55%);
+    background-attachment: fixed;
+    color: #292E28;
+    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    transition: background-color 0.25s cubic-bezier(0.4, 0, 0.2, 1), color 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    width: 100%;
+    overflow-x: clip;
+    max-width: 100vw;
+  }
+
+  html.dark body,
+  .dark body {
+    background-color: #19211B !important;
+    background-image: 
+      radial-gradient(at 0% 0%, rgba(73, 102, 77, 0.12) 0px, transparent 55%),
+      radial-gradient(at 100% 100%, rgba(45, 56, 45, 0.5) 0px, transparent 55%) !important;
+    background-attachment: fixed;
+    color: #F0EEE4 !important;
+  }
+
+  /* Financial and technical typography */
+  .font-mono,
+  .font-technical {
+    font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
+    font-feature-settings: "tnum" 1, "zero" 1;
+  }
+
+  /* High-Contrast Dark Mode Readability Guarantees */
+  html.dark,
+  .dark {
+    color: #F0EEE4;
+  }
+
+  html.dark .text-zorvex-text-secondary,
+  .dark .text-zorvex-text-secondary,
+  html.dark .text-zorvex-text-muted,
+  .dark .text-zorvex-text-muted,
+  html.dark .text-clay-espresso-muted,
+  .dark .text-clay-espresso-muted,
+  html.dark .text-clay-dark-text-muted,
+  .dark .text-clay-dark-text-muted,
+  html.dark .text-zorvex-dark-text-secondary,
+  .dark .text-zorvex-dark-text-secondary {
+    color: #C8D2BA !important;
+  }
+
+  html.dark .text-zorvex-forest-highlight,
+  .dark .text-zorvex-forest-highlight,
+  html.dark .text-zorvex-dark-forest-highlight,
+  .dark .text-zorvex-dark-forest-highlight {
+    color: #AFC69B !important;
+  }
+
+  /* Enterprise Keyboard Focus Accessibility (WCAG 2.1 AA) */
+  :focus-visible {
+    outline: 2px solid #49664D !important;
+    outline-offset: 2px !important;
+  }
+
+  html.dark :focus-visible,
+  .dark :focus-visible {
+    outline: 2px solid #AFC69B !important;
+    outline-offset: 2px !important;
+  }
+}
+
+/* ========================================================================= */
+/* ZORVEX CLAYMORPHISM 2.0 — Canonical Ivory & Forest Dimensional System     */
+/* Palette: Ivory Canvas (#F3F0E7) × Primary Forest (#49664D)                */
+/* Directional Lighting: Upper-Left (135° / 315° Axis) Ambient & Specular    */
+/* ========================================================================= */
+
+/* Surface Variant: Flat */
+.surface-flat {
+  background: #FFFCF5;
+  border: 1px solid #E3DCCB;
+  border-radius: 16px;
+  box-shadow: 0 1px 2px rgba(41, 46, 40, 0.05);
+}
+
+html.dark .surface-flat,
+.dark .surface-flat {
+  background: #252E26 !important;
+  border-color: #3B493D !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.5) !important;
+}
+
+/* Surface Variant: Raised (Standard Clay Cards) */
+.surface-raised,
+.clay-card {
+  background: linear-gradient(155deg, #FFFCF5 0%, #F5F2E8 100%);
+  border-radius: 16px;
+  border: 1px solid rgba(227, 220, 203, 0.9);
+  box-shadow: 
+    0 10px 24px -4px rgba(41, 46, 40, 0.08),
+    0 2px 6px -1px rgba(41, 46, 40, 0.04),
+    inset 1px 1px 0px rgba(255, 255, 255, 0.95),
+    inset 2px 2px 4px rgba(255, 255, 255, 0.75),
+    inset -1.5px -1.5px 4px rgba(73, 102, 77, 0.05);
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.2s ease;
+}
+
+html.dark .surface-raised,
+html.dark .clay-card,
+.dark .surface-raised,
+.dark .clay-card {
+  background: linear-gradient(155deg, #252E26 0%, #1D261F 100%) !important;
+  border: 1px solid rgba(59, 73, 61, 0.85) !important;
+  box-shadow: 
+    0 14px 34px -4px rgba(0, 0, 0, 0.85),
+    0 4px 10px -2px rgba(0, 0, 0, 0.65),
+    inset 1px 1px 1px rgba(175, 198, 155, 0.16),
+    inset 2px 2px 6px rgba(73, 102, 77, 0.12),
+    inset -2px -2px 6px rgba(0, 0, 0, 0.75) !important;
+}
+
+/* Surface Variant: Interactive Raised (Hover Lift with intensified Specular & Contact Shadow) */
+.surface-interactive,
+.clay-card-interactive {
+  cursor: pointer;
+}
+
+.surface-interactive:hover,
+.clay-card-interactive:hover {
+  transform: translateY(-2px);
+  border-color: #49664D;
+  box-shadow: 
+    0 16px 32px -4px rgba(41, 46, 40, 0.12),
+    0 4px 10px -1px rgba(41, 46, 40, 0.06),
+    inset 1px 1px 0px rgba(255, 255, 255, 1.0),
+    inset 2px 2px 5px rgba(255, 255, 255, 0.85),
+    inset -2px -2px 5px rgba(73, 102, 77, 0.06);
+}
+
+html.dark .surface-interactive:hover,
+html.dark .clay-card-interactive:hover,
+.dark .surface-interactive:hover,
+.dark .clay-card-interactive:hover {
+  transform: translateY(-2px);
+  border-color: #AFC69B !important;
+  box-shadow: 
+    0 20px 42px -6px rgba(0, 0, 0, 0.92),
+    0 6px 14px -2px rgba(0, 0, 0, 0.75),
+    inset 1px 1px 1px rgba(175, 198, 155, 0.25),
+    inset 2px 2px 8px rgba(73, 102, 77, 0.2),
+    inset -2px -2px 6px rgba(0, 0, 0, 0.85) !important;
+}
+
+/* Surface Variant: Recessed Sockets & Segmented Control Tracks */
+.surface-recessed,
+.clay-track {
+  background: #E9E6DC;
+  border-radius: 12px;
+  border: 1px solid rgba(227, 220, 203, 0.85);
+  box-shadow: 
+    inset 0 2px 4px rgba(41, 46, 40, 0.08),
+    inset 0 1px 2px rgba(41, 46, 40, 0.04),
+    0 1px 1px rgba(255, 255, 255, 0.8);
+}
+
+html.dark .surface-recessed,
+html.dark .clay-track,
+.dark .surface-recessed,
+.dark .clay-track {
+  background: #1D261F !important;
+  border: 1px solid rgba(59, 73, 61, 0.85) !important;
+  box-shadow: 
+    inset 0 2px 6px rgba(0, 0, 0, 0.75),
+    inset 0 1px 2px rgba(0, 0, 0, 0.5),
+    0 1px 1px rgba(175, 198, 155, 0.06) !important;
+}
+
+/* Surface Variant: Floating (Modals, Popovers, Dropdown Menus) */
+.surface-floating {
+  background: #FFFCF5;
+  border-radius: 18px;
+  border: 1px solid #E3DCCB;
+  box-shadow: 
+    0 20px 40px -8px rgba(41, 46, 40, 0.14),
+    0 6px 14px -2px rgba(41, 46, 40, 0.07),
+    inset 1px 1px 0px rgba(255, 255, 255, 1.0),
+    inset -2px -2px 6px rgba(73, 102, 77, 0.06);
+}
+
+html.dark .surface-floating,
+.dark .surface-floating {
+  background: #252E26 !important;
+  border: 1px solid #3B493D !important;
+  box-shadow: 
+    0 24px 52px -8px rgba(0, 0, 0, 0.95),
+    0 8px 18px -2px rgba(0, 0, 0, 0.8),
+    inset 1px 1px 1px rgba(175, 198, 155, 0.22),
+    inset -2px -2px 8px rgba(0, 0, 0, 0.8) !important;
+}
+
+/* Standard Tactile Button (Molded Ivory / Forest Key) */
+.clay-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(155deg, #FFFCF5 0%, #E6E9DD 100%);
+  color: #292E28;
+  border-radius: 10px;
+  border: 1px solid #E3DCCB;
+  box-shadow: 
+    0 3px 8px -1px rgba(41, 46, 40, 0.08),
+    0 1px 3px rgba(41, 46, 40, 0.04),
+    inset 1px 1px 0px rgba(255, 255, 255, 1.0),
+    inset 0 1px 2px rgba(255, 255, 255, 0.8);
+  transition: transform 0.15s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.15s cubic-bezier(0.16, 1, 0.3, 1), background-color 0.15s ease, border-color 0.15s ease;
+  user-select: none;
+}
+
+.clay-button:hover:not(:disabled) {
+  transform: translateY(-1.5px);
+  background: linear-gradient(155deg, #FFFCF5 0%, #E2E9D9 100%);
+  border-color: #49664D;
+  box-shadow: 
+    0 6px 14px -2px rgba(41, 46, 40, 0.12),
+    0 2px 5px -1px rgba(41, 46, 40, 0.06),
+    inset 1px 1px 0px rgba(255, 255, 255, 1.0),
+    inset 0 1px 2px rgba(255, 255, 255, 0.9);
+}
+
+.clay-button:active:not(:disabled) {
+  transform: translateY(1px);
+  box-shadow: 
+    0 1px 2px rgba(41, 46, 40, 0.06),
+    inset 0 3px 6px rgba(41, 46, 40, 0.12);
+}
+
+.clay-button:disabled {
+  opacity: 0.5 !important;
+  cursor: not-allowed !important;
+  transform: none !important;
+  box-shadow: none !important;
+}
+
+html.dark .clay-button,
+.dark .clay-button {
+  background: linear-gradient(155deg, #2D382D 0%, #252E26 100%) !important;
+  color: #F0EEE4 !important;
+  border: 1px solid rgba(59, 73, 61, 0.8) !important;
+  box-shadow: 
+    0 4px 10px -1px rgba(0, 0, 0, 0.7),
+    0 1px 3px rgba(0, 0, 0, 0.5),
+    inset 1px 1px 1px rgba(175, 198, 155, 0.18),
+    inset 0 1px 2px rgba(175, 198, 155, 0.08) !important;
+}
+
+html.dark .clay-button:hover:not(:disabled),
+.dark .clay-button:hover:not(:disabled) {
+  transform: translateY(-1.5px);
+  background: linear-gradient(155deg, #374637 0%, #2A362B 100%) !important;
+  border-color: #AFC69B !important;
+  box-shadow: 
+    0 6px 16px -2px rgba(0, 0, 0, 0.85),
+    0 2px 6px -1px rgba(0, 0, 0, 0.6),
+    inset 1px 1px 1px rgba(175, 198, 155, 0.3) !important;
+}
+
+html.dark .clay-button:active:not(:disabled),
+.dark .clay-button:active:not(:disabled) {
+  transform: translateY(1px);
+  box-shadow: 
+    0 1px 2px rgba(0, 0, 0, 0.5),
+    inset 0 3px 6px rgba(0, 0, 0, 0.8) !important;
+}
+
+/* Primary CTA Button (ZORVEX Signature Primary Forest Key) */
+.clay-button-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #56785B 0%, #49664D 50%, #3B533E 100%);
+  color: #FFFCF5;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 252, 245, 0.3);
+  box-shadow: 
+    0 4px 14px rgba(73, 102, 77, 0.35),
+    0 1px 3px rgba(41, 46, 40, 0.15),
+    inset 1px 1px 1px rgba(255, 252, 245, 0.35),
+    inset 0 -2px 4px rgba(0, 0, 0, 0.25);
+  transition: transform 0.15s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.15s cubic-bezier(0.16, 1, 0.3, 1), background 0.15s ease;
+  font-weight: 700;
+  user-select: none;
+}
+
+.clay-button-primary:hover:not(:disabled) {
+  transform: translateY(-1.5px);
+  background: linear-gradient(135deg, #628767 0%, #517055 50%, #415A45 100%);
+  box-shadow: 
+    0 8px 20px rgba(73, 102, 77, 0.45),
+    0 2px 6px rgba(41, 46, 40, 0.2),
+    inset 1px 1px 1px rgba(255, 252, 245, 0.45),
+    inset 0 -2px 4px rgba(0, 0, 0, 0.25);
+}
+
+.clay-button-primary:active:not(:disabled) {
+  transform: translateY(1px);
+  box-shadow: 
+    0 2px 5px rgba(73, 102, 77, 0.25),
+    inset 0 3px 6px rgba(0, 0, 0, 0.45);
+}
+
+.clay-button-primary:disabled {
+  opacity: 0.5 !important;
+  cursor: not-allowed !important;
+  transform: none !important;
+  box-shadow: none !important;
+}
+
+html.dark .clay-button-primary,
+.dark .clay-button-primary {
+  background: linear-gradient(135deg, #5B7A60 0%, #49664D 50%, #364B39 100%) !important;
+  color: #FFFCF5 !important;
+  font-weight: 800 !important;
+  border: 1px solid rgba(175, 198, 155, 0.4) !important;
+  box-shadow: 
+    0 4px 18px rgba(73, 102, 77, 0.5),
+    0 2px 6px rgba(0, 0, 0, 0.6),
+    inset 1px 1px 2px rgba(240, 238, 228, 0.45),
+    inset 0 -2px 4px rgba(0, 0, 0, 0.4) !important;
+}
+
+html.dark .clay-button-primary:hover:not(:disabled),
+.dark .clay-button-primary:hover:not(:disabled) {
+  transform: translateY(-1.5px);
+  background: linear-gradient(135deg, #6B8E70 0%, #56785B 50%, #3E5642 100%) !important;
+  box-shadow: 
+    0 8px 24px rgba(73, 102, 77, 0.65),
+    0 3px 8px rgba(0, 0, 0, 0.7),
+    inset 1px 1px 2px rgba(240, 238, 228, 0.6) !important;
+}
+
+html.dark .clay-button-primary:active:not(:disabled),
+.dark .clay-button-primary:active:not(:disabled) {
+  transform: translateY(1px);
+  box-shadow: 
+    0 2px 5px rgba(0, 0, 0, 0.6),
+    inset 0 3px 6px rgba(0, 0, 0, 0.4) !important;
+}
+
+/* Recessed Form Inputs */
+.clay-input {
+  background: #E9E6DC;
+  color: #292E28;
+  border-radius: 10px;
+  border: 1px solid #E3DCCB;
+  box-shadow: 
+    inset 0 2px 4px rgba(41, 46, 40, 0.07),
+    inset 0 1px 2px rgba(41, 46, 40, 0.04),
+    0 1px 1px rgba(255, 255, 255, 0.85);
+  transition: all 0.2s ease;
+}
+
+.clay-input:focus {
+  outline: none;
+  background: #FFFCF5;
+  border-color: #49664D;
+  box-shadow: 
+    inset 0 2px 4px rgba(41, 46, 40, 0.04),
+    0 0 0 3px rgba(73, 102, 77, 0.2),
+    0 1px 2px rgba(41, 46, 40, 0.05);
+}
+
+html.dark .clay-input,
+.dark .clay-input {
+  background: #1D261F !important;
+  color: #F0EEE4 !important;
+  border: 1px solid #3B493D !important;
+  box-shadow: 
+    inset 0 2px 6px rgba(0, 0, 0, 0.75),
+    inset 0 1px 2px rgba(0, 0, 0, 0.5),
+    0 1px 1px rgba(175, 198, 155, 0.06) !important;
+}
+
+html.dark .clay-input:focus {
+  background: #252E26 !important;
+  border-color: #AFC69B !important;
+  box-shadow: 
+    inset 0 2px 4px rgba(0, 0, 0, 0.5),
+    0 0 0 3px rgba(175, 198, 155, 0.3),
+    0 1px 2px rgba(0, 0, 0, 0.4) !important;
+}
+
+/* Pills & Badges (Sculpted Micro-Capsules) */
+.clay-pill {
+  border-radius: 9999px;
+  border: 1px solid #E3DCCB;
+  box-shadow: 
+    0 2px 5px -1px rgba(41, 46, 40, 0.06),
+    0 1px 2px rgba(41, 46, 40, 0.03),
+    inset 1px 1px 1px rgba(255, 255, 255, 0.85),
+    inset -1px -1px 2px rgba(41, 46, 40, 0.04);
+}
+
+html.dark .clay-pill,
+.dark .clay-pill {
+  border: 1px solid rgba(59, 73, 61, 0.8) !important;
+  box-shadow: 
+    0 2px 6px -1px rgba(0, 0, 0, 0.5),
+    0 1px 2px rgba(0, 0, 0, 0.3),
+    inset 1px 1px 1px rgba(175, 198, 155, 0.15),
+    inset -1px -1px 2px rgba(0, 0, 0, 0.4) !important;
+}
+
+/* Active Pill State in Segmented Controls */
+.clay-pill-active {
+  background: linear-gradient(135deg, #56785B 0%, #49664D 100%) !important;
+  color: #FFFCF5 !important;
+  border: 1px solid rgba(255, 252, 245, 0.35) !important;
+  box-shadow: 
+    0 3px 8px -1px rgba(73, 102, 77, 0.4),
+    0 1px 3px rgba(41, 46, 40, 0.15),
+    inset 1px 1px 1px rgba(255, 252, 245, 0.5),
+    inset -1px -1px 2px rgba(0, 0, 0, 0.2) !important;
+}
+
+/* Page and Route Transitions (180-280ms Subtle Opacity & Vertical Translation) */
+.page-transition {
+  animation: pageEntrance 220ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes pageEntrance {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Scrollbars */
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+::-webkit-scrollbar-track {
+  background: #F3F0E7;
+}
+html.dark ::-webkit-scrollbar-track,
+.dark ::-webkit-scrollbar-track {
+  background: #19211B;
+}
+::-webkit-scrollbar-thumb {
+  background: #D6CFBD;
+  border-radius: 9999px;
+}
+html.dark ::-webkit-scrollbar-thumb,
+.dark ::-webkit-scrollbar-thumb {
+  background: #3B493D;
+  border-radius: 9999px;
+}
+
+/* Ambient Background Atmosphere Keyframes */
+@keyframes zorvexDrift1 {
+  0% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(35px, -25px, 0) scale(1.06); }
+  100% { transform: translate3d(-20px, 20px, 0) scale(0.96); }
+}
+
+@keyframes zorvexDrift2 {
+  0% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(-35px, 30px, 0) scale(0.94); }
+  100% { transform: translate3d(25px, -15px, 0) scale(1.05); }
+}
+
+@keyframes zorvexDrift3 {
+  0% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(25px, 25px, 0) scale(1.04); }
+  100% { transform: translate3d(-15px, -30px, 0) scale(0.96); }
+}
+
+/* ========================================================================= */
+/* ZORVEX SIGNATURE EXPERIENCE — Floating Clay Dock & Orbit Navigation        */
+/* ========================================================================= */
+
+/* Floating Clay Dock (Detached Scrolled State) */
+.clay-dock-floating {
+  background: linear-gradient(155deg, rgba(255, 252, 245, 0.96) 0%, rgba(245, 242, 232, 0.94) 100%);
+  border: 1px solid rgba(227, 220, 203, 0.95);
+  box-shadow: 
+    0 18px 38px -6px rgba(41, 46, 40, 0.12),
+    0 6px 14px -2px rgba(41, 46, 40, 0.06),
+    inset 1px 1px 0px rgba(255, 255, 255, 1.0),
+    inset 2px 2px 4px rgba(255, 255, 255, 0.75),
+    inset -2px -2px 6px rgba(73, 102, 77, 0.06);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.3s cubic-bezier(0.16, 1, 0.3, 1), background 0.3s ease, border-color 0.3s ease;
+}
+
+html.dark .clay-dock-floating,
+.dark .clay-dock-floating {
+  background: linear-gradient(155deg, rgba(37, 46, 38, 0.96) 0%, rgba(29, 38, 31, 0.94) 100%) !important;
+  border: 1px solid rgba(59, 73, 61, 0.9) !important;
+  box-shadow: 
+    0 22px 48px -8px rgba(0, 0, 0, 0.95),
+    0 8px 18px -2px rgba(0, 0, 0, 0.75),
+    inset 1px 1px 1px rgba(175, 198, 155, 0.22),
+    inset -2px -2px 8px rgba(0, 0, 0, 0.8) !important;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+/* Orbit Navigation Track (Recessed Socket) */
+.orbit-track {
+  position: relative;
+  background: #E9E6DC;
+  border-radius: 9999px;
+  border: 1px solid rgba(227, 220, 203, 0.85);
+  box-shadow: 
+    inset 0 2px 4px rgba(41, 46, 40, 0.08),
+    inset 0 1px 2px rgba(41, 46, 40, 0.04),
+    0 1px 1px rgba(255, 255, 255, 0.8);
+}
+
+html.dark .orbit-track,
+.dark .orbit-track {
+  background: #1D261F !important;
+  border: 1px solid rgba(59, 73, 61, 0.85) !important;
+  box-shadow: 
+    inset 0 2px 6px rgba(0, 0, 0, 0.75),
+    inset 0 1px 2px rgba(0, 0, 0, 0.5),
+    0 1px 1px rgba(175, 198, 155, 0.06) !important;
+}
+
+/* Orbit Active Navigation Capsule (Gliding Tactile Pill) */
+.orbit-capsule {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  border-radius: 9999px;
+  background: linear-gradient(135deg, #56785B 0%, #49664D 50%, #3B533E 100%);
+  border: 1px solid rgba(255, 252, 245, 0.35);
+  box-shadow: 
+    0 4px 12px rgba(73, 102, 77, 0.35),
+    0 1px 3px rgba(41, 46, 40, 0.15),
+    inset 1px 1px 1px rgba(255, 252, 245, 0.45),
+    inset 0 -2px 4px rgba(0, 0, 0, 0.25);
+  transition: transform 320ms cubic-bezier(0.2, 0.9, 0.3, 1.15), width 280ms cubic-bezier(0.2, 0.9, 0.3, 1), opacity 150ms ease;
+  pointer-events: none;
+  z-index: 1;
+}
+
+html.dark .orbit-capsule,
+.dark .orbit-capsule {
+  background: linear-gradient(135deg, #AFC69B 0%, #9AB585 100%) !important;
+  border: 1px solid rgba(240, 238, 228, 0.4) !important;
+  box-shadow: 
+    0 4px 18px rgba(175, 198, 155, 0.4),
+    0 2px 6px rgba(0, 0, 0, 0.6),
+    inset 1px 1px 2px rgba(240, 238, 228, 0.6),
+    inset 0 -2px 4px rgba(0, 0, 0, 0.4) !important;
+}
+
+/* Orbit Satellite Beacon (Micro-Satellite Dot) */
+.orbit-beacon {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  width: 5px;
+  height: 5px;
+  border-radius: 9999px;
+  background: #FFFCF5;
+  box-shadow: 0 0 6px rgba(255, 252, 245, 0.95);
+  animation: orbitPulse 2.4s ease-in-out infinite;
+}
+
+html.dark .orbit-beacon,
+.dark .orbit-beacon {
+  background: #19211B !important;
+  box-shadow: 0 0 6px rgba(25, 33, 27, 0.8) !important;
+}
+
+@keyframes orbitPulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.85;
+  }
+  50% {
+    transform: scale(1.4);
+    opacity: 1;
+    box-shadow: 0 0 10px rgba(255, 252, 245, 1);
+  }
+}
+
+/* Accessibility: Respect Reduced Motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

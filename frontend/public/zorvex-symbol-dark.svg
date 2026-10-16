@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <rect width="64" height="64" rx="16" fill="#19211B" />
+  <rect x="0.75" y="0.75" width="62.5" height="62.5" rx="15.25" stroke="#3B493D" stroke-opacity="0.85" stroke-width="1.5" />
+  <defs>
+    <linearGradient id="symDarkTop" x1="12" y1="13" x2="52" y2="23" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#AFC69B" />
+      <stop offset="100%" stop-color="#49664D" />
+    </linearGradient>
+    <linearGradient id="symDarkDiag" x1="52" y1="13" x2="16" y2="51" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#AFC69B" />
+      <stop offset="45%" stop-color="#49664D" />
+      <stop offset="100%" stop-color="#253427" />
+    </linearGradient>
+    <linearGradient id="symDarkBottom" x1="16" y1="41" x2="52" y2="51" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#253427" />
+      <stop offset="100%" stop-color="#AFC69B" />
+    </linearGradient>
+  </defs>
+  <path d="M12 14.5C12 13.6716 12.6716 13 13.5 13H50.5C51.5 13 52.0625 14.1562 51.4375 14.9375L40.5 27H12V14.5Z" fill="url(#symDarkTop)" />
+  <path d="M51.4375 14.9375L25.625 49.0625C25 49.8438 24 51 23 51H14.5L40.5 27L51.4375 14.9375Z" fill="url(#symDarkDiag)" />
+  <path d="M25.625 39H52V49.5C52 50.3284 51.3284 51 50.5 51H23C22 51 21.4375 49.8438 22.0625 49.0625L25.625 39Z" fill="url(#symDarkBottom)" />
+  <circle cx="48.5" cy="16.5" r="2" fill="#AFC69B" fill-opacity="0.9" />
+  <circle cx="15.5" cy="47.5" r="2" fill="#AFC69B" fill-opacity="0.9" />
+</svg>

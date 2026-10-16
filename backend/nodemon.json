@@ -1,0 +1,6 @@
+{
+  "watch": ["app"],
+  "ext": "py,json",
+  "ignore": ["data/*", "__pycache__/*"],
+  "exec": "python -m uvicorn app.main:app --host 127.0.0.1 --port 8050"
+}

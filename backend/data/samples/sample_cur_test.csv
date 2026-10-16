@@ -1,0 +1,14 @@
+lineItem/UsageStartDate,lineItem/ProductCode,lineItem/UsageType,lineItem/Operation,lineItem/ResourceId,lineItem/UnblendedCost,resourceTags/user:Name
+2025-04-01 00:00:00,AmazonEC2,BoxUsage:t3.medium,RunInstances,i-0111stable,30.24,prod-web
+2025-04-01 00:00:00,AmazonEC2,VolumeUsage.gp3,CreateVolume,vol-0111disk,8.00,prod-web-root
+2025-04-01 00:00:00,AmazonEC2,DataTransfer-Out-Bytes,Transfer,i-0111stable,2.10,prod-web
+2025-04-01 00:00:00,AmazonRDS,InstanceUsage:db.t3.medium,CreateDBInstance,rds-db01,50.00,prod-db
+2025-06-01 00:00:00,AmazonEC2,BoxUsage:t3.medium,RunInstances,i-0111stable,30.24,prod-web
+2025-06-01 00:00:00,AmazonRDS,InstanceUsage:db.t3.medium,CreateDBInstance,rds-db01,50.00,prod-db
+2025-06-10 00:00:00,AmazonEC2,BoxUsage:g4dn.xlarge,RunInstances,i-0999gpu,320.00,ai-test
+2025-10-01 00:00:00,AmazonEC2,BoxUsage:t3.medium,RunInstances,i-0111stable,30.24,prod-web
+2025-10-01 00:00:00,AmazonEC2,BoxUsage:c5.xlarge,RunInstances,i-0222worker,122.40,backend-worker
+2025-10-01 00:00:00,AmazonEC2,BoxUsage:m5.large,RunInstances,i-0333api,70.00,api-gateway
+2025-10-01 00:00:00,AmazonEC2,USE1-DataTransfer-Out-Bytes,Transfer,i-0222worker,85.50,backend-worker
+2025-10-01 00:00:00,AmazonRDS,InstanceUsage:db.t3.medium,CreateDBInstance,rds-db01,50.00,prod-db
+2025-10-01 00:00:00,AmazonEC2,VolumeUsage.gp3,CreateVolume,vol-0222large,35.00,worker-ebs
