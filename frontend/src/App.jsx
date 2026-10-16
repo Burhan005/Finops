@@ -62,7 +62,8 @@ function DashboardLayout({
   currentUser,
   onLogout,
   forexData,
-  masterServices = []
+  masterServices = [],
+  masterServiceCosts = {}
 }) {
   const location = useLocation();
   const navigate = useNavigate();
@@ -540,6 +541,7 @@ export default function App() {
                     onLogout={handleLogout}
                     forexData={forexData}
                     masterServices={masterServices}
+                    masterServiceCosts={masterServiceCosts}
                   />
                 ) : (
                   <Navigate to="/login" replace />
