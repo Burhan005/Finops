@@ -536,7 +536,21 @@ export default function ServiceExplorer({
   const forestColor = isDark ? '#AFC69B' : '#49664D';
 
   const trendDates = trends?.dates || overview?.dates || [];
-  const serviceDailySpend = trends?.service_series?.[activeService.backendService] || [];
+  const serviceDailySpend = useMemo(() => {
+    // 1. Direct match on title (e.g. 'Amazon EBS', 'Amazon EC2', 'Amazon RDS')
+    if (trends?.service_series?.[activeService.title]?.length) {
+      return trends.service_series[activeService.title];
+    }
+    // 2. Direct match on key
+    if (trends?.service_series?.[activeService.key]?.length) {
+      return trends.service_series[activeService.key];
+    }
+    // 3. Fallback to backendService only if not EBS to avoid conflating with full EC2 compute
+    if (activeService.key !== 'EBS' && trends?.service_series?.[activeService.backendService]?.length) {
+      return trends.service_series[activeService.backendService];
+    }
+    return [];
+  }, [trends, activeService]);
 
   const serviceChartData = {
     labels: trendDates.map((d) => d.slice(5)),

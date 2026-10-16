@@ -625,20 +625,40 @@ def get_trend_data(cur_data: Dict[str, Any], start_date: Optional[str] = None, e
     if end_date:
         dates = [d for d in dates if d <= end_date]
     
-    # Calculate daily services trend for top 5 services
+    date_set = set(dates)
     services_map = cur_data.get('services', {})
     top_services = list(services_map.keys())[:5]
-    
-    service_daily_series = {svc: [] for svc in top_services}
     records = cur_data.get('records', [])
     
     svc_date_matrix = defaultdict(lambda: defaultdict(float))
     for r in records:
-        if r['service'] in top_services and r['date'] in set(dates):
-            svc_date_matrix[r['service']][r['date']] += r['cost']
+        d = r.get('date')
+        if d not in date_set:
+            continue
+        svc = r.get('service')
+        cost = r.get('cost', 0.0)
+        ut_lower = r.get('usage_type', '').lower()
+        
+        # Dedicated EBS separation from EC2 compute
+        if svc == 'Amazon EC2' and ('ebs' in ut_lower or 'snapshot' in ut_lower or 'volume' in ut_lower):
+            svc_date_matrix['Amazon EBS'][d] += cost
+            svc_date_matrix['Amazon EC2 (All)'][d] += cost
+        elif svc == 'Amazon EC2':
+            svc_date_matrix['Amazon EC2'][d] += cost
+            svc_date_matrix['Amazon EC2 (All)'][d] += cost
+        else:
+            svc_date_matrix[svc][d] += cost
 
+    # Build service_daily_series for all tracked services
+    all_tracked = list(services_map.keys())
+    if 'Amazon EBS' not in all_tracked:
+        all_tracked.append('Amazon EBS')
+    if 'Amazon EC2 (All)' not in all_tracked:
+        all_tracked.append('Amazon EC2 (All)')
+
+    service_daily_series = {svc: [] for svc in all_tracked}
     for d in dates:
-        for svc in top_services:
+        for svc in all_tracked:
             service_daily_series[svc].append(round(svc_date_matrix[svc][d], 2))
 
     return {
