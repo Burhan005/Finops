@@ -380,11 +380,23 @@ export default function ServiceExplorer({
   // Two-way synchronization with external selectedService
   useEffect(() => {
     if (selectedService && selectedService !== 'All') {
+      // If the currently active service already corresponds to the external filter, do not override it.
+      // Specifically: Both EC2 and EBS map to 'Amazon EC2' in CUR, so if user is on EBS, keep EBS!
+      if (
+        (activeServiceKey === 'EBS' && selectedService.toLowerCase() === 'amazon ec2') ||
+        (activeServiceKey === 'EC2' && selectedService.toLowerCase() === 'amazon ec2') ||
+        activeService?.title?.toLowerCase() === selectedService.toLowerCase() ||
+        activeService?.key?.toLowerCase() === selectedService.toLowerCase() ||
+        activeService?.backendService?.toLowerCase() === selectedService.toLowerCase()
+      ) {
+        return;
+      }
+
       const match = serviceCatalog.find(
         (s) =>
-          s.backendService?.toLowerCase() === selectedService.toLowerCase() ||
-          s.title?.toLowerCase() === selectedService.toLowerCase() ||
           s.key?.toLowerCase() === selectedService.toLowerCase() ||
+          s.title?.toLowerCase() === selectedService.toLowerCase() ||
+          s.backendService?.toLowerCase() === selectedService.toLowerCase() ||
           s.key?.toLowerCase() === selectedService.toLowerCase().replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, '')
       );
       if (match && match.key !== activeServiceKey) {
@@ -394,7 +406,7 @@ export default function ServiceExplorer({
         setPage(1);
       }
     }
-  }, [selectedService, serviceCatalog]);
+  }, [selectedService, serviceCatalog, activeServiceKey, activeService]);
 
   const activeService = serviceCatalog.find((s) => s.key === activeServiceKey) || serviceCatalog[0];
 
@@ -489,10 +501,6 @@ export default function ServiceExplorer({
     setSubCategory('ALL');
     setQuery('');
     setPage(1);
-    const match = serviceCatalog.find((s) => s.key === key);
-    if (match && onServiceChange) {
-      onServiceChange(match.backendService);
-    }
   };
 
   const copyId = (id) => {
