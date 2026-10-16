@@ -200,6 +200,7 @@ function DashboardLayout({
                       selectedService={filterService}
                       onServiceChange={onServiceChange}
                       masterServices={masterServices.length > 0 ? masterServices : rawServices}
+                      masterServiceCosts={masterServiceCosts}
                       activeDataset={activeDataset}
                       forexData={forexData}
                     />
@@ -217,6 +218,7 @@ function DashboardLayout({
                       selectedService={filterService}
                       onServiceChange={onServiceChange}
                       masterServices={masterServices.length > 0 ? masterServices : rawServices}
+                      masterServiceCosts={masterServiceCosts}
                       activeDataset={activeDataset}
                       forexData={forexData}
                     />
@@ -289,6 +291,7 @@ export default function App() {
   const [filterService, setFilterService] = useState('All');
   const [filterAccount, setFilterAccount] = useState('all');
   const [masterServices, setMasterServices] = useState([]);
+  const [masterServiceCosts, setMasterServiceCosts] = useState({});
 
   // Real-time Forex exchange rate state (dynamic via Open Exchange API)
   const [forexData, setForexData] = useState({
@@ -426,7 +429,13 @@ export default function App() {
 
       if (ov?.services) {
         const sKeys = Object.keys(ov.services);
-        setMasterServices((prev) => (sKeys.length > 1 || prev.length === 0 ? sKeys : prev));
+        if (sKeys.length > 1) {
+          setMasterServices(sKeys);
+          setMasterServiceCosts(ov.services);
+        } else {
+          setMasterServices((prev) => (prev.length === 0 ? sKeys : prev));
+          setMasterServiceCosts((prev) => (Object.keys(prev).length === 0 ? ov.services : prev));
+        }
       }
 
       if (results.length > 3) {

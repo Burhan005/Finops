@@ -246,6 +246,7 @@ export default function ServiceExplorer({
   selectedService = 'All',
   onServiceChange,
   masterServices = [],
+  masterServiceCosts = {},
   activeDataset = '',
   forexData,
   onNavigateToRecommendations
@@ -297,18 +298,21 @@ export default function ServiceExplorer({
   // Total Portfolio Spend
   const totalPortfolioSpend = overview?.total_cost || overview?.net_cost || 0;
   const rawServices = overview?.services || {};
+  const effectiveServices = (rawServices && Object.keys(rawServices).length > 1)
+    ? rawServices
+    : (masterServiceCosts && Object.keys(masterServiceCosts).length > 0 ? masterServiceCosts : rawServices);
 
   // Comprehensive, Dynamic Service Catalog from real CUR Telemetry
   const serviceCatalog = useMemo(() => {
     // 1. Core compute & block storage definitions
-    const ec2Spend = rawServices['Amazon EC2'] || 0;
+    const ec2Spend = effectiveServices['Amazon EC2'] || 0;
     
     // Dynamically calculate EBS spend from authoritative resource hierarchies (gp2/gp3 volumes + snapshots)
     const ec2Cats = hierarchiesData?.categories_by_service?.['Amazon EC2'] || resourceData?.hierarchies?.categories_by_service?.['Amazon EC2'] || [];
     const ebsVolCost = ec2Cats.find(c => c.id === 'EBS_VOLUME')?.cost || 0;
     const ebsSnapCost = ec2Cats.find(c => c.id === 'EBS_SNAPSHOT')?.cost || 0;
     const dynamicEbsSpend = Number((ebsVolCost + ebsSnapCost).toFixed(2));
-    const ebsSpend = dynamicEbsSpend > 0 ? dynamicEbsSpend : (rawServices['Amazon EBS'] || (ebsVolCost > 0 ? ebsVolCost : 0));
+    const ebsSpend = dynamicEbsSpend > 0 ? dynamicEbsSpend : (effectiveServices['Amazon EBS'] || (ebsVolCost > 0 ? ebsVolCost : 0));
 
     const list = [
       {
@@ -333,9 +337,9 @@ export default function ServiceExplorer({
       }
     ];
 
-    // 2. Discover all distinct services in dataset from masterServices & rawServices
+    // 2. Discover all distinct services in dataset from masterServices & effectiveServices
     const serviceNameSet = new Set([
-      ...Object.keys(rawServices),
+      ...Object.keys(effectiveServices),
       ...masterServices
     ]);
     serviceNameSet.delete('Amazon EC2');
@@ -359,7 +363,7 @@ export default function ServiceExplorer({
         icon: meta.icon,
         backendService: sName,
         defaultCategory: meta.defaultCategory,
-        spend: rawServices[sName] || 0,
+        spend: effectiveServices[sName] || 0,
         description: meta.description
       });
     });
@@ -368,7 +372,7 @@ export default function ServiceExplorer({
     dynamicItems.sort((a, b) => b.spend - a.spend);
 
     return [...list, ...dynamicItems];
-  }, [rawServices, masterServices]);
+  }, [effectiveServices, masterServices, hierarchiesData, resourceData]);
 
   // Two-way synchronization with external selectedService
   useEffect(() => {

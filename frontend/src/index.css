@@ -52,6 +52,11 @@
     color: #F0EEE4;
   }
 
+  html.dark .text-zorvex-text,
+  .dark .text-zorvex-text {
+    color: #F0EEE4 !important;
+  }
+
   html.dark .text-zorvex-text-secondary,
   .dark .text-zorvex-text-secondary,
   html.dark .text-zorvex-text-muted,

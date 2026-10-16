@@ -1960,7 +1960,7 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
                       <tbody className="divide-y divide-zorvex-border/30">
                         {inspectModalResource.line_items_sample.map((li, idx) => (
                           <tr key={idx} className="hover:bg-zorvex-surface-secondary/20">
-                            <td className="py-2 px-3 font-bold text-zorvex-text">{li.date}</td>
+                            <td className="py-2 px-3 font-bold text-zorvex-text dark:text-zorvex-dark-text whitespace-nowrap">{li.date}</td>
                             <td className="py-2 px-3">
                               <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${
                                 li.period === 'target' ? 'bg-zorvex-forest-soft text-zorvex-forest' : 'bg-zorvex-surface-secondary text-zorvex-text-secondary'
@@ -1975,7 +1975,7 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
                             <td className="py-2 px-3 text-right">
                               {li.usage_amount.toLocaleString()} {li.unit}
                             </td>
-                            <td className="py-2 px-3 text-right font-bold text-zorvex-text">
+                            <td className="py-2 px-3 text-right font-bold text-zorvex-text dark:text-zorvex-dark-text whitespace-nowrap">
                               {formatMoney(li.cost)}
                             </td>
                           </tr>
