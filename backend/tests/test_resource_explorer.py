@@ -153,7 +153,9 @@ class TestResourceExplorer(unittest.TestCase):
     def test_query_all_services(self):
         res = query_resource_explorer(self.cur_data, service='All')
         self.assertEqual(res['status'], 'SUCCESS')
-        self.assertAlmostEqual(res['summary']['total_cost'], 8914.93, delta=1.0)
+        self.assertAlmostEqual(res['summary']['total_cost'], 7762.43, delta=1.0)
+        self.assertAlmostEqual(res['summary']['taxes_total'], 1152.50, delta=1.0)
+        self.assertAlmostEqual(res['summary']['net_invoiced_spend'], 8914.93, delta=1.0)
         self.assertGreater(res['summary']['unique_resources_count'], 600)
         self.assertGreater(len(res['resources']), 0)
         self.assertLessEqual(len(res['resources']), 25)

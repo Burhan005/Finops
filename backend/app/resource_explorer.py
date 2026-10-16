@@ -341,6 +341,17 @@ def get_available_hierarchies(cur_data: Dict[str, Any]) -> Dict[str, Any]:
         svc = cls['service']
         cat = cls['category']
 
+        # Exclude Tax / Regulatory from Service Catalog & Categories (taxes belong at overall invoice level)
+        if (
+            cat == 'TAX_AND_FEES' or 
+            cls.get('asset_type') == 'Tax / Regulatory' or 
+            svc in ('Taxes & Surcharges', 'Tax') or 
+            r.get('line_type', '').lower() == 'tax' or 
+            rid.startswith('TAX-') or
+            rid == 'TAX-INVOICE-GST'
+        ):
+            continue
+
         services_map[svc]['cost'] += cost
         services_map[svc]['records_count'] += 1
         if rid and not rid.startswith('No-Resource-ID') and not rid.startswith('TAX-'):
@@ -599,6 +610,8 @@ def build_materialized_explorer_index(cur_data: Dict[str, Any]) -> Dict[str, Any
     rds_bkp_ids = set()
     ebs_snap_spend = 0.0
     rds_bkp_spend = 0.0
+    taxes_total = 0.0
+    daily_tax_totals = defaultdict(float)
 
     for r in records:
         cls = classify_cur_record(r)
@@ -609,6 +622,22 @@ def build_materialized_explorer_index(cur_data: Dict[str, Any]) -> Dict[str, Any
         r_date = r.get('date', '')
         r_account = r.get('account_id', '')
         r_region = r.get('region', '')
+
+        # Statutory taxes (e.g. GST) are tracked overall at invoice reconciliation, NOT as infrastructure cloud resources
+        is_tax_record = (
+            cls['category'] == 'TAX_AND_FEES' or 
+            cls.get('asset_type') == 'Tax / Regulatory' or 
+            cls.get('service') in ('Taxes & Surcharges', 'Tax') or 
+            r.get('line_type', '').lower() == 'tax' or 
+            rid.startswith('TAX-') or 
+            rid == 'TAX-INVOICE-GST' or 
+            'tax' in ut.lower() or 
+            'gst' in ut.lower()
+        )
+        if is_tax_record:
+            taxes_total += cost
+            daily_tax_totals[r_date] += cost
+            continue
 
         if cls['is_snapshot'] or cls['is_backup']:
             u_unit = r.get('unit', '')
@@ -909,6 +938,7 @@ def build_materialized_explorer_index(cur_data: Dict[str, Any]) -> Dict[str, Any
             'unit': st['unit']
         })
 
+    gross_infra_spend = sum(r['total_cost'] for r in all_resources)
     hierarchies = get_available_hierarchies(cur_data)
 
     index = {
@@ -925,7 +955,11 @@ def build_materialized_explorer_index(cur_data: Dict[str, Any]) -> Dict[str, Any
         'rds_bkp_spend': rds_bkp_spend,
         'rds_bkp_count': len(rds_bkp_ids),
         'unique_snapshots_count': len(ebs_snap_ids) + len(rds_bkp_ids),
-        'hierarchies': hierarchies
+        'hierarchies': hierarchies,
+        'taxes_total': round(taxes_total, 2),
+        'daily_tax_totals': {k: round(v, 2) for k, v in daily_tax_totals.items()},
+        'gross_infra_spend': round(gross_infra_spend, 2),
+        'net_invoiced_spend': round(gross_infra_spend + taxes_total, 2)
     }
     cur_data['_materialized_explorer_index'] = index
     return index
@@ -1177,6 +1211,9 @@ def query_resource_explorer(
             'scope_snapshot_cost': scope_snapshot_cost,
             'scope_snapshot_count': scope_snapshot_count,
             'has_scope_snapshots': scope_snapshot_count > 0,
+            'taxes_total': round(index.get('taxes_total', 0.0), 2),
+            'net_invoiced_spend': round(total_spend + (index.get('taxes_total', 0.0) if (service in ('All', None) and category in ('ALL', None)) else 0.0), 2),
+            'has_invoiced_tax': bool(index.get('taxes_total', 0.0) > 0),
             'currency': 'USD'
         },
         'snapshots_summary': snapshots_summary,

@@ -229,13 +229,6 @@ const KNOWN_SERVICES_META = {
     icon: Clock,
     defaultCategory: 'ALL',
     description: 'Management event history tracking, data events, and organization trails.'
-  },
-  'Taxes & Surcharges': {
-    title: 'Taxes & Surcharges',
-    subtitle: 'Statutory GST & Taxes',
-    icon: DollarSign,
-    defaultCategory: 'ALL',
-    description: 'Statutory government taxes, value-added taxes (VAT), and regulatory levies.'
   }
 };
 
@@ -346,11 +339,15 @@ export default function ServiceExplorer({
       ...masterServices
     ]);
     serviceNameSet.delete('Amazon EC2');
+    serviceNameSet.delete('Taxes & Surcharges');
+    serviceNameSet.delete('Tax');
+    serviceNameSet.delete('TAX_AND_FEES');
 
-    // 3. Convert all services into dynamic catalog items
+    // 3. Convert all services into dynamic catalog items (excluding taxes which belong at overall invoice level)
     const dynamicItems = [];
     serviceNameSet.forEach((sName) => {
       if (!sName || !sName.trim()) return;
+      if (sName === 'Taxes & Surcharges' || sName === 'Tax' || sName.toLowerCase().includes('tax')) return;
       const meta = KNOWN_SERVICES_META[sName] || {
         title: sName,
         subtitle: 'Enterprise Cloud Service',

@@ -469,6 +469,12 @@ export default function ResourceExplorer({
               </span>
             )}
           </div>
+          {summary.taxes_total > 0 && (!selectedService || selectedService === 'All') && (
+            <div className="text-[11px] font-medium text-zorvex-text-muted dark:text-zorvex-dark-text-muted pt-1 border-t border-zorvex-border/40 dark:border-zorvex-dark-border/40 mt-1 flex flex-wrap items-center justify-between gap-1">
+              <span>+ ${(summary.taxes_total).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Invoiced Tax (GST)</span>
+              <span className="font-mono font-bold text-zorvex-text dark:text-zorvex-dark-text">Net: ${(summary.net_invoiced_spend || (summary.total_cost + summary.taxes_total)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+            </div>
+          )}
         </div>
 
         {/* Unique Identified Resources / Active Inventory */}

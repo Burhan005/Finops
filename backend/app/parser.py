@@ -406,13 +406,14 @@ def parse_cur_files(filepaths: List[str]) -> Dict[str, Any]:
                     daily_refund_totals[day] += c_val
                     daily_totals[day] += c_val
                 elif is_tax:
+                    # Invoiced taxes are tracked at the financial/invoice reconciliation level, NOT as an AWS cloud infrastructure service
                     total_cost += c_val
                     daily_tax_totals[day] += c_val
                     daily_totals[day] += c_val
                     monthly_totals[month] += c_val
                     account_totals[account_id] += c_val
                     region_totals[region_val] += c_val
-                    service_totals['Taxes & Surcharges'] += c_val
+                    # Note: We intentionally do NOT add taxes to service_totals (taxes are statutory levies, not cloud services)
                 else:
                     total_cost += c_val
                     daily_gross_totals[day] += c_val
@@ -422,7 +423,7 @@ def parse_cur_files(filepaths: List[str]) -> Dict[str, Any]:
                     region_totals[region_val] += c_val
                     service_totals[prod_code] += c_val
 
-                if not is_credit and not is_refund:
+                if not is_credit and not is_refund and not is_tax:
 
                     res_entry = resource_index[res_id]
                     res_entry['total_cost'] += c_val

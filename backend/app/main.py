@@ -1288,7 +1288,7 @@ def get_overview(
             filtered_cost = data['total_cost']
 
     if is_full_span and not acc_filter and not svc_filter:
-        resp_services = data['services']
+        resp_services = {k: v for k, v in data['services'].items() if k not in ('Taxes & Surcharges', 'Tax')}
         resp_accounts = data.get('accounts', {})
     else:
         agg_services = defaultdict(float)
@@ -1299,9 +1299,10 @@ def get_overview(
             if r.get('date') in date_set:
                 c = float(r.get('cost', 0.0) or 0.0)
                 lt = r.get('line_type', '')
-                if lt not in ('Credit', 'Refund', 'SavingsPlanNegation') and c > 0:
+                if lt not in ('Credit', 'Refund', 'SavingsPlanNegation', 'Tax') and c > 0:
                     s = r.get('service', 'Other')
-                    agg_services[s] += c
+                    if s not in ('Taxes & Surcharges', 'Tax'):
+                        agg_services[s] += c
                 if c != 0:
                     a = r.get('account_id', 'Primary-Account')
                     agg_accounts[a] += c

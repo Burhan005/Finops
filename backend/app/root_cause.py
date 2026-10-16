@@ -280,7 +280,7 @@ def analyze_cost_root_cause(
             daily_target_service[d][s] += c
             daily_target_records[d] += 1
 
-    all_services = sorted(list(set(svc_base.keys()) | set(svc_target.keys())))
+    all_services = sorted(list(s for s in (set(svc_base.keys()) | set(svc_target.keys())) if s not in ('Taxes & Surcharges', 'Tax')))
     services_summary = []
 
     for s in all_services:
@@ -333,6 +333,8 @@ def analyze_cost_root_cause(
     res_line_items = defaultdict(list)
 
     for r in baseline_records:
+        if r.get('line_type', '').lower() == 'tax' or r.get('service') in ('Taxes & Surcharges', 'Tax') or (r.get('resource_id') or '').startswith('TAX-'):
+            continue
         rid = r.get('resource_id') or 'Unassigned'
         item = res_base[rid]
         c = float(r.get('cost', 0.0) or 0.0)
@@ -377,6 +379,8 @@ def analyze_cost_root_cause(
         'operations': set(), 'record_count': 0
     })
     for r in target_records:
+        if r.get('line_type', '').lower() == 'tax' or r.get('service') in ('Taxes & Surcharges', 'Tax') or (r.get('resource_id') or '').startswith('TAX-'):
+            continue
         rid = r.get('resource_id') or 'Unassigned'
         item = res_target[rid]
         c = float(r.get('cost', 0.0) or 0.0)
