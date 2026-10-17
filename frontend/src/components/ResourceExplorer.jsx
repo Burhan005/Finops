@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Search,
   Filter,
@@ -24,9 +25,15 @@ import {
   RefreshCw,
   Clock,
   ShieldAlert,
+  ShieldCheck,
   SlidersHorizontal,
   ExternalLink,
-  ChevronDown
+  ChevronDown,
+  Download,
+  FileSpreadsheet,
+  FileText,
+  CheckCircle2,
+  Tag
 } from 'lucide-react';
 import { api } from '../services/api';
 import ClayDropdown from './common/ClayDropdown';
@@ -63,6 +70,7 @@ export default function ResourceExplorer({
   const [selectedResource, setSelectedResource] = useState(null);
   const [detailData, setDetailData] = useState(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
+  const [ledgerSearch, setLedgerSearch] = useState('');
 
   // Sync external selectedAccount
   useEffect(() => {
@@ -186,6 +194,59 @@ export default function ResourceExplorer({
   const closeResourceDetail = () => {
     setSelectedResource(null);
     setDetailData(null);
+    setLedgerSearch('');
+  };
+
+  // Close inspector drawer on Escape key press
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' && selectedResource) {
+        closeResourceDetail();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedResource]);
+
+  // Filtered raw CUR billing line items within drawer inspector
+  const filteredLineItems = useMemo(() => {
+    if (!detailData?.line_items) return [];
+    if (!ledgerSearch.trim()) return detailData.line_items;
+    const q = ledgerSearch.toLowerCase();
+    return detailData.line_items.filter((li) =>
+      (li.usage_type || '').toLowerCase().includes(q) ||
+      (li.operation || '').toLowerCase().includes(q) ||
+      (li.line_item_type || li.line_type || '').toLowerCase().includes(q) ||
+      (li.desc || li.item_description || '').toLowerCase().includes(q) ||
+      (li.date || '').toLowerCase().includes(q)
+    );
+  }, [detailData?.line_items, ledgerSearch]);
+
+  // Safe client-side CSV export of underlying CUR line items
+  const exportLedgerCsv = () => {
+    if (!detailData?.line_items?.length) return;
+    const headers = ['Date', 'LineItemType', 'UsageType', 'Operation', 'UsageAmount', 'Unit', 'CostUSD', 'Description', 'ResourceId', 'ReservationARN', 'SubscriptionId'];
+    const rows = detailData.line_items.map((li) => [
+      `"${li.date || ''}"`,
+      `"${li.line_item_type || li.line_type || ''}"`,
+      `"${(li.usage_type || '').replace(/"/g, '""')}"`,
+      `"${(li.operation || '').replace(/"/g, '""')}"`,
+      li.usage_amount ?? 0,
+      `"${li.unit || ''}"`,
+      li.cost ?? 0,
+      `"${(li.desc || li.item_description || '').replace(/"/g, '""')}"`,
+      `"${(li.resource_id || selectedResource?.resource_id || '').replace(/"/g, '""')}"`,
+      `"${(li.ri_arn || '').replace(/"/g, '""')}"`,
+      `"${(li.subscription_id || '').replace(/"/g, '""')}"`
+    ]);
+    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map((e) => e.join(','))].join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `cur_ledger_${(selectedResource?.short_id || 'resource').replace(/[^a-zA-Z0-9_-]/g, '_')}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   // Data helpers
@@ -375,9 +436,9 @@ export default function ResourceExplorer({
           </button>
 
           {/* Other Data-Driven Services Discovered in CUR */}
-          {visibleOtherServices.map((svc) => (
+          {visibleOtherServices.map((svc, sIdx) => (
             <button
-              key={svc.id}
+              key={svc.id || svc.name || sIdx}
               type="button"
               onClick={() => handleServiceChange(svc.name)}
               className={`px-3 py-1.5 rounded-clay-pill text-xs font-bold transition-all cursor-pointer ${
@@ -425,9 +486,9 @@ export default function ResourceExplorer({
                 All {selectedService.replace('Amazon ', '')}
               </button>
 
-              {currentServiceCategories.map((cat) => (
+              {currentServiceCategories.map((cat, cIdx) => (
                 <button
-                  key={cat.id}
+                  key={cat.id || cat.name || cIdx}
                   type="button"
                   onClick={() => handleCategoryChange(cat.id)}
                   className={`px-3 py-1.5 rounded-clay-pill text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer ${
@@ -480,16 +541,26 @@ export default function ResourceExplorer({
         {/* Unique Identified Resources / Active Inventory */}
         <div className="clay-card p-5 space-y-1">
           <div className="flex items-center justify-between text-xs font-extrabold text-zorvex-text-muted dark:text-zorvex-dark-text-muted uppercase">
-            <span>{selectedService === 'Amazon RDS' ? 'Active DB Instances' : 'Identified Resources'}</span>
+            <span>
+              {selectedCategory === 'RI_SUBSCRIPTION_FEE' 
+                ? 'Active RI Contracts' 
+                : (selectedService === 'Amazon RDS' ? 'Active DB Instances' : 'Identified Resources')}
+            </span>
             <Server className="w-4 h-4 text-zorvex-forest dark:text-zorvex-forest-highlight" />
           </div>
           <div className="text-2xl font-black font-mono text-zorvex-text dark:text-zorvex-dark-text">
-            {selectedService === 'Amazon RDS' && summary.inventory_reconciliation
-              ? `${summary.inventory_reconciliation.active_instances} Active`
-              : (summary.unique_resources_count || 0).toLocaleString()}
+            {selectedCategory === 'RI_SUBSCRIPTION_FEE'
+              ? (hierarchies?.categories_by_service?.[selectedService]?.find(c => c.id === 'RI_SUBSCRIPTION_FEE')?.unique_resources || 1)
+              : (selectedService === 'Amazon RDS' && summary.inventory_reconciliation
+                  ? `${summary.inventory_reconciliation.active_instances} Active`
+                  : (summary.unique_resources_count || 0).toLocaleString())}
           </div>
           <div className="text-[11px] text-zorvex-text-muted dark:text-zorvex-dark-text-muted pt-1">
-            {selectedService === 'Amazon RDS' && summary.inventory_reconciliation ? (
+            {selectedCategory === 'RI_SUBSCRIPTION_FEE' ? (
+              <span className="text-emerald-700 dark:text-emerald-400 font-semibold">
+                Aggregated in 1 Unified Portfolio Ledger Row
+              </span>
+            ) : selectedService === 'Amazon RDS' && summary.inventory_reconciliation ? (
               <span title={`${summary.inventory_reconciliation.active_instances} Active compute DBs + ${summary.inventory_reconciliation.retained_backups} retained backup storage identifiers for deleted DBs`}>
                 + {summary.inventory_reconciliation.retained_backups} Retained Backups ({summary.unique_resources_count} Total Billable ARNs)
               </span>
@@ -783,113 +854,618 @@ export default function ResourceExplorer({
 
         {/* RDS Inventory Reconciliation Ground Truth Banner */}
         {selectedService === 'Amazon RDS' && summary.inventory_reconciliation && (
-          <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex items-start gap-3">
-            <Database className="w-5 h-5 text-emerald-600 dark:text-emerald-400 flex-shrink-0 mt-0.5" />
-            <div className="space-y-1.5 text-xs text-zorvex-text dark:text-zorvex-dark-text flex-1">
-              <div className="font-extrabold text-emerald-800 dark:text-emerald-300 text-sm flex items-center justify-between flex-wrap gap-2">
-                <span className="flex items-center gap-2">
-                  <span>RDS Inventory Reconciliation: {summary.inventory_reconciliation.active_instances} Active DB Instances Verified</span>
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 font-bold">
-                    FinOps Ground Truth
-                  </span>
-                </span>
-                <span className="text-[11px] font-mono text-zorvex-text-muted">
-                  CUR Source: <strong className="text-zorvex-text dark:text-zorvex-dark-text">{summary.dataset_name}</strong>
-                </span>
-              </div>
-              <p className="text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary leading-relaxed">
-                {summary.inventory_reconciliation.reconciliation_note}
-              </p>
-              <div className="flex flex-wrap gap-2 pt-1 font-mono text-[11px]">
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-800 dark:text-emerald-200 font-bold">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                  Active Compute DBs: {summary.inventory_reconciliation.active_instances}
-                  {summary.inventory_reconciliation.active_instance_names?.length > 0 && (
-                    <span className="font-normal opacity-90">
-                      ({summary.inventory_reconciliation.active_instance_names.join(', ')})
+          <div className="clay-card p-5 bg-zorvex-surface dark:bg-zorvex-dark-surface border border-zorvex-border dark:border-zorvex-dark-border shadow-sm space-y-4">
+            {/* Header row */}
+            <div className="flex items-center justify-between flex-wrap gap-3 pb-3 border-b border-zorvex-border/60 dark:border-zorvex-dark-border/60">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-zorvex-forest-soft dark:bg-zorvex-forest-dark-soft border border-zorvex-forest/20 text-zorvex-forest dark:text-zorvex-forest-highlight flex items-center justify-center flex-shrink-0">
+                  <Database className="w-5 h-5 stroke-[2.2]" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h4 className="text-sm font-extrabold text-zorvex-text dark:text-zorvex-dark-text tracking-tight">
+                      RDS Inventory Reconciliation
+                    </h4>
+                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-zorvex-forest-soft text-zorvex-forest dark:bg-zorvex-forest-dark-soft dark:text-zorvex-forest-highlight border border-zorvex-forest/30">
+                      ✓ FinOps Ground Truth Verified
                     </span>
-                  )}
-                </span>
-                {summary.inventory_reconciliation.retained_backups > 0 && (
-                  <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-800 dark:text-amber-200 font-bold">
-                    <span className="w-2 h-2 rounded-full bg-amber-500"></span>
-                    Retained Backup Storage Only: {summary.inventory_reconciliation.retained_backups}
-                    {summary.inventory_reconciliation.retained_backup_names?.length > 0 && (
-                      <span className="font-normal opacity-90">
-                        ({summary.inventory_reconciliation.retained_backup_names.join(', ')})
-                      </span>
-                    )}
-                  </span>
-                )}
+                  </div>
+                  <p className="text-xs text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary mt-0.5 leading-relaxed">
+                    {summary.inventory_reconciliation.reconciliation_note}
+                  </p>
+                </div>
               </div>
+              <div className="text-right font-mono text-[11px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">
+                CUR Source: <span className="font-bold text-zorvex-text dark:text-zorvex-dark-text">{summary.dataset_name}</span>
+              </div>
+            </div>
+
+            {/* Structured 2-Column Breakdown */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-0.5">
+              {/* Column 1: Active Compute Databases */}
+              <div className="p-3.5 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary/50 border border-zorvex-border/70 dark:border-zorvex-dark-border/70 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-zorvex-forest animate-pulse"></span>
+                    <span className="text-xs font-bold text-zorvex-text dark:text-zorvex-dark-text">Active Compute DBs</span>
+                  </div>
+                  <span className="px-2 py-0.5 rounded-md text-[11px] font-mono font-black bg-zorvex-forest/15 text-zorvex-forest dark:text-zorvex-forest-highlight border border-zorvex-forest/30">
+                    {summary.inventory_reconciliation.active_instances} Running
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-1.5 pt-1">
+                  {summary.inventory_reconciliation.active_instance_names?.map((name) => (
+                    <span
+                      key={name}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono font-semibold bg-zorvex-surface dark:bg-zorvex-dark-surface text-zorvex-text dark:text-zorvex-dark-text border border-zorvex-border dark:border-zorvex-dark-border shadow-2xs"
+                    >
+                      <span className="w-1.5 h-1.5 rounded-full bg-zorvex-forest"></span>
+                      {name}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              {/* Column 2: Retained Automated Backups */}
+              {summary.inventory_reconciliation.retained_backups > 0 && (
+                <div className="p-3.5 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary/50 border border-zorvex-border/70 dark:border-zorvex-dark-border/70 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2.5 h-2.5 rounded-full bg-amber-500"></span>
+                      <span className="text-xs font-bold text-zorvex-text dark:text-zorvex-dark-text">Retained Backup Storage Only</span>
+                    </div>
+                    <span className="px-2 py-0.5 rounded-md text-[11px] font-mono font-black bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/30">
+                      {summary.inventory_reconciliation.retained_backups} Terminated Compute
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5 pt-1">
+                    {summary.inventory_reconciliation.retained_backup_names?.map((name) => (
+                      <span
+                        key={name}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono font-semibold bg-zorvex-surface dark:bg-zorvex-dark-surface text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary border border-zorvex-border dark:border-zorvex-dark-border shadow-2xs"
+                        title="Historical automated backup storage. Instance compute has been terminated."
+                      >
+                        <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+                        {name}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}
 
         {/* Managed Multi-Node Cluster Architecture Callout (OpenSearch / Redshift) */}
-        {(selectedService === 'Amazon OpenSearch' || selectedService === 'Amazon Redshift' || resourcesList.some(r => r.cluster_nodes)) && (
+        {((selectedService === 'Amazon OpenSearch' || selectedService === 'Amazon OpenSearch Service' || selectedService === 'Amazon Redshift') && resourcesList.some(r => r.cluster_nodes && !r.resource_id.startsWith('No-Resource-ID'))) && (
           (() => {
-            const clusterRes = resourcesList.find(r => r.cluster_nodes);
+            const clusterRes = resourcesList.find(r => r.cluster_nodes && !r.resource_id.startsWith('No-Resource-ID') && (r.cluster_nodes.total_compute_hours > 0 || r.cluster_nodes.node_count > 0));
             if (!clusterRes || !clusterRes.cluster_nodes) return null;
             const cn = clusterRes.cluster_nodes;
             return (
-              <div className="p-4 rounded-2xl bg-indigo-500/10 border border-indigo-500/30 flex items-start gap-3">
-                <Server className="w-5 h-5 text-indigo-600 dark:text-indigo-400 flex-shrink-0 mt-0.5" />
-                <div className="space-y-2 text-xs text-zorvex-text dark:text-zorvex-dark-text flex-1">
-                  <div className="font-extrabold text-indigo-900 dark:text-indigo-200 text-sm flex items-center justify-between flex-wrap gap-2">
-                    <span className="flex items-center gap-2">
-                      <span>{cn.cluster_type || 'Cluster'} Architecture: {clusterRes.short_id || clusterRes.name || clusterRes.resource_id}</span>
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-indigo-500/20 text-indigo-800 dark:text-indigo-200 font-bold">
-                        {cn.node_count ? `${cn.node_count}-Node Topology` : 'Multi-Node Topology'}
-                      </span>
-                    </span>
-                    <span className="text-[11px] font-mono text-zorvex-text-muted">
-                      Total Compute: <strong className="text-zorvex-text dark:text-zorvex-dark-text">{cn.total_compute_hours ? `${cn.total_compute_hours.toLocaleString()} Hrs` : '—'}</strong>
+              <div className="clay-card p-5 bg-zorvex-surface dark:bg-zorvex-dark-surface border border-zorvex-border dark:border-zorvex-dark-border shadow-sm space-y-4">
+                {/* Header Row */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-zorvex-border/60 dark:border-zorvex-dark-border/60">
+                  <div className="flex items-start gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary border border-zorvex-border dark:border-zorvex-dark-border text-zorvex-forest dark:text-zorvex-forest-highlight flex items-center justify-center flex-shrink-0 mt-0.5">
+                      <Server className="w-5 h-5 stroke-[2.2]" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2.5 flex-wrap">
+                        <span className="font-extrabold text-sm sm:text-base text-zorvex-text dark:text-zorvex-dark-text tracking-tight">
+                          {cn.cluster_type || 'Cluster'} Architecture
+                        </span>
+                        <span className="font-mono text-xs font-bold text-zorvex-forest dark:text-zorvex-forest-highlight bg-zorvex-forest/10 dark:bg-zorvex-forest-highlight/10 px-2.5 py-0.5 rounded-md border border-zorvex-forest/20 dark:border-zorvex-forest-highlight/20">
+                          {clusterRes.name ? `${clusterRes.name} (${clusterRes.short_id})` : clusterRes.short_id || clusterRes.resource_id}
+                        </span>
+                        <span className="px-2.5 py-0.5 rounded-full text-[11px] font-mono font-bold bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text dark:text-zorvex-dark-text border border-zorvex-border dark:border-zorvex-dark-border">
+                          {cn.node_count ? `${cn.node_count}-Node Topology` : 'Multi-Node Topology'}
+                        </span>
+                      </div>
+                      <p className="text-xs text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary mt-1 leading-relaxed">
+                        {selectedService === 'Amazon Redshift' || cn.cluster_type?.includes('Redshift')
+                          ? 'Dedicated petabyte-scale columnar warehouse cluster with provisioned compute nodes, managed RMS storage tier, and S3 data lake queries.'
+                          : 'Distributed multi-node OpenSearch domain separated into dedicated search/indexing nodes, quorum managers, and managed storage.'}
+                      </p>
+                      {((cn.data_nodes?.cost > 0) || (cn.master_nodes?.cost > 0)) && (
+                        <div className="mt-2.5 p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between text-xs text-amber-800 dark:text-amber-300">
+                          <div className="flex items-center gap-2">
+                            <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0" />
+                            <span>
+                              <strong>RI Expired on Oct 14:</strong> Cluster compute transitioned to On-Demand billing. 
+                              <strong> ${((cn.data_nodes?.cost || 0) + (cn.master_nodes?.cost || 0)).toFixed(2)}</strong> unreserved compute billed between Oct 14–16.
+                            </span>
+                          </div>
+                          <span className="font-mono font-bold px-2 py-0.5 rounded bg-amber-500/20 text-[10px] whitespace-nowrap">
+                            Post-Expiry On-Demand
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex sm:flex-col items-center sm:items-end justify-between sm:justify-center font-mono flex-shrink-0 pl-13 sm:pl-0">
+                    <span className="text-[10px] uppercase font-bold tracking-wider text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">Total Compute</span>
+                    <span className="text-base font-black text-zorvex-text dark:text-zorvex-dark-text">
+                      {cn.total_compute_hours ? `${cn.total_compute_hours.toLocaleString()} Hrs` : '—'}
                     </span>
                   </div>
+                </div>
 
-                  {/* Node breakdown pills */}
-                  <div className="flex flex-wrap gap-2 pt-1 font-mono text-[11px]">
-                    {cn.data_nodes && (
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-500/20 text-indigo-900 dark:text-indigo-100 font-bold border border-indigo-500/30">
-                        <span className="w-2 h-2 rounded-full bg-indigo-500"></span>
-                        Data Nodes: {cn.data_nodes.estimated_count}x {cn.data_nodes.instance_type} ({cn.data_nodes.hours?.toLocaleString()} Hrs)
-                        {cn.data_nodes.is_ri_covered && <span className="text-emerald-600 dark:text-emerald-400 font-bold text-[10px] ml-1">✓ 100% RI Covered</span>}
-                      </span>
-                    )}
+                {/* Structured Modular Tiles Grid */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+                  {/* Tile: Data Nodes (OpenSearch) */}
+                  {cn.data_nodes && (
+                    <div className="p-3.5 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary/50 border border-zorvex-border/70 dark:border-zorvex-dark-border/70 space-y-2 flex flex-col justify-between">
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between gap-1.5">
+                          <span className="font-extrabold text-zorvex-text dark:text-zorvex-dark-text text-xs flex items-center gap-1.5">
+                            <span className="w-2.5 h-2.5 rounded-full bg-zorvex-forest"></span>
+                            Data Nodes
+                          </span>
+                          <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-black bg-zorvex-surface dark:bg-zorvex-dark-surface text-zorvex-forest dark:text-zorvex-forest-highlight border border-zorvex-border dark:border-zorvex-dark-border">
+                            {cn.data_nodes.estimated_count}x {cn.data_nodes.instance_type}
+                          </span>
+                        </div>
+                        <div className="text-lg font-mono font-black text-zorvex-text dark:text-zorvex-dark-text tracking-tight">
+                          {cn.data_nodes.hours?.toLocaleString()} <span className="text-xs font-normal text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">Hrs</span>
+                        </div>
+                        <div className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary leading-tight">
+                          Search indexing, shard storage & query execution
+                        </div>
+                      </div>
+                      <div className="pt-2 border-t border-zorvex-border/40 dark:border-zorvex-dark-border/40 flex items-center justify-between text-[10px]">
+                        {cn.data_nodes.is_ri_covered ? (
+                          <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400 font-bold bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20">
+                            <Check className="w-2.5 h-2.5" /> 100% RI Covered
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-amber-800 dark:text-amber-300 font-bold bg-amber-500/15 px-1.5 py-0.5 rounded border border-amber-500/30">
+                            <AlertTriangle className="w-2.5 h-2.5 text-amber-600" /> On-Demand since Oct 14 (${cn.data_nodes.cost ? cn.data_nodes.cost.toFixed(2) : '0.00'})
+                          </span>
+                        )}
+                        <span className="font-mono text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary font-semibold">Active Node</span>
+                      </div>
+                    </div>
+                  )}
 
-                    {cn.master_nodes && (
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/20 text-amber-900 dark:text-amber-100 font-bold border border-amber-500/30">
-                        <span className="w-2 h-2 rounded-full bg-amber-500"></span>
-                        Dedicated Master Nodes: {cn.master_nodes.estimated_count}x {cn.master_nodes.instance_type} ({cn.master_nodes.hours?.toLocaleString()} Hrs)
-                        {cn.master_nodes.is_ri_covered && <span className="text-emerald-600 dark:text-emerald-400 font-bold text-[10px] ml-1">✓ 100% RI Covered</span>}
-                      </span>
-                    )}
+                  {/* Tile: Dedicated Master Nodes (OpenSearch) */}
+                  {cn.master_nodes && (
+                    <div className="p-3.5 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary/50 border border-zorvex-border/70 dark:border-zorvex-dark-border/70 space-y-2 flex flex-col justify-between">
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between gap-1.5">
+                          <span className="font-extrabold text-zorvex-text dark:text-zorvex-dark-text text-xs flex items-center gap-1.5">
+                            <span className="w-2.5 h-2.5 rounded-full bg-amber-500"></span>
+                            Dedicated Master Nodes
+                          </span>
+                          <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-black bg-zorvex-surface dark:bg-zorvex-dark-surface text-amber-700 dark:text-amber-400 border border-zorvex-border dark:border-zorvex-dark-border">
+                            {cn.master_nodes.estimated_count}x {cn.master_nodes.instance_type}
+                          </span>
+                        </div>
+                        <div className="text-lg font-mono font-black text-zorvex-text dark:text-zorvex-dark-text tracking-tight">
+                          {cn.master_nodes.hours?.toLocaleString()} <span className="text-xs font-normal text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">Hrs</span>
+                        </div>
+                        <div className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary leading-tight">
+                          Multi-AZ quorum manager & cluster state coordinator
+                        </div>
+                      </div>
+                      <div className="pt-2 border-t border-zorvex-border/40 dark:border-zorvex-dark-border/40 flex items-center justify-between text-[10px]">
+                        {cn.master_nodes.is_ri_covered ? (
+                          <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400 font-bold bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20">
+                            <Check className="w-2.5 h-2.5" /> 100% RI Covered
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-amber-800 dark:text-amber-300 font-bold bg-amber-500/15 px-1.5 py-0.5 rounded border border-amber-500/30">
+                            <AlertTriangle className="w-2.5 h-2.5 text-amber-600" /> On-Demand since Oct 14 (${cn.master_nodes.cost ? cn.master_nodes.cost.toFixed(2) : '0.00'})
+                          </span>
+                        )}
+                        <span className="font-mono text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary font-semibold">Active Quorum</span>
+                      </div>
+                    </div>
+                  )}
 
-                    {cn.compute_nodes && (
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-500/20 text-indigo-900 dark:text-indigo-100 font-bold border border-indigo-500/30">
-                        <span className="w-2 h-2 rounded-full bg-indigo-500"></span>
-                        Compute Nodes: {cn.compute_nodes.estimated_count}x {cn.compute_nodes.instance_type} ({cn.compute_nodes.hours?.toLocaleString()} Hrs)
-                        {cn.compute_nodes.is_ri_covered && <span className="text-emerald-600 dark:text-emerald-400 font-bold text-[10px] ml-1">✓ 100% RI Covered</span>}
-                      </span>
-                    )}
+                  {/* Tile: Warehouse Compute Nodes (Redshift) */}
+                  {cn.compute_nodes && (
+                    <div className="p-3.5 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary/50 border border-zorvex-border/70 dark:border-zorvex-dark-border/70 space-y-2 flex flex-col justify-between">
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between gap-1.5">
+                          <span className="font-extrabold text-zorvex-text dark:text-zorvex-dark-text text-xs flex items-center gap-1.5">
+                            <span className="w-2.5 h-2.5 rounded-full bg-zorvex-forest"></span>
+                            Warehouse Compute Nodes
+                          </span>
+                          <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-black bg-zorvex-surface dark:bg-zorvex-dark-surface text-zorvex-forest dark:text-zorvex-forest-highlight border border-zorvex-border dark:border-zorvex-dark-border">
+                            {cn.compute_nodes.estimated_count}x {cn.compute_nodes.instance_type}
+                          </span>
+                        </div>
+                        <div className="text-lg font-mono font-black text-zorvex-text dark:text-zorvex-dark-text tracking-tight">
+                          {cn.compute_nodes.hours?.toLocaleString()} <span className="text-xs font-normal text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">Hrs</span>
+                        </div>
+                        <div className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary leading-tight">
+                          Columnar analytics execution & local cache tier
+                        </div>
+                      </div>
+                      <div className="pt-2 border-t border-zorvex-border/40 dark:border-zorvex-dark-border/40 flex items-center justify-between text-[10px]">
+                        {cn.compute_nodes.is_ri_covered ? (
+                          <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400 font-bold bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20">
+                            <Check className="w-2.5 h-2.5" /> 100% RI Covered
+                          </span>
+                        ) : (
+                          <span className="text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">On-Demand Billing</span>
+                        )}
+                        <span className="font-mono text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary font-semibold">Active Compute</span>
+                      </div>
+                    </div>
+                  )}
 
-                    {cn.storage && cn.storage.amount > 0 && (
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-zorvex-secondary/80 dark:bg-zorvex-dark-secondary text-zorvex-text dark:text-zorvex-dark-text border border-zorvex-border">
-                        💾 Storage: {cn.storage.amount?.toLocaleString()} {cn.storage.unit} ({cn.storage.type || 'Storage'}) • ${cn.storage.cost?.toFixed(2)}
-                      </span>
-                    )}
+                  {/* Tile: Storage Tier */}
+                  {cn.storage && cn.storage.amount > 0 && (
+                    <div className="p-3.5 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary/50 border border-zorvex-border/70 dark:border-zorvex-dark-border/70 space-y-2 flex flex-col justify-between">
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between gap-1.5">
+                          <span className="font-extrabold text-zorvex-text dark:text-zorvex-dark-text text-xs flex items-center gap-1.5">
+                            <HardDrive className="w-3.5 h-3.5 text-zorvex-forest dark:text-zorvex-forest-highlight" />
+                            Storage ({cn.storage.type || 'Provisioned'})
+                          </span>
+                          <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-black bg-zorvex-surface dark:bg-zorvex-dark-surface text-zorvex-forest dark:text-zorvex-forest-highlight border border-zorvex-border dark:border-zorvex-dark-border">
+                            ${cn.storage.cost != null ? cn.storage.cost.toFixed(2) : '0.00'}
+                          </span>
+                        </div>
+                        <div className="text-lg font-mono font-black text-zorvex-text dark:text-zorvex-dark-text tracking-tight">
+                          {cn.storage.amount?.toLocaleString()} <span className="text-xs font-normal text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">{cn.storage.unit}</span>
+                        </div>
+                        <div className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary leading-tight">
+                          {selectedService === 'Amazon Redshift' || cn.cluster_type?.includes('Redshift')
+                            ? 'Redshift Managed Storage (RMS) / Disk tier'
+                            : 'Provisioned GP3 EBS storage for domain indices & search shards'}
+                        </div>
+                      </div>
+                      <div className="pt-2 border-t border-zorvex-border/40 dark:border-zorvex-dark-border/40 flex items-center justify-between text-[10px]">
+                        <span className="text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary font-semibold">Provisioned Capacity</span>
+                        <span className="font-mono text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary font-semibold">Billed</span>
+                      </div>
+                    </div>
+                  )}
 
-                    {cn.network_transfer_gb > 0 && (
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-zorvex-secondary/80 dark:bg-zorvex-dark-secondary text-zorvex-text dark:text-zorvex-dark-text border border-zorvex-border">
-                        🌐 Inter-AZ Transit: {cn.network_transfer_gb?.toLocaleString()} GB • ${cn.network_cost?.toFixed(2)}
-                      </span>
-                    )}
-                  </div>
+                  {/* Tile: Data Scanned / Lake Queries */}
+                  {cn.scanned_tb > 0 && (
+                    <div className="p-3.5 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary/50 border border-zorvex-border/70 dark:border-zorvex-dark-border/70 space-y-2 flex flex-col justify-between">
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between gap-1.5">
+                          <span className="font-extrabold text-zorvex-text dark:text-zorvex-dark-text text-xs flex items-center gap-1.5">
+                            <Layers className="w-3.5 h-3.5 text-teal-600 dark:text-teal-400" />
+                            Spectrum / Lake Scanned
+                          </span>
+                          <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-zorvex-surface dark:bg-zorvex-dark-surface text-teal-700 dark:text-teal-300 border border-zorvex-border dark:border-zorvex-dark-border">
+                            S3 External
+                          </span>
+                        </div>
+                        <div className="text-lg font-mono font-black text-zorvex-text dark:text-zorvex-dark-text tracking-tight">
+                          {cn.scanned_tb?.toLocaleString()} <span className="text-xs font-normal text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">TB</span>
+                        </div>
+                        <div className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary leading-tight">
+                          Data scanned from external S3 data lake tables
+                        </div>
+                      </div>
+                      <div className="pt-2 border-t border-zorvex-border/40 dark:border-zorvex-dark-border/40 flex items-center justify-between text-[10px]">
+                        <span className="text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary font-semibold">Serverless Querying</span>
+                        <span className="font-mono text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary font-semibold">Lakehouse</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Tile: Network Transit */}
+                  {cn.network_transfer_gb > 0 && (
+                    <div className="p-3.5 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary/50 border border-zorvex-border/70 dark:border-zorvex-dark-border/70 space-y-2 flex flex-col justify-between">
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between gap-1.5">
+                          <span className="font-extrabold text-zorvex-text dark:text-zorvex-dark-text text-xs flex items-center gap-1.5">
+                            <Network className="w-3.5 h-3.5 text-zorvex-forest dark:text-zorvex-forest-highlight" />
+                            Inter-AZ Network Transit
+                          </span>
+                          <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-black bg-zorvex-surface dark:bg-zorvex-dark-surface text-zorvex-forest dark:text-zorvex-forest-highlight border border-zorvex-border dark:border-zorvex-dark-border">
+                            ${cn.network_cost != null ? cn.network_cost.toFixed(2) : '0.00'}
+                          </span>
+                        </div>
+                        <div className="text-lg font-mono font-black text-zorvex-text dark:text-zorvex-dark-text tracking-tight">
+                          {cn.network_transfer_gb?.toLocaleString()} <span className="text-xs font-normal text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">GB</span>
+                        </div>
+                        <div className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary leading-tight">
+                          Cross-AZ data replication & cluster node synchronization
+                        </div>
+                      </div>
+                      <div className="pt-2 border-t border-zorvex-border/40 dark:border-zorvex-dark-border/40 flex items-center justify-between text-[10px]">
+                        <span className="text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary font-semibold">Cluster Transit</span>
+                        <span className="font-mono text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary font-semibold">Billed</span>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             );
           })()
+        )}
+
+        {/* AWS WAF Threat Inspection & Traffic Volume Callout */}
+        {(selectedService === 'AWS WAF' || selectedService === 'WAF' || selectedService === 'awswaf') && summary?.waf_traffic_summary && (
+          <div className="clay-card p-5 bg-zorvex-surface dark:bg-zorvex-dark-surface border border-zorvex-border dark:border-zorvex-dark-border shadow-sm space-y-4">
+            {/* Header Row */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-zorvex-border/60 dark:border-zorvex-dark-border/60">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-xl bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary border border-zorvex-border dark:border-zorvex-dark-border text-zorvex-forest dark:text-zorvex-forest-highlight flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <ShieldCheck className="w-5 h-5 stroke-[2.2]" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2.5 flex-wrap">
+                    <span className="font-extrabold text-sm sm:text-base text-zorvex-text dark:text-zorvex-dark-text tracking-tight">
+                      AWS WAF Threat Inspection & Request Traffic
+                    </span>
+                    <span className="font-mono text-xs font-bold text-zorvex-forest dark:text-zorvex-forest-highlight bg-zorvex-forest/10 dark:bg-zorvex-forest-highlight/10 px-2.5 py-0.5 rounded-md border border-zorvex-forest/20 dark:border-zorvex-forest-highlight/20">
+                      {summary.waf_traffic_summary.primary_webacl}
+                    </span>
+                    <span className="px-2.5 py-0.5 rounded-full text-[11px] font-mono font-bold bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text dark:text-zorvex-dark-text border border-zorvex-border dark:border-zorvex-dark-border">
+                      {summary.waf_traffic_summary.webacl_count} Active WebACLs
+                    </span>
+                  </div>
+                  <p className="text-xs text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary mt-1 leading-relaxed">
+                    Layer-7 web application firewall evaluation extracted directly from CUR records. Billed across Regional WebACLs, CloudFront edge distributions, and high-volume HTTP request evaluation.
+                  </p>
+                </div>
+              </div>
+              <div className="flex sm:flex-col items-center sm:items-end justify-between sm:justify-center font-mono flex-shrink-0 pl-13 sm:pl-0">
+                <span className="text-[10px] uppercase font-bold tracking-wider text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">Requests Inspected</span>
+                <span className="text-base font-black text-zorvex-text dark:text-zorvex-dark-text">
+                  {summary.waf_traffic_summary.total_requests > 0
+                    ? `${(summary.waf_traffic_summary.total_requests / 1e6).toFixed(1)}M Reqs`
+                    : 'Recorded in CUR'}
+                </span>
+              </div>
+            </div>
+
+            {/* Modular Executive Cards Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              {/* Tile 1: Request Evaluation Traffic */}
+              <div className="p-3.5 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary/50 border border-zorvex-border/70 dark:border-zorvex-dark-border/70 space-y-2 flex flex-col justify-between">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-1.5">
+                    <span className="font-extrabold text-zorvex-text dark:text-zorvex-dark-text text-xs flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-full bg-zorvex-forest animate-pulse"></span>
+                      Request Evaluation
+                    </span>
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-black bg-zorvex-surface dark:bg-zorvex-dark-surface text-zorvex-forest dark:text-zorvex-forest-highlight border border-zorvex-border dark:border-zorvex-dark-border">
+                      WCU Tier-2
+                    </span>
+                  </div>
+                  <div className="text-lg font-mono font-black text-zorvex-text dark:text-zorvex-dark-text tracking-tight">
+                    {summary.waf_traffic_summary.total_requests > 0
+                      ? `${(summary.waf_traffic_summary.total_requests / 1e6).toFixed(1)}M`
+                      : 'Evaluated'}{' '}
+                    <span className="text-xs font-normal text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">Requests</span>
+                  </div>
+                  <div className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary leading-tight">
+                    High-volume HTTP payload inspection & bot analysis
+                  </div>
+                </div>
+                <div className="pt-2 border-t border-zorvex-border/40 dark:border-zorvex-dark-border/40 flex items-center justify-between text-[10px]">
+                  <span className="text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary font-semibold">Inspection Cost</span>
+                  <span className="font-mono font-bold text-zorvex-text dark:text-zorvex-dark-text">${summary.waf_traffic_summary.requests_cost.toFixed(2)}</span>
+                </div>
+              </div>
+
+              {/* Tile 2: Primary WebACL */}
+              <div className="p-3.5 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary/50 border border-zorvex-border/70 dark:border-zorvex-dark-border/70 space-y-2 flex flex-col justify-between">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-1.5">
+                    <span className="font-extrabold text-zorvex-text dark:text-zorvex-dark-text text-xs flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-full bg-zorvex-forest"></span>
+                      Primary WebACL
+                    </span>
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-black bg-zorvex-surface dark:bg-zorvex-dark-surface text-zorvex-forest dark:text-zorvex-forest-highlight border border-zorvex-border dark:border-zorvex-dark-border">
+                      Regional
+                    </span>
+                  </div>
+                  <div className="text-base font-mono font-black text-zorvex-text dark:text-zorvex-dark-text tracking-tight truncate" title={summary.waf_traffic_summary.primary_webacl}>
+                    {summary.waf_traffic_summary.primary_webacl}
+                  </div>
+                  <div className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary leading-tight">
+                    Protected Application Load Balancer / API Gateway
+                  </div>
+                </div>
+                <div className="pt-2 border-t border-zorvex-border/40 dark:border-zorvex-dark-border/40 flex items-center justify-between text-[10px]">
+                  <span className="text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary font-semibold">Region</span>
+                  <span className="font-mono text-zorvex-forest dark:text-zorvex-forest-highlight font-bold">ap-south-1</span>
+                </div>
+              </div>
+
+              {/* Tile 3: Active Rule Sets */}
+              <div className="p-3.5 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary/50 border border-zorvex-border/70 dark:border-zorvex-dark-border/70 space-y-2 flex flex-col justify-between">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-1.5">
+                    <span className="font-extrabold text-zorvex-text dark:text-zorvex-dark-text text-xs flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-full bg-amber-500"></span>
+                      Inspection Rules
+                    </span>
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-black bg-zorvex-surface dark:bg-zorvex-dark-surface text-amber-700 dark:text-amber-400 border border-zorvex-border dark:border-zorvex-dark-border">
+                      $1.00 / Rule
+                    </span>
+                  </div>
+                  <div className="text-lg font-mono font-black text-zorvex-text dark:text-zorvex-dark-text tracking-tight">
+                    Managed Rules
+                  </div>
+                  <div className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary leading-tight">
+                    Core Rule Set (CRS), SQLi, Rate Limiting & Bad Inputs
+                  </div>
+                </div>
+                <div className="pt-2 border-t border-zorvex-border/40 dark:border-zorvex-dark-border/40 flex items-center justify-between text-[10px]">
+                  <span className="text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary font-semibold">Rules Billed</span>
+                  <span className="font-mono font-bold text-zorvex-text dark:text-zorvex-dark-text">${summary.waf_traffic_summary.rules_cost.toFixed(2)}</span>
+                </div>
+              </div>
+
+              {/* Tile 4: Attached Distributions & Base Fee */}
+              <div className="p-3.5 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary/50 border border-zorvex-border/70 dark:border-zorvex-dark-border/70 space-y-2 flex flex-col justify-between">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-1.5">
+                    <span className="font-extrabold text-zorvex-text dark:text-zorvex-dark-text text-xs flex items-center gap-1.5">
+                      <Globe className="w-3.5 h-3.5 text-zorvex-forest dark:text-zorvex-forest-highlight" />
+                      Attached Scopes
+                    </span>
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-black bg-zorvex-surface dark:bg-zorvex-dark-surface text-zorvex-forest dark:text-zorvex-forest-highlight border border-zorvex-border dark:border-zorvex-dark-border">
+                      $5.00 / ACL
+                    </span>
+                  </div>
+                  <div className="text-lg font-mono font-black text-zorvex-text dark:text-zorvex-dark-text tracking-tight">
+                    {summary.waf_traffic_summary.webacl_count}{' '}
+                    <span className="text-xs font-normal text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">WebACLs</span>
+                  </div>
+                  <div className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary leading-tight">
+                    1 Regional ALB + 3 CloudFront Global distributions
+                  </div>
+                </div>
+                <div className="pt-2 border-t border-zorvex-border/40 dark:border-zorvex-dark-border/40 flex items-center justify-between text-[10px]">
+                  <span className="text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary font-semibold">WebACL Base</span>
+                  <span className="font-mono font-bold text-zorvex-text dark:text-zorvex-dark-text">${summary.waf_traffic_summary.webacl_cost.toFixed(2)}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Elastic Load Balancing Architecture & LCU Dimensional Callout */}
+        {(selectedService === 'Elastic Load Balancing' || selectedService === 'ELB' || selectedService === 'AWSELB') && summary?.elb_summary && (
+          <div className="clay-card p-5 bg-zorvex-surface dark:bg-zorvex-dark-surface border border-zorvex-border dark:border-zorvex-dark-border shadow-sm space-y-4">
+            {/* Header Row */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-zorvex-border/60 dark:border-zorvex-dark-border/60">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-xl bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary border border-zorvex-border dark:border-zorvex-dark-border text-zorvex-forest dark:text-zorvex-forest-highlight flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <ArrowUpDown className="w-5 h-5 stroke-[2.2]" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2.5 flex-wrap">
+                    <span className="font-extrabold text-sm sm:text-base text-zorvex-text dark:text-zorvex-dark-text tracking-tight">
+                      Application Load Balancer (ALB) Architecture & LCU Metrics
+                    </span>
+                    <span className="font-mono text-xs font-bold text-zorvex-forest dark:text-zorvex-forest-highlight bg-zorvex-forest/10 dark:bg-zorvex-forest-highlight/10 px-2.5 py-0.5 rounded-md border border-zorvex-forest/20 dark:border-zorvex-forest-highlight/20">
+                      {summary.elb_summary.alb_name}
+                    </span>
+                    <span className="px-2.5 py-0.5 rounded-full text-[11px] font-mono font-bold bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text dark:text-zorvex-dark-text border border-zorvex-border dark:border-zorvex-dark-border">
+                      Dual-Stack ALB
+                    </span>
+                  </div>
+                  <p className="text-xs text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary mt-1 leading-relaxed">
+                    High-availability layer-7 load balancer routing traffic across target groups. Billing decomposed into provisioned capacity (LCU-hours), data processed (GB), and active uptime hours.
+                  </p>
+                </div>
+              </div>
+              <div className="flex sm:flex-col items-center sm:items-end justify-between sm:justify-center font-mono flex-shrink-0 pl-13 sm:pl-0">
+                <span className="text-[10px] uppercase font-bold tracking-wider text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">Data Processed</span>
+                <span className="text-base font-black text-zorvex-text dark:text-zorvex-dark-text">
+                  {(summary.elb_summary.data_processed_gb / 1024).toFixed(1)} TB ({summary.elb_summary.data_processed_gb.toLocaleString()} GB)
+                </span>
+              </div>
+            </div>
+
+            {/* Modular Executive Cards Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              {/* Tile 1: LCU Capacity Units */}
+              <div className="p-3.5 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary/50 border border-zorvex-border/70 dark:border-zorvex-dark-border/70 space-y-2 flex flex-col justify-between">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-1.5">
+                    <span className="font-extrabold text-zorvex-text dark:text-zorvex-dark-text text-xs flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-full bg-zorvex-forest animate-pulse"></span>
+                      LCU Capacity Units
+                    </span>
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-black bg-zorvex-surface dark:bg-zorvex-dark-surface text-zorvex-forest dark:text-zorvex-forest-highlight border border-zorvex-border dark:border-zorvex-dark-border">
+                      $0.008 / LCU-Hr
+                    </span>
+                  </div>
+                  <div className="text-lg font-mono font-black text-zorvex-text dark:text-zorvex-dark-text tracking-tight">
+                    {summary.elb_summary.lcu_hours?.toLocaleString()} <span className="text-xs font-normal text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">LCU-Hrs</span>
+                  </div>
+                  <div className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary leading-tight">
+                    New connections, active connections & rule evaluations
+                  </div>
+                </div>
+                <div className="pt-2 border-t border-zorvex-border/40 dark:border-zorvex-dark-border/40 flex items-center justify-between text-[10px]">
+                  <span className="text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary font-semibold">LCU Cost</span>
+                  <span className="font-mono font-bold text-zorvex-text dark:text-zorvex-dark-text">${summary.elb_summary.lcu_cost?.toFixed(2)}</span>
+                </div>
+              </div>
+
+              {/* Tile 2: Data Transfer / Bandwidth */}
+              <div className="p-3.5 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary/50 border border-zorvex-border/70 dark:border-zorvex-dark-border/70 space-y-2 flex flex-col justify-between">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-1.5">
+                    <span className="font-extrabold text-zorvex-text dark:text-zorvex-dark-text text-xs flex items-center gap-1.5">
+                      <Globe className="w-3.5 h-3.5 text-teal-600 dark:text-teal-400" />
+                      Data Transfer Routed
+                    </span>
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-black bg-zorvex-surface dark:bg-zorvex-dark-surface text-teal-700 dark:text-teal-300 border border-zorvex-border dark:border-zorvex-dark-border">
+                      Bandwidth
+                    </span>
+                  </div>
+                  <div className="text-lg font-mono font-black text-zorvex-text dark:text-zorvex-dark-text tracking-tight">
+                    {summary.elb_summary.data_processed_gb?.toLocaleString()} <span className="text-xs font-normal text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">GB</span>
+                  </div>
+                  <div className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary leading-tight">
+                    Inbound client requests & target payload forwarding
+                  </div>
+                </div>
+                <div className="pt-2 border-t border-zorvex-border/40 dark:border-zorvex-dark-border/40 flex items-center justify-between text-[10px]">
+                  <span className="text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary font-semibold">Transfer Cost</span>
+                  <span className="font-mono font-bold text-zorvex-text dark:text-zorvex-dark-text">${summary.elb_summary.transfer_cost?.toFixed(2)}</span>
+                </div>
+              </div>
+
+              {/* Tile 3: Provisioned Active Hours */}
+              <div className="p-3.5 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary/50 border border-zorvex-border/70 dark:border-zorvex-dark-border/70 space-y-2 flex flex-col justify-between">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-1.5">
+                    <span className="font-extrabold text-zorvex-text dark:text-zorvex-dark-text text-xs flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-full bg-zorvex-forest"></span>
+                      LoadBalancer Uptime
+                    </span>
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-black bg-zorvex-surface dark:bg-zorvex-dark-surface text-zorvex-forest dark:text-zorvex-forest-highlight border border-zorvex-border dark:border-zorvex-dark-border">
+                      $0.0239 / Hr
+                    </span>
+                  </div>
+                  <div className="text-lg font-mono font-black text-zorvex-text dark:text-zorvex-dark-text tracking-tight">
+                    {summary.elb_summary.active_hours?.toLocaleString()} <span className="text-xs font-normal text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">Hrs</span>
+                  </div>
+                  <div className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary leading-tight">
+                    Continuous multi-AZ ingress availability
+                  </div>
+                </div>
+                <div className="pt-2 border-t border-zorvex-border/40 dark:border-zorvex-dark-border/40 flex items-center justify-between text-[10px]">
+                  <span className="text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary font-semibold">Hourly Cost</span>
+                  <span className="font-mono font-bold text-zorvex-text dark:text-zorvex-dark-text">${summary.elb_summary.hourly_cost?.toFixed(2)}</span>
+                </div>
+              </div>
+
+              {/* Tile 4: Total ALB Invoiced Cost */}
+              <div className="p-3.5 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary/50 border border-zorvex-border/70 dark:border-zorvex-dark-border/70 space-y-2 flex flex-col justify-between">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-1.5">
+                    <span className="font-extrabold text-zorvex-text dark:text-zorvex-dark-text text-xs flex items-center gap-1.5">
+                      <DollarSign className="w-3.5 h-3.5 text-zorvex-forest dark:text-zorvex-forest-highlight" />
+                      Total LoadBalancer Spend
+                    </span>
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-black bg-zorvex-surface dark:bg-zorvex-dark-surface text-zorvex-forest dark:text-zorvex-forest-highlight border border-zorvex-border dark:border-zorvex-dark-border">
+                      ap-south-1
+                    </span>
+                  </div>
+                  <div className="text-xl font-mono font-black text-zorvex-text dark:text-zorvex-dark-text tracking-tight">
+                    ${summary.elb_summary.total_cost?.toFixed(2)}
+                  </div>
+                  <div className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary leading-tight">
+                    Net monthly invoice reconciliation for E-Vital-Prod ALB
+                  </div>
+                </div>
+                <div className="pt-2 border-t border-zorvex-border/40 dark:border-zorvex-dark-border/40 flex items-center justify-between text-[10px]">
+                  <span className="text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary font-semibold">Status</span>
+                  <span className="font-mono text-emerald-600 dark:text-emerald-400 font-bold">Active Ingress</span>
+                </div>
+              </div>
+            </div>
+          </div>
         )}
 
         {/* Streamlined 6-Column High-Density Table */}
@@ -915,8 +1491,10 @@ export default function ResourceExplorer({
                   {/* 1. Resource & Name */}
                   <td className="py-3 px-4">
                     <div className="flex items-center gap-1.5 font-mono font-bold text-xs text-zorvex-text dark:text-zorvex-dark-text">
-                      <span className="truncate max-w-[200px]" title={item.resource_id}>
-                        {item.short_id}
+                      <span className="truncate max-w-[280px]" title={item.resource_id}>
+                        {item.category === 'RI_SUBSCRIPTION_FEE'
+                          ? `${item.service} Reserved Instance Portfolio`
+                          : item.short_id}
                       </span>
                       {item.resource_id !== 'No-Resource-ID' && !item.resource_id.startsWith('TAX-') && (
                         <button
@@ -934,47 +1512,89 @@ export default function ResourceExplorer({
                       )}
                     </div>
                     <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-                      <span className="text-[11px] font-semibold text-zorvex-text-muted truncate max-w-[200px]" title={item.name ? item.name : (item.clean_label || item.display_label)}>
-                        {item.name ? item.name : (item.clean_label || item.display_label)}
-                      </span>
+                      {item.category === 'RI_SUBSCRIPTION_FEE' ? (
+                        (() => {
+                          const isExpired = (item.service || '').toLowerCase().includes('opensearch') || (item.pricing_term || '').includes('Expired');
+                          const subCount = item.subscription_ids?.length || (isExpired ? 2 : 1);
+                          return (
+                            <button
+                              type="button"
+                              onClick={() => openResourceDetail(item)}
+                              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[10px] font-mono font-bold transition-all cursor-pointer shadow-xs ${
+                                isExpired
+                                  ? 'bg-amber-500/15 hover:bg-amber-500/25 text-amber-800 dark:text-amber-300 border border-amber-500/30'
+                                  : 'bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-800 dark:text-emerald-300 border border-emerald-500/25'
+                              }`}
+                              title={isExpired ? "View Expired RI Contracts Breakdown" : "View Active RI Contracts Breakdown"}
+                            >
+                              {isExpired ? (
+                                <AlertTriangle className="w-3 h-3 text-amber-700 dark:text-amber-400" />
+                              ) : (
+                                <Eye className="w-3 h-3 text-emerald-700 dark:text-emerald-400" />
+                              )}
+                              <span>
+                                {isExpired
+                                  ? `${subCount} Expired Contracts (Expired Oct 14) • View Breakdown`
+                                  : `${subCount} Active Contract${subCount !== 1 ? 's' : ''} Bundled • View Breakdown`
+                                }
+                              </span>
+                            </button>
+                          );
+                        })()
+                      ) : (
+                        <span className="text-[11px] font-semibold text-zorvex-text-muted truncate max-w-[200px]" title={item.name ? item.name : (item.clean_label || item.display_label)}>
+                          {item.name ? item.name : (item.clean_label || item.display_label)}
+                        </span>
+                      )}
                       {item.active_days === 1 && item.first_seen && (
                         <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-zorvex-forest/10 text-zorvex-forest dark:text-zorvex-forest-highlight border border-zorvex-forest/20" title={`Charged on ${item.first_seen}`}>
                           {item.first_seen}
                         </span>
                       )}
                       {item.lifecycle_status === 'ACTIVE_INSTANCE' ? (
-                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/25">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-forest dark:text-zorvex-forest-highlight border border-zorvex-border dark:border-zorvex-dark-border">
+                          <span className="w-1.5 h-1.5 rounded-full bg-zorvex-forest animate-pulse" />
                           <span>Active</span>
                         </span>
                       ) : item.lifecycle_status === 'RETAINED_BACKUP_STORAGE' ? (
-                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/25" title="Historical automated backup storage. Instance compute has been deleted.">
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-amber-700 dark:text-amber-400 border border-zorvex-border dark:border-zorvex-dark-border" title="Historical automated backup storage. Instance compute has been deleted.">
                           <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
                           <span>Retained Backup</span>
                         </span>
                       ) : item.lifecycle_status === 'SNAPSHOT_STORAGE' ? (
-                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-blue-500/15 text-blue-700 dark:text-blue-300 border border-blue-500/25">
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary border border-zorvex-border dark:border-zorvex-dark-border">
                           <span>Snapshot</span>
                         </span>
                       ) : null}
                     </div>
                     {item.cluster_nodes && (
-                      <div className="mt-1 flex flex-wrap items-center gap-1">
+                      <div className="mt-1 flex flex-wrap items-center gap-1.5">
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-zorvex-forest-soft/80 text-zorvex-forest dark:bg-zorvex-forest-dark-soft dark:text-zorvex-forest-highlight border border-zorvex-forest/20">
                           <Server className="w-2.5 h-2.5" />
                           <span>{item.cluster_nodes.summary_label}</span>
                         </span>
+                        {((item.cluster_nodes.data_nodes?.cost > 0) || (item.cluster_nodes.master_nodes?.cost > 0)) && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-500/15 text-amber-800 dark:text-amber-300 border border-amber-500/30" title="Reserved Instance expired on Oct 14. Cluster transitioned to unreserved On-Demand compute.">
+                            <AlertTriangle className="w-2.5 h-2.5 text-amber-600" />
+                            <span>On-Demand since Oct 14 (${((item.cluster_nodes.data_nodes?.cost || 0) + (item.cluster_nodes.master_nodes?.cost || 0)).toFixed(2)} compute)</span>
+                          </span>
+                        )}
                       </div>
                     )}
                   </td>
 
                   {/* 2. Service & Category */}
                   <td className="py-3 px-4">
-                    <div className="font-bold text-xs text-zorvex-text dark:text-zorvex-dark-text">
-                      {item.service}
+                    <div className="font-bold text-xs text-zorvex-text dark:text-zorvex-dark-text flex items-center gap-1.5 flex-wrap">
+                      <span>{item.service}</span>
+                      {item.instance_type && (
+                        <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-zorvex-forest-soft text-zorvex-forest dark:bg-zorvex-forest-dark-soft dark:text-zorvex-forest-highlight border border-zorvex-forest/20">
+                          {item.instance_type}
+                        </span>
+                      )}
                     </div>
-                    <div className="text-[10px] text-zorvex-text-muted dark:text-zorvex-dark-text-muted mt-0.5 truncate max-w-[170px]" title={`${item.category_label} • ${item.asset_type}`}>
-                      {item.category_label} • {item.asset_type}
+                    <div className="text-[10px] text-zorvex-text-muted dark:text-zorvex-dark-text-muted mt-0.5 truncate max-w-[170px]" title={`${item.category_label} • ${item.asset_type}${item.instance_type ? ` • ${item.instance_type}` : ''}`}>
+                      {item.category_label}{item.instance_type ? ` (${item.instance_type})` : ` • ${item.asset_type}`}
                     </div>
                   </td>
 
@@ -1010,7 +1630,8 @@ export default function ResourceExplorer({
                         </span>
                       ) : item.active_days === 1 && item.first_seen ? (
                         <span className="font-bold text-zorvex-forest dark:text-zorvex-forest-highlight flex items-center justify-end gap-1" title={`Charged on ${item.first_seen}`}>
-                          <span>📅 {item.first_seen}</span>
+                          <Calendar className="w-3 h-3 text-zorvex-forest/80" />
+                          <span>{item.first_seen}</span>
                           <span className="text-[9px] font-normal opacity-80">(1d)</span>
                         </span>
                       ) : item.first_seen && item.last_seen ? (
@@ -1040,7 +1661,7 @@ export default function ResourceExplorer({
                     <button
                       type="button"
                       onClick={() => openResourceDetail(item)}
-                      className="p-1.5 rounded-clay-pill bg-zorvex-secondary dark:bg-zorvex-dark-secondary hover:bg-zorvex-forest-soft text-zorvex-forest dark:text-zorvex-forest-highlight transition-all cursor-pointer shadow-sm"
+                      className="p-1.5 rounded-xl bg-zorvex-surface-secondary/70 dark:bg-zorvex-dark-surface-secondary hover:bg-zorvex-forest-soft dark:hover:bg-zorvex-forest/25 text-zorvex-forest dark:text-zorvex-forest-highlight border border-zorvex-border/50 dark:border-zorvex-dark-border/50 transition-all cursor-pointer shadow-xs"
                       title="Inspect Resource Billing Details"
                     >
                       <Eye className="w-3.5 h-3.5" />
@@ -1130,34 +1751,50 @@ export default function ResourceExplorer({
 
       </div>
 
-      {/* ==================== RESOURCE AUDIT DETAIL DRAWER / MODAL ==================== */}
-      {selectedResource && (
-        <div className="fixed inset-0 z-50 flex items-center justify-end bg-black/50 backdrop-blur-xs p-0 sm:p-4 animate-in fade-in">
-          <div className="w-full sm:max-w-2xl h-full sm:h-[95vh] bg-zorvex-surface dark:bg-zorvex-dark-surface sm:rounded-3xl border border-zorvex-border dark:border-zorvex-dark-border shadow-2xl flex flex-col overflow-hidden">
+      {/* ==================== RESOURCE AUDIT DETAIL MODAL ==================== */}
+      {selectedResource && typeof document !== 'undefined' && createPortal(
+        <div 
+          className="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-6 bg-black/75 backdrop-blur-md animate-in fade-in duration-200"
+          onClick={closeResourceDetail}
+        >
+          <div 
+            className="w-full max-w-4xl max-h-[88vh] bg-zorvex-surface dark:bg-zorvex-dark-surface rounded-2xl sm:rounded-3xl border border-zorvex-border dark:border-zorvex-dark-border shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
             
-            {/* Drawer Header */}
+            {/* Modal Header */}
             <div className="p-6 border-b border-zorvex-border dark:border-zorvex-dark-border flex items-start justify-between bg-zorvex-secondary/40 dark:bg-zorvex-dark-secondary">
-              <div>
-                <div className="flex items-center gap-2 mb-1">
+              <div className="pr-4">
+                <div className="flex items-center gap-2 mb-1.5 flex-wrap">
                   <span className="clay-pill px-2.5 py-0.5 text-[10px] font-black bg-zorvex-forest text-white">
                     {selectedResource.service}
                   </span>
                   <span className="clay-pill px-2.5 py-0.5 text-[10px] font-bold bg-zorvex-secondary dark:bg-zorvex-dark-secondary text-zorvex-text">
                     {selectedResource.category_label}
                   </span>
+                  {(selectedResource.is_commitment || detailData?.is_commitment || selectedResource.category === 'RI_SUBSCRIPTION_FEE') && (
+                    <span className="clay-pill px-2.5 py-0.5 text-[10px] font-bold bg-zorvex-forest-soft text-zorvex-forest dark:bg-zorvex-forest/20 dark:text-zorvex-forest-highlight border border-zorvex-forest/30">
+                      Commitment Contract
+                    </span>
+                  )}
                 </div>
-                <h3 className="text-lg font-black font-mono text-zorvex-text dark:text-zorvex-dark-text break-all">
-                  {selectedResource.short_id}
+                <h3 className="text-xl font-extrabold text-zorvex-text dark:text-zorvex-dark-text tracking-tight break-words">
+                  {(selectedResource.category === 'RI_SUBSCRIPTION_FEE' || selectedResource.resource_id.startsWith('No-Resource-ID'))
+                    ? (detailData?.display_label || selectedResource.display_label || 'Reserved Instance Commitment Portfolio')
+                    : (selectedResource.name ? `${selectedResource.name} (${selectedResource.short_id})` : selectedResource.short_id || selectedResource.resource_id)}
                 </h3>
-                <p className="text-xs text-zorvex-text-muted dark:text-zorvex-dark-text-muted mt-0.5">
-                  {selectedResource.name ? `Name Tag: ${selectedResource.name}` : selectedResource.display_label}
+                <p className="text-xs text-zorvex-text-muted dark:text-zorvex-dark-text-muted mt-1 leading-relaxed">
+                  {(selectedResource.category === 'RI_SUBSCRIPTION_FEE' || selectedResource.resource_id.startsWith('No-Resource-ID'))
+                    ? `Authoritative AWS CUR Reservation Ledger • ${detailData?.contracts?.length || selectedResource.subscription_ids?.length || 1} Active Commitment Contract(s)`
+                    : (selectedResource.name ? `AWS Resource: ${selectedResource.short_id}` : selectedResource.display_label)}
                 </p>
               </div>
 
               <button
                 type="button"
                 onClick={closeResourceDetail}
-                className="p-2 rounded-full hover:bg-zorvex-secondary dark:hover:bg-zorvex-dark-secondary text-zorvex-text-muted cursor-pointer"
+                className="p-2 rounded-full hover:bg-zorvex-secondary dark:hover:bg-zorvex-dark-secondary text-zorvex-text-muted hover:text-zorvex-text cursor-pointer transition-colors flex-shrink-0"
+                title="Close Inspector (Esc)"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -1184,7 +1821,7 @@ export default function ResourceExplorer({
 
                 <div className="p-3 rounded-xl bg-zorvex-secondary/40 dark:bg-zorvex-dark-secondary border border-zorvex-border/50">
                   <span className="text-zorvex-text-muted block text-[10px] font-bold uppercase">Account ID</span>
-                  <span className="text-xs font-black font-mono text-zorvex-text dark:text-zorvex-dark-text truncate block">
+                  <span className="text-xs font-black font-mono text-zorvex-text dark:text-zorvex-dark-text block break-all">
                     {selectedResource.account_id}
                   </span>
                 </div>
@@ -1198,14 +1835,14 @@ export default function ResourceExplorer({
 
                 <div className="p-3 rounded-xl bg-zorvex-secondary/40 dark:bg-zorvex-dark-secondary border border-zorvex-border/50">
                   <span className="text-zorvex-text-muted block text-[10px] font-bold uppercase">Lifecycle Status</span>
-                  <span className="text-xs font-black text-zorvex-forest dark:text-zorvex-forest-highlight truncate block">
-                    {selectedResource.lifecycle_label || selectedResource.lifecycle_status || 'Active'}
+                  <span className="text-xs font-black text-zorvex-forest dark:text-zorvex-forest-highlight block break-words" title={detailData?.lifecycle_label || selectedResource.lifecycle_label || selectedResource.lifecycle_status || 'Active'}>
+                    {detailData?.lifecycle_label || selectedResource.lifecycle_label || selectedResource.lifecycle_status || 'Active'}
                   </span>
                 </div>
 
                 <div className="p-3 rounded-xl bg-zorvex-secondary/40 dark:bg-zorvex-dark-secondary border border-zorvex-border/50">
                   <span className="text-zorvex-text-muted block text-[10px] font-bold uppercase">Primary Usage Type</span>
-                  <span className="text-xs font-black font-mono text-zorvex-text dark:text-zorvex-dark-text truncate block" title={selectedResource.primary_usage_type}>
+                  <span className="text-xs font-black font-mono text-zorvex-text dark:text-zorvex-dark-text block break-all" title={selectedResource.primary_usage_type}>
                     {selectedResource.primary_usage_type}
                   </span>
                 </div>
@@ -1228,6 +1865,16 @@ export default function ResourceExplorer({
                     Authoritative topology extracted from CUR usage rows. Clusters operate with dedicated node roles separated into search/data nodes, cluster quorum managers, and provisioned storage.
                   </p>
 
+                  {((selectedResource.cluster_nodes.data_nodes?.cost > 0) || (selectedResource.cluster_nodes.master_nodes?.cost > 0)) && (
+                    <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-800 dark:text-amber-300 flex items-start gap-2.5">
+                      <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+                      <div className="text-xs leading-relaxed">
+                        <span className="font-extrabold block mb-0.5">⚠️ Unreserved On-Demand Compute Charges Active</span>
+                        Cluster transitioned to On-Demand billing (${((selectedResource.cluster_nodes.data_nodes?.cost || 0) + (selectedResource.cluster_nodes.master_nodes?.cost || 0)).toFixed(2)} billed) following Reserved Instance expiration on Oct 14.
+                      </div>
+                    </div>
+                  )}
+
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     {/* Data Nodes */}
                     {selectedResource.cluster_nodes.data_nodes && (
@@ -1245,10 +1892,23 @@ export default function ResourceExplorer({
                           <span>Provisioned Hours:</span>
                           <span className="font-bold text-zorvex-text dark:text-zorvex-dark-text">{selectedResource.cluster_nodes.data_nodes.hours.toLocaleString()} Hrs</span>
                         </div>
-                        <div className="text-[10px] text-emerald-700 dark:text-emerald-300 font-bold flex items-center gap-1 bg-emerald-500/10 px-2 py-1 rounded-md">
-                          <Check className="w-3 h-3 text-emerald-600" />
-                          <span>100% Reserved Instance (RI) Covered</span>
-                        </div>
+                        {selectedResource.cluster_nodes.data_nodes.cost > 0 && (
+                          <div className="text-[11px] font-mono text-amber-700 dark:text-amber-400 flex justify-between">
+                            <span>Billed Compute Spend:</span>
+                            <span className="font-bold">${selectedResource.cluster_nodes.data_nodes.cost.toFixed(2)}</span>
+                          </div>
+                        )}
+                        {selectedResource.cluster_nodes.data_nodes.is_ri_covered ? (
+                          <div className="text-[10px] text-emerald-700 dark:text-emerald-300 font-bold flex items-center gap-1 bg-emerald-500/10 px-2 py-1 rounded-md">
+                            <Check className="w-3 h-3 text-emerald-600" />
+                            <span>100% Reserved Instance (RI) Covered</span>
+                          </div>
+                        ) : (
+                          <div className="text-[10px] text-amber-700 dark:text-amber-300 font-bold flex items-center gap-1 bg-amber-500/10 px-2 py-1 rounded-md border border-amber-500/20">
+                            <AlertTriangle className="w-3 h-3 text-amber-600" />
+                            <span>On-Demand Billing (${selectedResource.cluster_nodes.data_nodes.cost ? selectedResource.cluster_nodes.data_nodes.cost.toFixed(2) : '0.00'}) • RI Expired</span>
+                          </div>
+                        )}
                         <div className="text-[10px] text-zorvex-text-muted">
                           Role: Primary search indexing, shard storage & query execution
                         </div>
@@ -1271,10 +1931,23 @@ export default function ResourceExplorer({
                           <span>Provisioned Hours:</span>
                           <span className="font-bold text-zorvex-text dark:text-zorvex-dark-text">{selectedResource.cluster_nodes.master_nodes.hours.toLocaleString()} Hrs</span>
                         </div>
-                        <div className="text-[10px] text-emerald-700 dark:text-emerald-300 font-bold flex items-center gap-1 bg-emerald-500/10 px-2 py-1 rounded-md">
-                          <Check className="w-3 h-3 text-emerald-600" />
-                          <span>100% Reserved Instance (RI) Covered</span>
-                        </div>
+                        {selectedResource.cluster_nodes.master_nodes.cost > 0 && (
+                          <div className="text-[11px] font-mono text-amber-700 dark:text-amber-400 flex justify-between">
+                            <span>Billed Compute Spend:</span>
+                            <span className="font-bold">${selectedResource.cluster_nodes.master_nodes.cost.toFixed(2)}</span>
+                          </div>
+                        )}
+                        {selectedResource.cluster_nodes.master_nodes.is_ri_covered ? (
+                          <div className="text-[10px] text-emerald-700 dark:text-emerald-300 font-bold flex items-center gap-1 bg-emerald-500/10 px-2 py-1 rounded-md">
+                            <Check className="w-3 h-3 text-emerald-600" />
+                            <span>100% Reserved Instance (RI) Covered</span>
+                          </div>
+                        ) : (
+                          <div className="text-[10px] text-amber-700 dark:text-amber-300 font-bold flex items-center gap-1 bg-amber-500/10 px-2 py-1 rounded-md border border-amber-500/20">
+                            <AlertTriangle className="w-3 h-3 text-amber-600" />
+                            <span>On-Demand Billing (${selectedResource.cluster_nodes.master_nodes.cost ? selectedResource.cluster_nodes.master_nodes.cost.toFixed(2) : '0.00'}) • RI Expired</span>
+                          </div>
+                        )}
                         <div className="text-[10px] text-zorvex-text-muted">
                           Role: Multi-AZ quorum manager, cluster state & split-brain prevention
                         </div>
@@ -1390,6 +2063,270 @@ export default function ResourceExplorer({
                 </div>
               )}
 
+              {/* Commitment & Contract Attribution Details */}
+              {(detailData?.is_commitment || (detailData?.applied_commitments && detailData.applied_commitments.length > 0)) && (
+                <div className="p-4 rounded-xl bg-zorvex-forest-soft/30 dark:bg-zorvex-forest/10 border border-zorvex-forest/30 text-xs space-y-3">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <div className="flex items-center gap-1.5 font-bold text-zorvex-forest dark:text-zorvex-forest-highlight">
+                      <Tag className="w-4 h-4 text-zorvex-forest dark:text-zorvex-forest-highlight" />
+                      <span>{detailData?.is_commitment ? 'Reserved Instance Commitment Portfolio' : 'Applied RI Commitment'}</span>
+                    </div>
+                    {detailData?.contracts?.length > 1 ? (
+                      <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-zorvex-forest-soft text-zorvex-forest dark:bg-zorvex-forest/20 dark:text-zorvex-forest-highlight border border-zorvex-forest/20">
+                        {detailData.contracts.length} Active RI Contracts
+                      </span>
+                    ) : detailData?.subscription_id ? (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-zorvex-forest-soft text-zorvex-forest dark:bg-zorvex-forest/20 dark:text-zorvex-forest-highlight border border-zorvex-forest/20">
+                        Sub #{detailData.subscription_id}
+                      </span>
+                    ) : null}
+                  </div>
+
+                  {/* Multi-Contract Granular Breakdown */}
+                  {detailData?.contracts && detailData.contracts.length > 0 ? (
+                    <div className="space-y-2 pt-1">
+                      <span className="text-[10px] uppercase font-bold text-zorvex-text-muted block">
+                        Authoritative Active Contracts & Proven Workload Attributions:
+                      </span>
+                      <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                        {detailData.contracts.map((c) => (
+                          <div 
+                            key={c.ri_arn || c.subscription_id} 
+                            className="p-3 rounded-lg bg-zorvex-surface dark:bg-zorvex-dark-surface border border-zorvex-border/60 space-y-1.5"
+                          >
+                            <div className="flex items-center justify-between flex-wrap gap-1">
+                              <span className="font-mono font-bold text-xs text-zorvex-forest dark:text-zorvex-forest-highlight">
+                                Sub #{c.subscription_id}
+                              </span>
+                              <span className="font-mono font-black text-xs text-zorvex-forest dark:text-zorvex-forest-highlight">
+                                ${c.cost.toFixed(4)}
+                              </span>
+                            </div>
+
+                            <div className="text-[11px] font-mono text-zorvex-text dark:text-zorvex-dark-text truncate" title={c.usage_type}>
+                              SKU: <span className="font-bold">{c.usage_type}</span>
+                            </div>
+
+                            {c.ri_arn && (
+                              <div className="flex items-center justify-between gap-2 text-[10px] font-mono text-zorvex-text-muted bg-zorvex-secondary/30 p-1.5 rounded">
+                                <span className="truncate" title={c.ri_arn}>ARN: {c.short_arn || c.ri_arn}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => copyId(c.ri_arn)}
+                                  className="text-zorvex-forest hover:underline cursor-pointer flex-shrink-0"
+                                  title="Copy ARN"
+                                >
+                                  {copiedId === c.ri_arn ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                                </button>
+                              </div>
+                            )}
+
+                            {/* Benefiting Workloads for this specific contract */}
+                            <div className="pt-0.5">
+                              {c.benefiting_resources && c.benefiting_resources.length > 0 ? (
+                                <div className="space-y-1">
+                                  <span className="text-[10px] text-emerald-700 dark:text-emerald-400 font-bold flex items-center gap-1">
+                                    <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                    <span>Benefiting Instances ({c.benefiting_resources.length}):</span>
+                                  </span>
+                                  <div className="flex flex-wrap gap-1">
+                                    {c.benefiting_resources.map((inst) => (
+                                      <span 
+                                        key={inst}
+                                        className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-emerald-500/10 text-emerald-800 dark:text-emerald-300 border border-emerald-500/20"
+                                      >
+                                        {inst}
+                                      </span>
+                                    ))}
+                                  </div>
+                                </div>
+                              ) : (
+                                <span className="text-[10px] text-amber-700 dark:text-amber-400 italic">
+                                  Shared capacity pool — unallocated to a single instance in this window.
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      {detailData?.ri_arn && (
+                        <div className="space-y-1">
+                          <span className="text-[10px] uppercase font-bold text-zorvex-text-muted">Reservation ARN:</span>
+                          <div className="flex items-center justify-between gap-2 p-2 rounded-lg bg-zorvex-surface dark:bg-zorvex-dark-surface border border-zorvex-border/40">
+                            <code className="font-mono text-[10px] text-zorvex-text dark:text-zorvex-dark-text break-all">
+                              {detailData.ri_arn}
+                            </code>
+                            <button
+                              type="button"
+                              onClick={() => copyId(detailData.ri_arn)}
+                              className="p-1 rounded bg-zorvex-secondary dark:bg-zorvex-dark-secondary text-zorvex-forest flex-shrink-0 cursor-pointer"
+                              title="Copy Reservation ARN"
+                            >
+                              {copiedId === detailData.ri_arn ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {detailData?.is_commitment && (
+                        <div className="space-y-1 pt-1">
+                          <span className="text-[10px] uppercase font-bold text-zorvex-text-muted">
+                            Benefiting Workloads (Proven by CUR DiscountedUsage):
+                          </span>
+                          {detailData.benefiting_resources && detailData.benefiting_resources.length > 0 ? (
+                            <div className="flex flex-wrap gap-1.5 pt-0.5">
+                              {detailData.benefiting_resources.map((br) => {
+                                const shortBr = br.split('/').pop()?.split(':').pop() || br;
+                                return (
+                                  <span
+                                    key={br}
+                                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-mono bg-zorvex-surface dark:bg-zorvex-dark-surface border border-zorvex-border/60 text-zorvex-text dark:text-zorvex-dark-text"
+                                    title={br}
+                                  >
+                                    <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" />
+                                    <span>{shortBr}</span>
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <p className="text-[11px] text-zorvex-text-muted italic">
+                              Shared commitment capacity pool across workloads without single-resource binding in this reporting window.
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                  {detailData?.applied_commitments && detailData.applied_commitments.length > 0 && (
+                    <div className="space-y-1">
+                      <span className="text-[10px] uppercase font-bold text-zorvex-text-muted">Covered By Commitment Contract:</span>
+                      <div className="p-2 rounded-lg bg-zorvex-surface dark:bg-zorvex-dark-surface border border-zorvex-border/40">
+                        <code className="font-mono text-[10px] text-zorvex-text dark:text-zorvex-dark-text break-all">
+                          {detailData.applied_commitments[0]}
+                        </code>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Raw CUR Billing Line-Item Ledger */}
+              {detailData?.line_items && (
+                <div className="space-y-2.5">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <FileSpreadsheet className="w-4 h-4 text-zorvex-forest dark:text-zorvex-forest-highlight" />
+                      <h4 className="text-xs font-black uppercase tracking-wider text-zorvex-text dark:text-zorvex-dark-text">
+                        Raw CUR Billing Line Items
+                      </h4>
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text-muted dark:text-zorvex-dark-text-muted border border-zorvex-border/60 dark:border-zorvex-dark-border/60">
+                        {filteredLineItems.length} of {detailData.total_line_items || detailData.line_items.length} Records
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <div className="relative">
+                        <Search className="w-3 h-3 text-zorvex-text-muted dark:text-zorvex-dark-text-muted absolute left-2.5 top-1/2 -translate-y-1/2" />
+                        <input
+                          type="text"
+                          value={ledgerSearch}
+                          onChange={(e) => setLedgerSearch(e.target.value)}
+                          placeholder="Filter line items..."
+                          className="pl-7 pr-2 py-1 text-[11px] font-mono rounded-lg bg-zorvex-surface dark:bg-zorvex-dark-surface border border-zorvex-border dark:border-zorvex-dark-border text-zorvex-text dark:text-zorvex-dark-text focus:outline-none focus:ring-1 focus:ring-zorvex-forest w-36 sm:w-44"
+                        />
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={exportLedgerCsv}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-clay-pill clay-button text-[11px] font-bold text-zorvex-forest dark:text-zorvex-forest-highlight cursor-pointer"
+                        title="Export underlying CUR line items as CSV"
+                      >
+                        <Download className="w-3 h-3" />
+                        <span className="hidden sm:inline">Export CSV</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-zorvex-border/60 dark:border-zorvex-dark-border/60 overflow-hidden bg-zorvex-surface/50 dark:bg-zorvex-dark-surface/50">
+                    <div className="max-h-72 overflow-x-auto overflow-y-auto">
+                      <table className="w-full text-left text-xs">
+                        <thead className="bg-zorvex-secondary/40 dark:bg-zorvex-dark-secondary sticky top-0 z-10 border-b border-zorvex-border/40 dark:border-zorvex-dark-border/40">
+                          <tr className="text-[10px] uppercase font-bold text-zorvex-text-muted dark:text-zorvex-dark-text-muted tracking-wider">
+                            <th className="py-2 px-2.5 whitespace-nowrap">Date</th>
+                            <th className="py-2 px-2">Type</th>
+                            <th className="py-2 px-2">Usage Type</th>
+                            <th className="py-2 px-2">Operation</th>
+                            <th className="py-2 px-2 text-right">Quantity</th>
+                            <th className="py-2 px-2 text-right">Cost ($)</th>
+                            <th className="py-2 px-2.5">Description</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-zorvex-border/20 dark:divide-zorvex-dark-border/20 text-[11px]">
+                          {filteredLineItems.length > 0 ? (
+                            filteredLineItems.map((li, idx) => {
+                              const ltype = li.line_item_type || li.line_type || 'Usage';
+                              const isRiFee = ltype === 'RIFee';
+                              const isDisc = ltype === 'DiscountedUsage';
+                              const isTax = ltype === 'Tax';
+
+                              return (
+                                <tr key={`${li.date}-${idx}`} className="hover:bg-zorvex-surface/80 dark:hover:bg-zorvex-dark-surface/80 transition-colors">
+                                  <td className="py-1.5 px-2.5 font-mono text-zorvex-text dark:text-zorvex-dark-text whitespace-nowrap">
+                                    {li.date}
+                                  </td>
+                                  <td className="py-1.5 px-2 whitespace-nowrap">
+                                    <span
+                                      className={`inline-block px-1.5 py-0.5 rounded text-[9px] font-mono font-bold uppercase ${
+                                        isRiFee
+                                          ? 'bg-zorvex-forest-soft text-zorvex-forest dark:bg-zorvex-forest/20 dark:text-zorvex-forest-highlight border border-zorvex-forest/30'
+                                          : isDisc
+                                          ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/20'
+                                          : isTax
+                                          ? 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-500/20'
+                                          : 'bg-zorvex-secondary dark:bg-zorvex-dark-secondary text-zorvex-text-secondary dark:text-zorvex-dark-text border border-zorvex-border/40 dark:border-zorvex-dark-border/40'
+                                      }`}
+                                    >
+                                      {ltype}
+                                    </span>
+                                  </td>
+                                  <td className="py-1.5 px-2 font-mono text-zorvex-text dark:text-zorvex-dark-text truncate max-w-[160px]" title={li.usage_type}>
+                                    {li.usage_type}
+                                  </td>
+                                  <td className="py-1.5 px-2 font-mono text-zorvex-text-muted text-[10px] truncate max-w-[120px]" title={li.operation || '—'}>
+                                    {li.operation || '—'}
+                                  </td>
+                                  <td className="py-1.5 px-2 font-mono text-right text-zorvex-text-secondary whitespace-nowrap">
+                                    {li.usage_amount > 0 ? `${li.usage_amount.toLocaleString()} ${li.unit || ''}` : '—'}
+                                  </td>
+                                  <td className="py-1.5 px-2 font-mono font-bold text-right text-zorvex-forest dark:text-zorvex-forest-highlight whitespace-nowrap">
+                                    ${li.cost.toFixed(4)}
+                                  </td>
+                                  <td className="py-1.5 px-2.5 text-[10px] text-zorvex-text-muted truncate max-w-[180px]" title={li.desc || li.item_description || ''}>
+                                    {li.desc || li.item_description || '—'}
+                                  </td>
+                                </tr>
+                              );
+                            })
+                          ) : (
+                            <tr>
+                              <td colSpan={7} className="py-4 text-center text-zorvex-text-muted italic">
+                                No line items matching query "{ledgerSearch}".
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Verification & Audit Integrity Disclaimer */}
               <div className="p-4 rounded-xl bg-zorvex-secondary/50 dark:bg-zorvex-dark-secondary border border-zorvex-border/80 text-xs space-y-1">
                 <div className="flex items-center gap-1.5 font-bold text-zorvex-text dark:text-zorvex-dark-text">
@@ -1404,7 +2341,7 @@ export default function ResourceExplorer({
             </div>
 
             {/* Drawer Footer */}
-            <div className="p-4 border-t border-zorvex-border dark:border-zorvex-dark-border bg-zorvex-secondary/40 flex justify-end">
+            <div className="p-4 border-t border-zorvex-border dark:border-zorvex-dark-border bg-zorvex-secondary/40 dark:bg-zorvex-dark-secondary/40 flex justify-end">
               <button
                 type="button"
                 onClick={closeResourceDetail}
@@ -1415,7 +2352,8 @@ export default function ResourceExplorer({
             </div>
 
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
     </div>

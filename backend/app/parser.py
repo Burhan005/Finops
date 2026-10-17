@@ -11,8 +11,21 @@ Universal Enterprise Ingestion Engine:
 import gzip
 import csv
 import os
+import json
+import logging
+import functools
+from decimal import Decimal, ROUND_HALF_UP
 from collections import defaultdict
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Union, Tuple
+
+logger = logging.getLogger("zorvex.parser")
+
+def round_currency(val: Any) -> float:
+    """Rounds Decimal/float/str to 2 decimal places using ROUND_HALF_UP and converts to standard float for JSON serialization."""
+    if isinstance(val, (int, float, str)):
+        val = Decimal(str(val))
+    return float(val.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
+
 
 CANDIDATES = {
     'cost': [
@@ -63,6 +76,9 @@ CANDIDATES = {
     'ri_arn': [
         'reservation/ReservationARN', 'reservation_reservation_a_r_n', 'ReservationARN'
     ],
+    'subscription_id': [
+        'reservation/SubscriptionId', 'reservation_subscription_id', 'SubscriptionId'
+    ],
     'region': [
         'product/region', 'product_region', 'lineItem/AvailabilityZone', 'line_item_availability_zone',
         'AvailabilityZone', 'region'
@@ -84,6 +100,24 @@ CANDIDATES = {
     ],
     'tax_type': [
         'lineItem/TaxType', 'line_item_tax_type', 'TaxType'
+    ],
+    'line_item_id': [
+        'identity/LineItemId', 'identity_line_item_id', 'LineItemId', 'lineitemid',
+        'identity/lineItemId', 'LineItem/LineItemId'
+    ],
+    'bill_period_start': [
+        'bill/BillingPeriodStartDate', 'bill_billing_period_start_date', 'BillingPeriodStartDate',
+        'bill/BillingPeriodStart', 'BillingPeriodStart'
+    ],
+    'bill_period_end': [
+        'bill/BillingPeriodEndDate', 'bill_billing_period_end_date', 'BillingPeriodEndDate',
+        'bill/BillingPeriodEnd', 'BillingPeriodEnd'
+    ],
+    'payer_account_id': [
+        'bill/PayerAccountId', 'bill_payer_account_id', 'PayerAccountId', 'payeraccountid'
+    ],
+    'invoice_id': [
+        'bill/InvoiceId', 'bill_invoice_id', 'InvoiceId', 'invoiceid'
     ]
 }
 
@@ -112,6 +146,7 @@ REGION_PREFIX_MAP = {
 
 PREFIX_PATTERNS = [(p, f"-{p}-", f":{p}-", reg) for p, reg in REGION_PREFIX_MAP.items()]
 
+@functools.lru_cache(maxsize=4096)
 def resolve_region(region_raw: str, usage_type: str = '', desc: str = '', tax_type: str = '', az: str = '') -> str:
     r = region_raw.strip().lower() if region_raw else ''
     if r:
@@ -172,6 +207,7 @@ SERVICE_CANONICAL_MAP = {
     'vpc': 'VPC / Networking'
 }
 
+@functools.lru_cache(maxsize=1024)
 def normalize_service_code(code: str) -> str:
     if not code:
         return 'Unknown-Service'
@@ -222,18 +258,20 @@ def parse_cur_files(filepaths: List[str]) -> Dict[str, Any]:
             raise FileNotFoundError(f"File not found: {fp}")
 
     records = []
-    service_totals = defaultdict(float)
-    daily_totals = defaultdict(float)
-    daily_gross_totals = defaultdict(float)
-    daily_tax_totals = defaultdict(float)
-    daily_credit_totals = defaultdict(float)
-    daily_refund_totals = defaultdict(float)
-    monthly_totals = defaultdict(float)
-    account_totals = defaultdict(float)
-    region_totals = defaultdict(float)
+    service_totals = defaultdict(Decimal)
+    daily_totals = defaultdict(Decimal)
+    daily_gross_totals = defaultdict(Decimal)
+    daily_tax_totals = defaultdict(Decimal)
+    daily_credit_totals = defaultdict(Decimal)
+    daily_refund_totals = defaultdict(Decimal)
+    monthly_totals = defaultdict(Decimal)
+    account_totals = defaultdict(Decimal)
+    region_totals = defaultdict(Decimal)
     resource_index = defaultdict(lambda: {
-        'total_cost': 0.0,
-        'dates': defaultdict(float),
+        'total_cost': Decimal('0'),
+        'effective_cost': 0.0,
+        'usage_amount': 0.0,
+        'dates': defaultdict(Decimal),
         'service': '',
         'name': '',
         'account_id': '',
@@ -245,14 +283,17 @@ def parse_cur_files(filepaths: List[str]) -> Dict[str, Any]:
     
     unique_dates = set()
     unique_months = set()
-    total_cost = 0.0
-    gross_cost = 0.0
-    credits_total = 0.0
-    refunds_total = 0.0
-    taxes_total = 0.0
+    total_cost_dec = Decimal('0')
+    gross_cost_dec = Decimal('0')
+    credits_total_dec = Decimal('0')
+    refunds_total_dec = Decimal('0')
+    taxes_total_dec = Decimal('0')
     total_rows = 0
     MAX_UNCOMPRESSED_BYTES = 500 * 1024 * 1024  # 500 MB safety limit
     date_cache = {}
+    detected_bp_start = None
+    detected_bp_end = None
+    detected_payer_id = None
 
     for filepath in filepaths:
         with open_file_any(filepath) as f:
@@ -276,6 +317,7 @@ def parse_cur_files(filepaths: List[str]) -> Dict[str, Any]:
             acc_idx = col_map.get('account_id')
             sp_idx = col_map.get('sp_arn')
             ri_idx = col_map.get('ri_arn')
+            sub_idx = col_map.get('subscription_id')
             reg_idx = col_map.get('region')
             usage_amt_idx = col_map.get('usage_amount')
             unit_idx = col_map.get('unit')
@@ -283,6 +325,10 @@ def parse_cur_files(filepaths: List[str]) -> Dict[str, Any]:
             curr_idx = col_map.get('currency')
             desc_idx = col_map.get('desc')
             tax_type_idx = col_map.get('tax_type')
+            lid_idx = col_map.get('line_item_id')
+            bp_start_idx = col_map.get('bill_period_start')
+            bp_end_idx = col_map.get('bill_period_end')
+            payer_acc_idx = col_map.get('payer_account_id')
 
             if cost_idx is None or date_idx is None:
                 raise ValueError(f"Required Cost or Date columns not detected in {filepath}")
@@ -291,6 +337,19 @@ def parse_cur_files(filepaths: List[str]) -> Dict[str, Any]:
                 row_len = len(row)
                 if row_len <= cost_idx:
                     continue
+
+                if detected_bp_start is None and bp_start_idx is not None and row_len > bp_start_idx:
+                    raw_s = row[bp_start_idx].strip()
+                    if raw_s:
+                        detected_bp_start = raw_s.split('T')[0][:10]
+                if detected_bp_end is None and bp_end_idx is not None and row_len > bp_end_idx:
+                    raw_e = row[bp_end_idx].strip()
+                    if raw_e:
+                        detected_bp_end = raw_e.split('T')[0][:10]
+                if detected_payer_id is None and payer_acc_idx is not None and row_len > payer_acc_idx:
+                    raw_p = row[payer_acc_idx].strip()
+                    if raw_p:
+                        detected_payer_id = raw_p
 
                 total_rows += 1
                 if total_rows % 5000 == 0:
@@ -301,8 +360,11 @@ def parse_cur_files(filepaths: List[str]) -> Dict[str, Any]:
                         pass
 
                 try:
-                    c_val = float(row[cost_idx])
-                except (ValueError, IndexError):
+                    c_str = row[cost_idx].strip() if (cost_idx is not None and row_len > cost_idx and row[cost_idx]) else '0.0'
+                    c_dec = Decimal(c_str)
+                    c_val = float(c_dec)
+                except (ValueError, IndexError, ArithmeticError):
+                    c_dec = Decimal('0')
                     c_val = 0.0
 
                 raw_unblended = c_val
@@ -335,18 +397,18 @@ def parse_cur_files(filepaths: List[str]) -> Dict[str, Any]:
 
                 # Explicitly classify according to FinOps billing accounting standards
                 ltype_lower = ltype.lower()
-                is_credit = ltype_lower == 'credit' or (c_val < 0 and 'credit' in (row[usage_idx].lower() if usage_idx is not None and row_len > usage_idx else ''))
+                is_credit = ltype_lower == 'credit' or (c_dec < 0 and 'credit' in (row[usage_idx].lower() if usage_idx is not None and row_len > usage_idx else ''))
                 is_refund = ltype_lower == 'refund'
                 is_tax = ltype_lower == 'tax'
 
                 if is_credit:
-                    credits_total += c_val
+                    credits_total_dec += c_dec
                 elif is_refund:
-                    refunds_total += c_val
+                    refunds_total_dec += c_dec
                 elif is_tax:
-                    taxes_total += c_val
-                elif c_val > 0:
-                    gross_cost += c_val
+                    taxes_total_dec += c_dec
+                elif c_dec > 0:
+                    gross_cost_dec += c_dec
 
                 # FinOps Invariant: Unblended Invoice spend reflects authoritative cash billing.
                 # LineItemType 'DiscountedUsage' has UnblendedCost = $0.00 (the commitment is billed on RIFee).
@@ -385,8 +447,10 @@ def parse_cur_files(filepaths: List[str]) -> Dict[str, Any]:
                 account_id = row[acc_idx].strip() if (acc_idx is not None and row_len > acc_idx and row[acc_idx].strip()) else 'Primary-Account'
                 sp_arn = row[sp_idx].strip() if (sp_idx is not None and row_len > sp_idx) else ''
                 ri_arn = row[ri_idx].strip() if (ri_idx is not None and row_len > ri_idx) else ''
+                sub_val = row[sub_idx].strip() if (sub_idx is not None and row_len > sub_idx) else ''
                 desc_val = row[desc_idx].strip() if (desc_idx is not None and row_len > desc_idx and row[desc_idx].strip()) else ''
                 tax_type_val = row[tax_type_idx].strip() if (tax_type_idx is not None and row_len > tax_type_idx and row[tax_type_idx].strip()) else ''
+                line_item_id = row[lid_idx].strip() if (lid_idx is not None and row_len > lid_idx) else ''
                 region_raw = row[reg_idx].strip() if (reg_idx is not None and row_len > reg_idx and row[reg_idx].strip()) else ''
                 
                 region_val = resolve_region(region_raw, usage_type, desc_val, tax_type_val)
@@ -400,37 +464,37 @@ def parse_cur_files(filepaths: List[str]) -> Dict[str, Any]:
 
                 # Aggregate gross operational unblended metrics (credits/refunds tracked separately)
                 if is_credit:
-                    daily_credit_totals[day] += c_val
-                    daily_totals[day] += c_val
+                    daily_credit_totals[day] += c_dec
+                    daily_totals[day] += c_dec
                 elif is_refund:
-                    daily_refund_totals[day] += c_val
-                    daily_totals[day] += c_val
+                    daily_refund_totals[day] += c_dec
+                    daily_totals[day] += c_dec
                 elif is_tax:
                     # Invoiced taxes are tracked at the financial/invoice reconciliation level, NOT as an AWS cloud infrastructure service
-                    total_cost += c_val
-                    daily_tax_totals[day] += c_val
-                    daily_totals[day] += c_val
-                    monthly_totals[month] += c_val
-                    account_totals[account_id] += c_val
-                    region_totals[region_val] += c_val
+                    total_cost_dec += c_dec
+                    daily_tax_totals[day] += c_dec
+                    daily_totals[day] += c_dec
+                    monthly_totals[month] += c_dec
+                    account_totals[account_id] += c_dec
+                    region_totals[region_val] += c_dec
                     # Note: We intentionally do NOT add taxes to service_totals (taxes are statutory levies, not cloud services)
                 else:
-                    total_cost += c_val
-                    daily_gross_totals[day] += c_val
-                    daily_totals[day] += c_val
-                    monthly_totals[month] += c_val
-                    account_totals[account_id] += c_val
-                    region_totals[region_val] += c_val
-                    service_totals[prod_code] += c_val
+                    total_cost_dec += c_dec
+                    daily_gross_totals[day] += c_dec
+                    daily_totals[day] += c_dec
+                    monthly_totals[month] += c_dec
+                    account_totals[account_id] += c_dec
+                    region_totals[region_val] += c_dec
+                    service_totals[prod_code] += c_dec
 
                 if not is_credit and not is_refund and not is_tax:
 
                     res_entry = resource_index[res_id]
-                    res_entry['total_cost'] += c_val
+                    res_entry['total_cost'] += c_dec
                     if 'effective_cost' not in res_entry:
                         res_entry['effective_cost'] = 0.0
                     res_entry['effective_cost'] += effective_cost
-                    res_entry['dates'][day] += c_val
+                    res_entry['dates'][day] += c_dec
                     res_entry['short_id'] = short_id
                     res_entry['account_id'] = account_id
                     res_entry['last_seen'] = full_ts
@@ -452,9 +516,9 @@ def parse_cur_files(filepaths: List[str]) -> Dict[str, Any]:
                 unique_months.add(month)
 
                 records.append({
-                    'cost': round(c_val, 6),
-                    'unblended_cost': round(raw_unblended, 6),
-                    'effective_cost': round(effective_cost, 6),
+                    'cost': c_val,
+                    'unblended_cost': raw_unblended,
+                    'effective_cost': effective_cost,
                     'date': day,
                     'month': month,
                     'hour': hour,
@@ -474,8 +538,12 @@ def parse_cur_files(filepaths: List[str]) -> Dict[str, Any]:
                     'term': term,
                     'sp_arn': sp_arn,
                     'ri_arn': ri_arn,
+                    'subscription_id': sub_val,
                     'tax_type': tax_type_val,
-                    'desc': desc_val
+                    'desc': desc_val,
+                    'item_description': desc_val,
+                    'line_item_type': ltype,
+                    'line_item_id': line_item_id
                 })
 
     # Single-pass post-fill of names from resource_index
@@ -493,11 +561,11 @@ def parse_cur_files(filepaths: List[str]) -> Dict[str, Any]:
             'last_seen': data.get('last_seen', ''),
             'service': data['service'],
             'name': data['name'],
-            'total_cost': round(data['total_cost'], 4),
-            'effective_cost': round(data.get('effective_cost', data['total_cost']), 4),
-            'usage_amount': round(data.get('usage_amount', 0.0), 4),
+            'total_cost': round(float(data['total_cost']), 4),
+            'effective_cost': round(float(data.get('effective_cost', data['total_cost'])), 4),
+            'usage_amount': round(float(data.get('usage_amount', 0.0)), 4),
             'unit': data.get('unit', ''),
-            'dates': {k: round(v, 4) for k, v in data['dates'].items()},
+            'dates': {k: round(float(v), 4) for k, v in data['dates'].items()},
             'usage_types': list(data['usage_types']),
             'line_types': list(data['line_types'])
         })
@@ -506,16 +574,21 @@ def parse_cur_files(filepaths: List[str]) -> Dict[str, Any]:
     sorted_dates = sorted(list(unique_dates))
     sorted_months = sorted(list(unique_months))
 
-    net_cost = gross_cost + credits_total + refunds_total + taxes_total
+    gross_cost = round_currency(gross_cost_dec)
+    credits_total = round_currency(credits_total_dec)
+    refunds_total = round_currency(refunds_total_dec)
+    taxes_total = round_currency(taxes_total_dec)
+    net_cost_dec = gross_cost_dec + credits_total_dec + refunds_total_dec + taxes_total_dec
+    net_cost = round_currency(net_cost_dec)
 
     reconciliation = {
-        'gross_usage_cost': round(gross_cost, 2),
-        'credits_total': round(credits_total, 2),
-        'refunds_total': round(refunds_total, 2),
-        'taxes_total': round(taxes_total, 2),
-        'net_invoiced_spend': round(net_cost, 2),
+        'gross_usage_cost': gross_cost,
+        'credits_total': credits_total,
+        'refunds_total': refunds_total,
+        'taxes_total': taxes_total,
+        'net_invoiced_spend': net_cost,
         'formula': 'net_invoiced_spend = gross_usage_cost + credits_total + refunds_total + taxes_total',
-        'is_reconciled': bool(abs(round((gross_cost + credits_total + refunds_total + taxes_total) - net_cost, 2)) < 0.01)
+        'is_reconciled': bool(abs(round((Decimal(str(gross_cost)) + Decimal(str(credits_total)) + Decimal(str(refunds_total)) + Decimal(str(taxes_total))) - Decimal(str(net_cost)), 2)) < Decimal('0.01'))
     }
 
     display_name = os.path.basename(filepaths[0])
@@ -525,25 +598,35 @@ def parse_cur_files(filepaths: List[str]) -> Dict[str, Any]:
     return {
         'records': records,
         'resources': clean_resources,
-        'total_cost': round(gross_cost, 2),
-        'gross_cost': round(gross_cost, 2),
-        'net_cost': round(net_cost, 2),
-        'credits_total': round(credits_total, 2),
-        'refunds_total': round(refunds_total, 2),
-        'taxes_total': round(taxes_total, 2),
+        'total_cost': gross_cost,
+        'gross_cost': gross_cost,
+        'net_cost': net_cost,
+        'credits_total': credits_total,
+        'refunds_total': refunds_total,
+        'taxes_total': taxes_total,
         'accounting_reconciliation': reconciliation,
         'total_rows': total_rows,
         'dates': sorted_dates,
         'months': sorted_months,
-        'services': {k: round(v, 2) for k, v in sorted(service_totals.items(), key=lambda item: item[1], reverse=True)},
-        'accounts': {k: round(v, 2) for k, v in sorted(account_totals.items(), key=lambda item: item[1], reverse=True)},
-        'regions': {k: round(v, 2) for k, v in sorted(region_totals.items(), key=lambda item: item[1], reverse=True)},
-        'daily_totals': {k: round(v, 2) for k, v in sorted(daily_totals.items())},
-        'daily_gross_totals': {k: round(v, 2) for k, v in sorted(daily_gross_totals.items())},
-        'daily_tax_totals': {k: round(v, 2) for k, v in sorted(daily_tax_totals.items())},
-        'daily_credit_totals': {k: round(v, 2) for k, v in sorted(daily_credit_totals.items())},
-        'daily_refund_totals': {k: round(v, 2) for k, v in sorted(daily_refund_totals.items())},
-        'monthly_totals': {k: round(v, 2) for k, v in sorted(monthly_totals.items())},
+        'billing_period_start': detected_bp_start or (sorted_dates[0] if sorted_dates else 'Unknown'),
+        'billing_period_end': detected_bp_end or (sorted_dates[-1] if sorted_dates else 'Unknown'),
+        'payer_account_id': detected_payer_id or (list(account_totals.keys())[0] if account_totals else 'Unknown'),
+        'assembly_id': '',
+        'services': {k: round_currency(v) for k, v in sorted(service_totals.items(), key=lambda item: item[1], reverse=True)},
+        'accounts': {k: round_currency(v) for k, v in sorted(account_totals.items(), key=lambda item: item[1], reverse=True)},
+        'regions': {k: round_currency(v) for k, v in sorted(region_totals.items(), key=lambda item: item[1], reverse=True)},
+        'daily_totals': {k: round_currency(v) for k, v in sorted(daily_totals.items())},
+        'daily_gross_totals': {k: round_currency(v) for k, v in sorted(daily_gross_totals.items())},
+        'daily_tax_totals': {k: round_currency(v) for k, v in sorted(daily_tax_totals.items())},
+        'daily_credit_totals': {k: round_currency(v) for k, v in sorted(daily_credit_totals.items())},
+        'daily_refund_totals': {k: round_currency(v) for k, v in sorted(daily_refund_totals.items())},
+        'monthly_totals': {k: round_currency(v) for k, v in sorted(monthly_totals.items())},
+        '_unrounded_service_totals': {k: str(v) for k, v in service_totals.items()},
+        '_unrounded_daily_gross': {k: str(v) for k, v in daily_gross_totals.items()},
+        '_unrounded_daily_totals': {k: str(v) for k, v in daily_totals.items()},
+        '_unrounded_daily_tax': {k: str(v) for k, v in daily_tax_totals.items()},
+        '_unrounded_daily_credit': {k: str(v) for k, v in daily_credit_totals.items()},
+        '_unrounded_daily_refund': {k: str(v) for k, v in daily_refund_totals.items()},
         'filename': display_name
     }
 
@@ -551,14 +634,251 @@ def parse_cur_file(filepath: str) -> Dict[str, Any]:
     """Single-file wrapper for backward compatibility."""
     return parse_cur_files([filepath])
 
-def merge_cur_files(filepaths: List[str], output_path: str) -> str:
+
+def parse_cur_manifest(manifest_source: Union[str, bytes, dict]) -> Dict[str, Any]:
+    """
+    Parses and validates AWS Cost and Usage Report Manifest JSON.
+    Supports JSON dict, JSON string/bytes, or file path.
+    Validates assemblyId, billingPeriod, format, and reportKeys.
+    Rejects unsupported formats (e.g. Parquet or ZIP).
+    """
+    if isinstance(manifest_source, dict):
+        raw = manifest_source
+    elif isinstance(manifest_source, (bytes, str)):
+        content = manifest_source
+        if isinstance(content, str) and os.path.exists(content):
+            with open(content, 'r', encoding='utf-8') as f:
+                raw = json.load(f)
+        else:
+            if isinstance(content, bytes):
+                content = content.decode('utf-8', errors='ignore')
+            raw = json.loads(content)
+    else:
+        raise ValueError(f"Invalid manifest source type: {type(manifest_source)}")
+
+    if not isinstance(raw, dict):
+        raise ValueError("Invalid CUR manifest format: root JSON element must be an object.")
+
+    # Format / compression check: explicitly detect and flag unsupported formats
+    content_type = str(raw.get('contentType') or raw.get('format') or '').lower()
+    compression = str(raw.get('compression') or '').upper()
+    report_keys = raw.get('reportKeys', [])
+    report_keys_str = str(report_keys).lower()
+
+    if 'parquet' in content_type or 'parquet' in report_keys_str or ('parquet' in str(raw).lower() and 'text/csv' not in content_type):
+        raise ValueError(
+            f"Parquet CUR format is not supported: contentType='{raw.get('contentType') or raw.get('format')}'. "
+            "ZORVEX Phase 1 supports CSV and GZ-compressed CSV exports. Parquet formats are not supported in this version."
+        )
+
+    if compression == 'ZIP' or '.zip' in report_keys_str:
+        raise ValueError(
+            "ZIP compression is not supported: compression='ZIP'. "
+            "ZORVEX Phase 1 supports GZIP (.gz) compression or uncompressed CSV."
+        )
+
+    def _normalize_date_str(d_str: str) -> str:
+        if not d_str:
+            return ''
+        cleaned = d_str.split('T')[0].replace('/', '-')
+        if len(cleaned) == 8 and cleaned.isdigit():
+            return f"{cleaned[:4]}-{cleaned[4:6]}-{cleaned[6:8]}"
+        return cleaned[:10]
+
+    bp = raw.get('billingPeriod') or {}
+    bp_start = _normalize_date_str(bp.get('start', ''))
+    bp_end = _normalize_date_str(bp.get('end', ''))
+
+    return {
+        'assembly_id': raw.get('assemblyId', ''),
+        'account': str(raw.get('account', '')),
+        'report_name': raw.get('reportName', ''),
+        'billing_period_start': bp_start,
+        'billing_period_end': bp_end,
+        'report_keys': report_keys,
+        'columns': raw.get('columns', []),
+        'compression': compression,
+        'content_type': content_type,
+        'format': content_type,
+        'raw_manifest': raw
+    }
+
+
+def inspect_cur_part_metadata(filepath: str) -> Dict[str, Any]:
+    """
+    Inspects the header and initial sample rows of a CUR part file without loading
+    the full file into memory. Returns schema metadata, detected billing period,
+    and payer account id.
+    """
+    if not os.path.exists(filepath):
+        raise FileNotFoundError(f"File not found: {filepath}")
+
+    with open_file_any(filepath) as f:
+        reader = csv.reader(f)
+        try:
+            header = next(reader)
+        except StopIteration:
+            raise ValueError(f"CUR file '{os.path.basename(filepath)}' is empty.")
+
+        col_map = detect_column_indices(header)
+        cost_idx = col_map.get('cost')
+        date_idx = col_map.get('date')
+
+        if cost_idx is None or date_idx is None:
+            raise ValueError(f"Required Cost or Date columns not detected in {os.path.basename(filepath)}")
+
+        bp_start_idx = col_map.get('bill_period_start')
+        bp_end_idx = col_map.get('bill_period_end')
+        payer_acc_idx = col_map.get('payer_account_id')
+        acc_idx = col_map.get('account_id')
+        lid_idx = col_map.get('line_item_id')
+
+        bp_start = None
+        bp_end = None
+        payer_acc = None
+        sample_dates = []
+
+        # Peek up to 25 data rows to capture metadata
+        for _ in range(25):
+            try:
+                row = next(reader)
+            except StopIteration:
+                break
+            if not row:
+                continue
+
+            row_len = len(row)
+            if bp_start is None and bp_start_idx is not None and row_len > bp_start_idx and row[bp_start_idx]:
+                raw_bp = row[bp_start_idx].strip()
+                bp_start = raw_bp[:10] if len(raw_bp) >= 10 else raw_bp
+
+            if bp_end is None and bp_end_idx is not None and row_len > bp_end_idx and row[bp_end_idx]:
+                raw_bp_end = row[bp_end_idx].strip()
+                bp_end = raw_bp_end[:10] if len(raw_bp_end) >= 10 else raw_bp_end
+
+            if payer_acc is None and payer_acc_idx is not None and row_len > payer_acc_idx and row[payer_acc_idx]:
+                payer_acc = row[payer_acc_idx].strip()
+            elif payer_acc is None and acc_idx is not None and row_len > acc_idx and row[acc_idx]:
+                payer_acc = row[acc_idx].strip()
+
+            if date_idx is not None and row_len > date_idx and row[date_idx]:
+                raw_dt = row[date_idx].strip()[:10]
+                if raw_dt and raw_dt != 'Unknown':
+                    sample_dates.append(raw_dt)
+
+        # Fallback if bill/BillingPeriodStartDate is absent
+        if not bp_start and sample_dates:
+            bp_start = min(sample_dates)
+        if not bp_end and sample_dates:
+            bp_end = max(sample_dates)
+
+        return {
+            'filepath': filepath,
+            'filename': os.path.basename(filepath),
+            'header': header,
+            'header_count': len(header),
+            'normalized_header': [normalize_col_name(h) for h in header],
+            'col_map': col_map,
+            'billing_period_start': bp_start or 'Unknown',
+            'billing_period_end': bp_end or 'Unknown',
+            'payer_account_id': payer_acc or '',
+            'has_line_item_id': lid_idx is not None
+        }
+
+
+def validate_multipart_cur_export(filepaths: List[str], manifest: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    Validates that all files in a multi-part upload belong to the same logical CUR export.
+    Verifies:
+    1. Header column count and normalized sequence alignment.
+    2. Identical billing period start and end.
+    3. Payer account alignment.
+    4. Manifest alignment if manifest metadata is supplied.
+    """
+    if not filepaths:
+        raise ValueError("No files provided for multi-part validation.")
+
+    metas = [inspect_cur_part_metadata(fp) for fp in filepaths]
+    ref_meta = metas[0]
+
+    if len(metas) > 1:
+        for meta in metas[1:]:
+            # 1. Header column alignment
+            if meta['header_count'] != ref_meta['header_count']:
+                raise ValueError(
+                    f"Multi-part CUR export header mismatch: '{meta['filename']}' has {meta['header_count']} columns, "
+                    f"while part 1 ('{ref_meta['filename']}') has {ref_meta['header_count']} columns. "
+                    "All parts of a multi-part export must have identical column definitions."
+                )
+            if meta['normalized_header'] != ref_meta['normalized_header']:
+                mismatch_idx = next(
+                    (i for i, (a, b) in enumerate(zip(ref_meta['normalized_header'], meta['normalized_header'])) if a != b),
+                    0
+                )
+                col_a = ref_meta['header'][mismatch_idx] if mismatch_idx < len(ref_meta['header']) else f"col_{mismatch_idx}"
+                col_b = meta['header'][mismatch_idx] if mismatch_idx < len(meta['header']) else f"col_{mismatch_idx}"
+                raise ValueError(
+                    f"Multi-part CUR export column sequence mismatch at column {mismatch_idx + 1}: "
+                    f"'{ref_meta['filename']}' has '{col_a}', but '{meta['filename']}' has '{col_b}'."
+                )
+
+            # 2. Billing period compatibility
+            if ref_meta['billing_period_start'] != 'Unknown' and meta['billing_period_start'] != 'Unknown':
+                if (ref_meta['billing_period_start'] != meta['billing_period_start'] or
+                    ref_meta['billing_period_end'] != meta['billing_period_end']):
+                    raise ValueError(
+                        f"Cannot combine files across different billing periods: '{ref_meta['filename']}' covers "
+                        f"{ref_meta['billing_period_start']} to {ref_meta['billing_period_end']}, while "
+                        f"'{meta['filename']}' covers {meta['billing_period_start']} to {meta['billing_period_end']}. "
+                        "Distinct billing periods must be uploaded as separate datasets."
+                    )
+
+            # 3. Payer account alignment
+            if ref_meta['payer_account_id'] and meta['payer_account_id']:
+                if ref_meta['payer_account_id'] != meta['payer_account_id']:
+                    raise ValueError(
+                        f"Payer account mismatch: '{ref_meta['filename']}' is for account {ref_meta['payer_account_id']}, "
+                        f"while '{meta['filename']}' is for account {meta['payer_account_id']}."
+                    )
+
+    # 4. Manifest cross-validation
+    if manifest:
+        m_start = manifest.get('billing_period_start')
+        m_end = manifest.get('billing_period_end')
+        if m_start and ref_meta['billing_period_start'] != 'Unknown' and m_start != ref_meta['billing_period_start']:
+            raise ValueError(
+                f"Manifest billing period start '{m_start}' does not match file data '{ref_meta['billing_period_start']}'."
+            )
+        if manifest.get('report_keys'):
+            manifest_basenames = [os.path.basename(k) for k in manifest['report_keys']]
+            for fp in filepaths:
+                fn = os.path.basename(fp)
+                if not any(fn in mb or mb in fn for mb in manifest_basenames):
+                    logger.warning("Uploaded part '%s' not explicitly listed in manifest reportKeys: %s", fn, manifest_basenames)
+
+    return {
+        'billing_period_start': ref_meta['billing_period_start'],
+        'billing_period_end': ref_meta['billing_period_end'],
+        'payer_account_id': ref_meta['payer_account_id'],
+        'assembly_id': manifest.get('assembly_id', '') if manifest else '',
+        'col_map': ref_meta['col_map'],
+        'header': ref_meta['header'],
+        'part_count': len(filepaths)
+    }
+
+
+def merge_cur_files(filepaths: List[str], output_path: str, manifest: Optional[Dict[str, Any]] = None) -> str:
     """
     Merges multiple CUR CSV / GZ part files into a single unified .csv.gz file.
-    Preserves the header from the first file and appends data rows from all files.
+    Validates logical export compatibility and performs streaming line-item deduplication.
+    Preserves header from the first part.
     """
     if not filepaths:
         raise ValueError("No files provided for merging.")
-    
+
+    # 1. Authoritative validation pass
+    export_meta = validate_multipart_cur_export(filepaths, manifest=manifest)
+
     if len(filepaths) == 1:
         if os.path.abspath(filepaths[0]) != os.path.abspath(output_path):
             import shutil
@@ -567,11 +887,20 @@ def merge_cur_files(filepaths: List[str], output_path: str) -> str:
 
     is_gz = output_path.endswith('.gz')
     out_f = gzip.open(output_path, 'wt', encoding='utf-8', newline='') if is_gz else open(output_path, 'w', encoding='utf-8', newline='')
-    
+
+    col_map = export_meta['col_map']
+    lid_idx = col_map.get('line_item_id')
+    date_idx = col_map.get('date')
+    cost_idx = col_map.get('cost')
+    res_idx = col_map.get('res_id')
+    ut_idx = col_map.get('usage')
+    ltype_idx = col_map.get('line_type')
+
+    seen_signatures = set()
+    header_written = False
+
     try:
         writer = csv.writer(out_f)
-        header_written = False
-        
         for fp in filepaths:
             with open_file_any(fp) as in_f:
                 reader = csv.reader(in_f)
@@ -579,15 +908,38 @@ def merge_cur_files(filepaths: List[str], output_path: str) -> str:
                     header = next(reader)
                 except StopIteration:
                     continue
-                
+
                 if not header_written:
                     writer.writerow(header)
                     header_written = True
-                
+
                 for row in reader:
-                    if row:
-                        writer.writerow(row)
+                    if not row:
+                        continue
+                    row_len = len(row)
+
+                    # Deduplication signature within same delivery bundle
+                    if lid_idx is not None and row_len > lid_idx and row[lid_idx]:
+                        lid = row[lid_idx].strip()
+                        dt = row[date_idx].strip() if (date_idx is not None and row_len > date_idx) else ''
+                        c = row[cost_idx].strip() if (cost_idx is not None and row_len > cost_idx) else ''
+                        lt = row[ltype_idx].strip() if (ltype_idx is not None and row_len > ltype_idx) else ''
+                        sig = (lid, dt, c, lt)
+                    else:
+                        rid = row[res_idx].strip() if (res_idx is not None and row_len > res_idx) else ''
+                        ut = row[ut_idx].strip() if (ut_idx is not None and row_len > ut_idx) else ''
+                        dt = row[date_idx].strip() if (date_idx is not None and row_len > date_idx) else ''
+                        c = row[cost_idx].strip() if (cost_idx is not None and row_len > cost_idx) else ''
+                        lt = row[ltype_idx].strip() if (ltype_idx is not None and row_len > ltype_idx) else ''
+                        sig = (rid, ut, dt, c, lt)
+
+                    if sig in seen_signatures:
+                        # Identical duplicate within same multi-part upload: discard to prevent double-counting
+                        continue
+
+                    seen_signatures.add(sig)
+                    writer.writerow(row)
     finally:
         out_f.close()
-        
+
     return output_path

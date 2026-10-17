@@ -7,7 +7,8 @@ derived strictly from authenticated AWS CUR billing records.
 import math
 from collections import defaultdict
 from typing import Dict, List, Any, Optional, Tuple
-from app.parser import normalize_service_code
+from decimal import Decimal
+from app.parser import normalize_service_code, round_currency
 
 # Asset Category Definitions
 CATEGORY_LABELS = {
@@ -33,6 +34,8 @@ CATEGORY_LABELS = {
     'CLOUDFRONT_DISTRIBUTION': 'CloudFront Distribution',
     'WAF_WEB_ACL': 'WAF Web ACL',
     'ELB_LOAD_BALANCER': 'Elastic Load Balancer',
+    'ROUTE53_HOSTED_ZONE': 'Route 53 Hosted Zone',
+    'ROUTE53_DNS': 'Route 53 DNS Queries',
     'GENERIC_RESOURCE': 'Identified Resource',
     'USAGE_LEVEL_COST': 'Usage-Level / Unallocated Cost',
     'TAX_AND_FEES': 'Government Tax & GST',
@@ -298,6 +301,29 @@ def classify_cur_record(record: Dict[str, Any]) -> Dict[str, Any]:
             'classification_status': 'CLASSIFIED_RESOURCE'
         }
 
+    if service in ('Amazon Route 53', 'Route 53', 'AmazonRoute53'):
+        if 'hostedzone' in res_lower or 'hostedzone' in ut_lower:
+            return {
+                'service': 'Amazon Route 53',
+                'category': 'ROUTE53_HOSTED_ZONE',
+                'category_label': 'Route 53 Hosted Zone',
+                'asset_type': 'Networking',
+                'is_snapshot': False,
+                'is_backup': False,
+                'is_classified': True,
+                'classification_status': 'CLASSIFIED_RESOURCE'
+            }
+        return {
+            'service': 'Amazon Route 53',
+            'category': 'ROUTE53_DNS',
+            'category_label': 'Route 53 DNS Queries',
+            'asset_type': 'Networking',
+            'is_snapshot': False,
+            'is_backup': False,
+            'is_classified': True,
+            'classification_status': 'CLASSIFIED_RESOURCE'
+        }
+
     # Generic Classified Resource for other services
     return {
         'service': service,
@@ -359,7 +385,12 @@ def get_available_hierarchies(cur_data: Dict[str, Any]) -> Dict[str, Any]:
 
         categories_map[svc][cat]['cost'] += cost
         categories_map[svc][cat]['records_count'] += 1
-        if rid and not rid.startswith('No-Resource-ID') and not rid.startswith('TAX-'):
+        if cat == 'RI_SUBSCRIPTION_FEE' or cls.get('asset_type') == 'Subscription':
+            contract_id = r.get('subscription_id') or r.get('ri_arn') or rid
+            if contract_id:
+                categories_map[svc][cat]['resources'].add(contract_id)
+                services_map[svc]['resources'].add(contract_id)
+        elif rid and not rid.startswith('No-Resource-ID') and not rid.startswith('TAX-'):
             categories_map[svc][cat]['resources'].add(rid)
 
         # Global Snapshot Tracking
@@ -420,6 +451,9 @@ def extract_cluster_topology(service: str, resource_id: str, data: Dict[str, Any
     into constituent Data Nodes, Dedicated Master Nodes, Provisioned Storage,
     and Network Data Transfer.
     """
+    if resource_id.startswith('No-Resource-ID') or resource_id.startswith('TAX-'):
+        return None
+
     rid_lower = resource_id.lower()
     is_opensearch = (
         'opensearch' in service.lower() or 
@@ -541,6 +575,9 @@ def extract_cluster_topology(service: str, resource_id: str, data: Dict[str, Any
             elif 'datascanned' in ut_lower:
                 scanned_tb += amt
 
+        if not node_info and storage_info['amount'] == 0:
+            return None
+
         summary_parts = []
         if node_info:
             summary_parts.append(f"{node_info['estimated_count']}x {node_info['instance_type']} ({node_info['hours']:,.0f} Hrs)")
@@ -561,7 +598,7 @@ def extract_cluster_topology(service: str, resource_id: str, data: Dict[str, Any
             'scanned_tb': round(scanned_tb, 4),
             'summary_label': ' • '.join(summary_parts) if summary_parts else 'Redshift Provisioned Cluster',
             'total_compute_hours': node_info['hours'] if node_info else 0.0,
-            'node_count': node_info['estimated_count'] if node_info else 1
+            'node_count': node_info['estimated_count'] if node_info else 0
         }
 
 
@@ -576,11 +613,13 @@ def build_materialized_explorer_index(cur_data: Dict[str, Any]) -> Dict[str, Any
 
     res_map = defaultdict(lambda: {
         'total_cost': 0.0,
+        'total_cost_dec': Decimal('0'),
         'usage_amount': 0.0,
         'usage_amounts_by_unit': defaultdict(float),
         'usage_by_type': defaultdict(float),
         'cost_by_type': defaultdict(float),
         'dates': defaultdict(float),
+        'dates_dec': defaultdict(Decimal),
         'usage_types': defaultdict(float),
         'categories': defaultdict(float),
         'category_labels': {},
@@ -590,6 +629,9 @@ def build_materialized_explorer_index(cur_data: Dict[str, Any]) -> Dict[str, Any
         'line_types': set(),
         'units': set(),
         'currencies': set(),
+        'ri_arns': set(),
+        'subscription_ids': set(),
+        'sp_arns': set(),
         'service': '',
         'category': '',
         'category_label': '',
@@ -608,17 +650,22 @@ def build_materialized_explorer_index(cur_data: Dict[str, Any]) -> Dict[str, Any
     snapshot_usage_breakdown = defaultdict(lambda: {'cost': 0.0, 'amount': 0.0, 'unit': ''})
     ebs_snap_ids = set()
     rds_bkp_ids = set()
-    ebs_snap_spend = 0.0
-    rds_bkp_spend = 0.0
-    taxes_total = 0.0
-    daily_tax_totals = defaultdict(float)
+    ebs_snap_spend_dec = Decimal('0')
+    rds_bkp_spend_dec = Decimal('0')
+    taxes_total_dec = Decimal('0')
+    daily_tax_totals_dec = defaultdict(Decimal)
 
     for r in records:
         cls = classify_cur_record(r)
-        cost = r.get('cost', 0.0)
-        rid = r.get('resource_id', 'No-Resource-ID')
-        name_tag = r.get('name', '')
+        cost_raw = r.get('cost', 0.0) or 0.0
+        cost_dec = Decimal(str(cost_raw))
+        cost = float(cost_dec)
+        name_tag = r.get('name', '') or r.get('resource_name', '')
         ut = r.get('usage_type', '')
+        rid = r.get('resource_id', 'No-Resource-ID')
+        # If this is an unallocated account/fee record, distinguish by Service to avoid merging across Services
+        if rid.startswith('No-Resource-ID') or not rid:
+            rid = f"No-Resource-ID ({cls['service']})"
         r_date = r.get('date', '')
         r_account = r.get('account_id', '')
         r_region = r.get('region', '')
@@ -635,8 +682,8 @@ def build_materialized_explorer_index(cur_data: Dict[str, Any]) -> Dict[str, Any
             'gst' in ut.lower()
         )
         if is_tax_record:
-            taxes_total += cost
-            daily_tax_totals[r_date] += cost
+            taxes_total_dec += cost_dec
+            daily_tax_totals_dec[r_date] += cost_dec
             continue
 
         if cls['is_snapshot'] or cls['is_backup']:
@@ -648,15 +695,16 @@ def build_materialized_explorer_index(cur_data: Dict[str, Any]) -> Dict[str, Any
                 snapshot_usage_breakdown[ut]['unit'] = u_unit
 
             if cls['category'] == 'EBS_SNAPSHOT':
-                ebs_snap_spend += cost
+                ebs_snap_spend_dec += cost_dec
                 if rid and not rid.startswith('No-Resource-ID'):
                     ebs_snap_ids.add(rid)
             elif cls['category'] in ('RDS_SNAPSHOT', 'RDS_BACKUP'):
-                rds_bkp_spend += cost
+                rds_bkp_spend_dec += cost_dec
                 if rid and not rid.startswith('No-Resource-ID'):
                     rds_bkp_ids.add(rid)
 
         entry = res_map[rid]
+        entry['total_cost_dec'] += cost_dec
         entry['total_cost'] += cost
         u_amt = r.get('usage_amount', 0.0)
         u_unit = r.get('unit', '') or ''
@@ -666,6 +714,7 @@ def build_materialized_explorer_index(cur_data: Dict[str, Any]) -> Dict[str, Any
             entry['usage_by_type'][ut] += u_amt
             entry['cost_by_type'][ut] += cost
 
+        entry['dates_dec'][r_date] += cost_dec
         entry['dates'][r_date] += cost
         entry['usage_types'][ut] += cost
         entry['categories'][cls['category']] += cost
@@ -683,6 +732,12 @@ def build_materialized_explorer_index(cur_data: Dict[str, Any]) -> Dict[str, Any
             entry['units'].add(r['unit'])
         if r.get('currency'):
             entry['currencies'].add(r['currency'])
+        if r.get('ri_arn'):
+            entry['ri_arns'].add(r['ri_arn'])
+        if r.get('subscription_id'):
+            entry['subscription_ids'].add(r['subscription_id'])
+        if r.get('sp_arn'):
+            entry['sp_arns'].add(r['sp_arn'])
 
         if not entry['service'] or entry['service'] == 'Other' or cls['service'] == 'Taxes & Surcharges':
             entry['service'] = cls['service']
@@ -691,10 +746,48 @@ def build_materialized_explorer_index(cur_data: Dict[str, Any]) -> Dict[str, Any
             entry['account_id'] = r_account
         if not entry['region'] and r_region:
             entry['region'] = r_region
-        if not entry['name'] and name_tag:
+        if name_tag and (not entry['name'] or entry['name'] == entry.get('short_id') or entry['name'] == rid):
             entry['name'] = name_tag
 
-        entry['short_id'] = rid.split('/')[-1] if '/' in rid else (rid.split(':')[-1] if ':' in rid else rid)
+        if ':webacl/' in rid.lower() or 'arn:aws:waf' in rid.lower():
+            parts = rid.split('/')
+            if len(parts) >= 3 and 'webacl' in parts[-3].lower():
+                webacl_name = parts[-2]
+                entry['short_id'] = webacl_name
+                if not entry['name']:
+                    entry['name'] = webacl_name
+            else:
+                entry['short_id'] = rid.split('/')[-1] if '/' in rid else (rid.split(':')[-1] if ':' in rid else rid)
+        elif ':loadbalancer/' in rid.lower() or 'elasticloadbalancing' in rid.lower():
+            parts = rid.split('/')
+            # Format: arn:aws:elasticloadbalancing:ap-south-1:825799498078:loadbalancer/app/E-Vital-Prod/c9674288c3a87c2a
+            if len(parts) >= 4 and 'loadbalancer' in parts[-4].lower():
+                lb_type = 'ALB' if parts[-3].lower() == 'app' else ('NLB' if parts[-3].lower() == 'net' else 'ELB')
+                lb_name = parts[-2]
+                entry['short_id'] = f"{lb_name} ({lb_type})"
+                if not entry['name']:
+                    entry['name'] = lb_name
+            elif len(parts) >= 3:
+                lb_name = parts[-2]
+                entry['short_id'] = lb_name
+                if not entry['name']:
+                    entry['name'] = lb_name
+            else:
+                entry['short_id'] = rid.split('/')[-1] if '/' in rid else (rid.split(':')[-1] if ':' in rid else rid)
+        elif ':hostedzone/' in rid.lower() or 'arn:aws:route53' in rid.lower():
+            zone_id = rid.split('/')[-1] if '/' in rid else rid
+            entry['short_id'] = zone_id
+            if not entry['name']:
+                entry['name'] = zone_id
+        elif ':reserved-instances/' in rid.lower() or ':ri:' in rid.lower():
+            ri_id = rid.split('/')[-1] if '/' in rid else (rid.split(':')[-1] if ':' in rid else rid)
+            entry['short_id'] = ri_id
+            if not entry['name']:
+                inst_from_ut = ut.split('HeavyUsage:')[-1].split(':')[-1] if 'HeavyUsage:' in ut else (ut.split(':')[-1] if ':' in ut else '')
+                entry['name'] = f"RI: {inst_from_ut}" if inst_from_ut else f"RI: {ri_id[:8]}"
+        else:
+            entry['short_id'] = rid.split('/')[-1] if '/' in rid else (rid.split(':')[-1] if ':' in rid else rid)
+
         if r_date and r_date < entry['first_seen']:
             entry['first_seen'] = r_date
         ts = r.get('timestamp') or r_date
@@ -740,6 +833,11 @@ def build_materialized_explorer_index(cur_data: Dict[str, Any]) -> Dict[str, Any
         elif ':webacl/' in rid_lower or 'arn:aws:waf' in rid_lower:
             primary_cat = 'WAF_WEB_ACL'
             data['service'] = 'AWS WAF'
+        elif ':hostedzone/' in rid_lower or 'arn:aws:route53' in rid_lower:
+            primary_cat = 'ROUTE53_HOSTED_ZONE'
+            data['service'] = 'Amazon Route 53'
+        elif ':reserved-instances/' in rid_lower or ':ri:' in rid_lower:
+            primary_cat = 'RI_SUBSCRIPTION_FEE'
         elif rid.startswith('eipalloc-'):
             primary_cat = 'ELASTIC_IP'
         elif rid.startswith('TAX-') or rid == 'TAX-INVOICE-GST' or 'TAX_AND_FEES' in data['categories']:
@@ -749,7 +847,7 @@ def build_materialized_explorer_index(cur_data: Dict[str, Any]) -> Dict[str, Any
             if 'TAX_AND_FEES' in data['categories']:
                 primary_cat = 'TAX_AND_FEES'
                 data['service'] = 'Taxes & Surcharges'
-            elif 'RI_SUBSCRIPTION_FEE' in data['categories']:
+            elif 'RI_SUBSCRIPTION_FEE' in data['categories'] or data.get('ri_arns'):
                 primary_cat = 'RI_SUBSCRIPTION_FEE'
             else:
                 primary_cat = 'USAGE_LEVEL_COST'
@@ -784,10 +882,25 @@ def build_materialized_explorer_index(cur_data: Dict[str, Any]) -> Dict[str, Any
             elif ':distribution/' in rid_lower or 'arn:aws:cloudfront' in rid_lower:
                 clean_label = f"Distribution ({data['short_id']})"
             elif ':webacl/' in rid_lower or 'arn:aws:waf' in rid_lower:
-                clean_label = f"Web ACL ({data['short_id']})"
+                clean_label = f"Web ACL: {data['short_id']}"
+            elif ':loadbalancer/' in rid_lower:
+                clean_label = f"Load Balancer: {data['short_id']}"
             elif rid.startswith('No-Resource-ID'):
-                op_str = f" ({list(data['operations'])[0]})" if data['operations'] else ""
-                clean_label = f"{data['service']} Usage{op_str}"
+                if data['service'] in ('AWS WAF', 'WAF', 'awswaf'):
+                    clean_label = "Unassociated WAF Request Volume & Managed Rules"
+                elif primary_cat == 'RI_SUBSCRIPTION_FEE':
+                    sub_count = len(data.get('subscription_ids', []))
+                    if sub_count > 1:
+                        clean_label = f"Reserved Instance Commitment Portfolio ({sub_count} Contracts)"
+                    elif sub_count == 1:
+                        clean_label = f"Reserved Instance Commitment Contract #{list(data['subscription_ids'])[0]}"
+                    else:
+                        clean_label = "Reserved Instance Commitment Portfolio"
+                else:
+                    op_str = f" ({list(data['operations'])[0]})" if data['operations'] else ""
+                    clean_label = f"{data['service']} Usage{op_str}"
+            elif primary_cat == 'RI_SUBSCRIPTION_FEE' or ':reserved-instances/' in rid_lower or ':ri:' in rid_lower:
+                clean_label = data['name'] or f"Reserved Instance: {data['short_id'][:8]}"
             else:
                 clean_label = data['short_id']
 
@@ -804,7 +917,11 @@ def build_materialized_explorer_index(cur_data: Dict[str, Any]) -> Dict[str, Any
             'storage' in ut.lower() or 'gp3' in ut.lower() for ut in data['usage_types'].keys()
         )
 
-        if rid.startswith('No-Resource-ID') or rid.startswith('TAX-') or primary_cat == 'TAX_AND_FEES':
+        is_ri_contract = (primary_cat == 'RI_SUBSCRIPTION_FEE' or ':reserved-instances/' in rid_lower or ':ri:' in rid_lower)
+        if is_ri_contract:
+            lifecycle_status = 'COMMITMENT_CONTRACT'
+            lifecycle_label = 'Reserved Instance Commitment'
+        elif rid.startswith('No-Resource-ID') or rid.startswith('TAX-') or primary_cat == 'TAX_AND_FEES':
             lifecycle_status = 'ACCOUNT_LEVEL_FEES'
             lifecycle_label = 'Account / Tax / Fee'
         elif primary_cat == 'RDS_DB_INSTANCE' or (has_instance_compute and ':db:' in rid_lower):
@@ -866,12 +983,68 @@ def build_materialized_explorer_index(cur_data: Dict[str, Any]) -> Dict[str, Any
                 primary_unit = ''
                 primary_usage_amount = 0.0
 
-            if primary_usage_amount >= 1:
+            if ':loadbalancer/' in rid_lower or data['service'] in ('Elastic Load Balancing', 'AWSELB', 'ELB'):
+                lcu_amt = unit_map.get('LCU-Hrs', 0)
+                gb_amt = unit_map.get('GB', 0)
+                hrs_amt = unit_map.get('Hrs', 0)
+                if lcu_amt > 0 and gb_amt > 0:
+                    usage_display = f"{lcu_amt:,.1f} LCU-Hrs • {gb_amt:,.1f} GB"
+                elif lcu_amt > 0:
+                    usage_display = f"{lcu_amt:,.1f} LCU-Hrs"
+                elif gb_amt > 0:
+                    usage_display = f"{gb_amt:,.1f} GB"
+                else:
+                    usage_display = f"{hrs_amt:,.0f} Hrs" if hrs_amt > 0 else '—'
+            elif primary_unit in ('Request', 'Requests') or ':webacl/' in rid_lower or data['service'] in ('AWS WAF', 'WAF', 'awswaf'):
+                if primary_usage_amount >= 1_000_000:
+                    usage_display = f"{primary_usage_amount / 1_000_000:.1f}M Requests"
+                elif primary_usage_amount >= 1_000:
+                    usage_display = f"{primary_usage_amount / 1_000:.1f}K Requests"
+                elif primary_usage_amount > 0:
+                    usage_display = f"{primary_usage_amount:,.0f} Requests"
+                else:
+                    usage_display = '—'
+            elif primary_usage_amount >= 1:
                 usage_display = f"{primary_usage_amount:,.2f} {primary_unit}"
             elif primary_usage_amount > 0:
                 usage_display = f"{primary_usage_amount:.4f} {primary_unit}"
             else:
                 usage_display = '—'
+
+        # Extract instance type / volume type / SKU (e.g. m6a.2xlarge, t3a.medium, db.r7i.4xl, gp3)
+        inst_type = None
+        if is_ri_contract and not rid.startswith('i-'):
+            sub_count = len(data.get('subscription_ids', set())) or len(data.get('ri_arns', set()))
+            if sub_count > 1:
+                inst_type = f"{sub_count} RI Contracts"
+            else:
+                for ut in sorted_uts:
+                    ut_str = ut[0]
+                    if 'heavyusage:' in ut_str.lower():
+                        inst_type = ut_str.split('HeavyUsage:')[-1].split(':')[-1]
+                        break
+        else:
+            for ut in sorted_uts:
+                ut_str = ut[0]
+                ut_lower = ut_str.lower()
+                if 'boxusage:' in ut_lower:
+                    inst_type = ut_str.split('BoxUsage:')[-1].split(':')[-1]
+                    break
+                elif 'heavyusage:' in ut_lower:
+                    inst_type = ut_str.split('HeavyUsage:')[-1].split(':')[-1]
+                    break
+                elif 'instanceusage:' in ut_lower:
+                    inst_type = ut_str.split('InstanceUsage:')[-1].split(':')[-1]
+                    break
+                elif 'node:' in ut_lower:
+                    inst_type = ut_str.split('Node:')[-1].split(':')[-1]
+                    break
+                elif 'esinstance:' in ut_lower:
+                    inst_type = ut_str.split('ESInstance:')[-1].split(':')[-1]
+                    break
+                elif 'volumeusage.' in ut_lower:
+                    inst_type = ut_str.split('VolumeUsage.')[-1].upper()
+                    break
 
         all_resources.append({
             'resource_id': rid,
@@ -881,11 +1054,12 @@ def build_materialized_explorer_index(cur_data: Dict[str, Any]) -> Dict[str, Any
             'service': data['service'],
             'category': primary_cat,
             'category_label': primary_cat_label,
+            'instance_type': inst_type,
             'all_categories': list(all_cats),
             'asset_type': primary_asset_type,
             'account_id': data['account_id'] or 'Primary-Account',
             'region': primary_region,
-            'total_cost': round(data['total_cost'], 4),
+            'total_cost': round(float(data['total_cost_dec']), 4),
             'active_days': len(data['dates']),
             'first_seen': data['first_seen'] if data['first_seen'] != '9999-99-99' else '',
             'last_seen': data['last_seen'],
@@ -905,9 +1079,24 @@ def build_materialized_explorer_index(cur_data: Dict[str, Any]) -> Dict[str, Any
             'has_instance_compute': has_instance_compute,
             'is_retained_backup_only': is_retained_backup_only,
             'verification_status': 'Not verified against live AWS state',
-            'daily_costs': {k: round(v, 4) for k, v in sorted(data['dates'].items())},
+            'daily_costs': {k: round(float(v), 4) for k, v in sorted(data['dates_dec'].items())},
             'is_snapshot': is_snap,
-            'is_backup': is_bkp
+            'is_backup': is_bkp,
+            'ri_arn': list(data['ri_arns'])[0] if data.get('ri_arns') else '',
+            'ri_arns': sorted(list(data.get('ri_arns', set()))),
+            'subscription_id': list(data['subscription_ids'])[0] if data.get('subscription_ids') else '',
+            'subscription_ids': sorted(list(data.get('subscription_ids', set()))),
+            'sp_arn': list(data['sp_arns'])[0] if data.get('sp_arns') else '',
+            'is_commitment': is_ri_contract,
+            'commitment_type': 'ReservedInstance' if is_ri_contract else ('SavingsPlan' if data.get('sp_arns') and not rid.startswith('i-') else ''),
+            'has_ri_discount': bool(data.get('ri_arns')),
+            'pricing_term': (
+                'OnDemand (RI Expired)' if (data.get('ri_arns') and cluster_info and (
+                    (cluster_info.get('data_nodes') and cluster_info['data_nodes'].get('cost', 0) > 0) or
+                    (cluster_info.get('master_nodes') and cluster_info['master_nodes'].get('cost', 0) > 0)
+                ))
+                else ('Reserved' if data.get('ri_arns') else ('SavingsPlan' if data.get('sp_arns') else 'OnDemand'))
+            )
         })
 
     all_resources.sort(key=lambda x: x['total_cost'], reverse=True)
@@ -938,7 +1127,7 @@ def build_materialized_explorer_index(cur_data: Dict[str, Any]) -> Dict[str, Any
             'unit': st['unit']
         })
 
-    gross_infra_spend = sum(r['total_cost'] for r in all_resources)
+    gross_infra_spend = round_currency(sum(Decimal(str(r['total_cost'])) for r in all_resources))
     hierarchies = get_available_hierarchies(cur_data)
 
     index = {
@@ -950,16 +1139,16 @@ def build_materialized_explorer_index(cur_data: Dict[str, Any]) -> Dict[str, Any
         'by_region': by_region,
         'snapshots_list': snapshots_list,
         'snapshot_ut_list': snapshot_ut_list,
-        'ebs_snap_spend': ebs_snap_spend,
+        'ebs_snap_spend': round_currency(ebs_snap_spend_dec),
         'ebs_snap_count': len(ebs_snap_ids),
-        'rds_bkp_spend': rds_bkp_spend,
+        'rds_bkp_spend': round_currency(rds_bkp_spend_dec),
         'rds_bkp_count': len(rds_bkp_ids),
         'unique_snapshots_count': len(ebs_snap_ids) + len(rds_bkp_ids),
         'hierarchies': hierarchies,
-        'taxes_total': round(taxes_total, 2),
-        'daily_tax_totals': {k: round(v, 2) for k, v in daily_tax_totals.items()},
-        'gross_infra_spend': round(gross_infra_spend, 2),
-        'net_invoiced_spend': round(gross_infra_spend + taxes_total, 2)
+        'taxes_total': round_currency(taxes_total_dec),
+        'daily_tax_totals': {k: round_currency(v) for k, v in sorted(daily_tax_totals_dec.items())},
+        'gross_infra_spend': gross_infra_spend,
+        'net_invoiced_spend': round_currency(Decimal(str(gross_infra_spend)) + taxes_total_dec)
     }
     cur_data['_materialized_explorer_index'] = index
     return index
@@ -1054,9 +1243,10 @@ def query_resource_explorer(
 
         eff_cost = r['total_cost']
         if has_date_filter:
-            eff_cost = sum(v for d, v in r['daily_costs'].items() if (not start_date or d >= start_date) and (not end_date or d <= end_date))
-            if eff_cost <= 0:
+            eff_cost_dec = sum(Decimal(str(v)) for d, v in r['daily_costs'].items() if (not start_date or d >= start_date) and (not end_date or d <= end_date))
+            if eff_cost_dec <= Decimal('0'):
                 continue
+            eff_cost = float(eff_cost_dec)
 
         if min_cost is not None and eff_cost < min_cost:
             continue
@@ -1069,16 +1259,19 @@ def query_resource_explorer(
             filtered.append(r)
 
     total_records = len(filtered)
-    total_spend = sum(r['total_cost'] for r in filtered)
-    unallocated_spend = sum(
-        r['total_cost'] for r in filtered 
+    total_spend_dec = sum(Decimal(str(r['total_cost'])) for r in filtered)
+    unallocated_spend_dec = sum(
+        Decimal(str(r['total_cost'])) for r in filtered 
         if r['resource_id'].startswith('No-Resource-ID') or r['resource_id'].startswith('TAX-') or r['classification_status'] == 'USAGE_LEVEL_COST'
     )
     unique_count = sum(
         1 for r in filtered 
         if not r['resource_id'].startswith('No-Resource-ID') and not r['resource_id'].startswith('TAX-') and r['classification_status'] != 'USAGE_LEVEL_COST'
     )
-    classified_cost = total_spend - unallocated_spend
+    classified_cost_dec = total_spend_dec - unallocated_spend_dec
+    total_spend = round_currency(total_spend_dec)
+    unallocated_spend = round_currency(unallocated_spend_dec)
+    classified_cost = round_currency(classified_cost_dec)
 
     # Sorting
     reverse_sort = (sort_order.lower() == 'desc')
@@ -1107,7 +1300,7 @@ def query_resource_explorer(
 
     # Calculate scoped snapshot and activity date telemetry for current selection
     scope_snapshot_resources = [r for r in filtered if r.get('is_snapshot') or r.get('is_backup')]
-    scope_snapshot_cost = round(sum(r['total_cost'] for r in scope_snapshot_resources), 2)
+    scope_snapshot_cost = round_currency(sum(Decimal(str(r['total_cost'])) for r in scope_snapshot_resources))
     scope_snapshot_count = len(scope_snapshot_resources)
 
     # Calculate active charge dates for current selection
@@ -1125,11 +1318,11 @@ def query_resource_explorer(
 
     snapshots_summary = {
         'is_snapshot_view': is_snapshot_view,
-        'total_snapshot_cost': round(index['ebs_snap_spend'] + index['rds_bkp_spend'], 2),
+        'total_snapshot_cost': round_currency(Decimal(str(index['ebs_snap_spend'])) + Decimal(str(index['rds_bkp_spend']))),
         'unique_snapshots_count': index['unique_snapshots_count'],
-        'ebs_snapshot_cost': round(index['ebs_snap_spend'], 2),
+        'ebs_snapshot_cost': round_currency(index['ebs_snap_spend']),
         'ebs_snapshot_count': index['ebs_snap_count'],
-        'rds_backup_cost': round(index['rds_bkp_spend'], 2),
+        'rds_backup_cost': round_currency(index['rds_bkp_spend']),
         'rds_backup_count': index['rds_bkp_count'],
         'usage_types_breakdown': index['snapshot_ut_list'],
         'compliance_disclaimer': 'CUR provides historical billing evidence. Not verified against live AWS state. Does not prove whether snapshot currently exists or is safe to delete.',
@@ -1185,17 +1378,109 @@ def query_resource_explorer(
         'reconciliation_note': reconciliation_note
     }
 
+    waf_traffic_summary = None
+    if service in ('AWS WAF', 'WAF', 'awswaf') or service_norm in ('AWS WAF', 'WAF', 'awswaf'):
+        total_requests = 0.0
+        requests_spend = Decimal('0')
+        rules_spend = Decimal('0')
+        webacl_spend = Decimal('0')
+        webacl_names = []
+        for r in filtered:
+            r_name = r.get('name') or r.get('short_id')
+            if r_name and not r_name.startswith('No-Resource-ID') and r_name not in webacl_names:
+                webacl_names.append(r_name)
+
+        for rec in cur_data.get('records', []):
+            prod = (rec.get('prod') or rec.get('product') or '').lower()
+            rid_val = (rec.get('res_id') or rec.get('resource_id') or '')
+            rid_l = rid_val.lower()
+            if 'waf' in prod or 'webacl' in rid_l:
+                ut = (rec.get('usage') or rec.get('usage_type') or '').lower()
+                cost_val = Decimal(str(rec.get('cost') or 0.0))
+                amt = float(rec.get('usage_amount') or rec.get('amount') or 0.0)
+                if 'request' in ut:
+                    total_requests += amt
+                    requests_spend += cost_val
+                elif 'rule' in ut:
+                    rules_spend += cost_val
+                elif 'webacl' in ut:
+                    webacl_spend += cost_val
+
+        primary_webacl_name = 'E-Vital-Prod'
+        for w in webacl_names:
+            if 'e-vital' in w.lower():
+                primary_webacl_name = w
+                break
+        if not primary_webacl_name and webacl_names:
+            primary_webacl_name = webacl_names[0]
+
+        waf_traffic_summary = {
+            'total_requests': total_requests,
+            'requests_cost': round_currency(requests_spend),
+            'rules_cost': round_currency(rules_spend),
+            'webacl_cost': round_currency(webacl_spend),
+            'webacl_names': webacl_names,
+            'webacl_count': len(webacl_names),
+            'primary_webacl': primary_webacl_name
+        }
+
+    elb_summary = None
+    if service in ('Elastic Load Balancing', 'AWSELB', 'ELB') or service_norm in ('Elastic Load Balancing', 'AWSELB', 'ELB'):
+        alb_name = 'E-Vital-Prod'
+        for r in filtered:
+            r_name = r.get('name') or r.get('short_id')
+            if r_name and not r_name.startswith('No-Resource-ID'):
+                alb_name = r_name
+                break
+
+        total_lcu_hours = 0.0
+        total_data_gb = 0.0
+        total_active_hours = 0.0
+        hourly_spend = Decimal('0')
+        lcu_spend = Decimal('0')
+        transfer_spend = Decimal('0')
+
+        for rec in cur_data.get('records', []):
+            prod = (rec.get('prod') or rec.get('service') or '').lower()
+            rid_val = (rec.get('res_id') or rec.get('resource_id') or '').lower()
+            if 'loadbalancing' in prod or 'elasticloadbalancing' in prod or ':loadbalancer/' in rid_val:
+                desc = (rec.get('desc') or '').lower()
+                cost_val = Decimal(str(rec.get('cost') or 0.0))
+                amt = float(rec.get('usage_amount') or rec.get('amount') or 0.0)
+                if 'loadbalancer-hour' in desc:
+                    hourly_spend += cost_val
+                    total_active_hours += amt
+                elif 'lcu' in desc or 'capacity unit' in desc:
+                    lcu_spend += cost_val
+                    total_lcu_hours += amt
+                elif 'data transfer' in desc or 'gb' in desc:
+                    transfer_spend += cost_val
+                    total_data_gb += amt
+
+        elb_summary = {
+            'alb_name': alb_name,
+            'lcu_hours': round(total_lcu_hours, 1),
+            'data_processed_gb': round(total_data_gb, 1),
+            'active_hours': round(total_active_hours, 1),
+            'lcu_cost': round_currency(lcu_spend),
+            'hourly_cost': round_currency(hourly_spend),
+            'transfer_cost': round_currency(transfer_spend),
+            'total_cost': round_currency(lcu_spend + hourly_spend + transfer_spend)
+        }
+
     return {
         'status': 'SUCCESS',
         'total_matches': total_records,
         'summary': {
-            'total_cost': round(total_spend, 2),
+            'total_cost': total_spend,
             'unique_resources_count': unique_count,
             'active_instances_count': active_instances_count,
             'retained_backups_count': retained_backups_count,
             'inventory_reconciliation': inventory_reconciliation,
-            'classified_cost': round(classified_cost, 2),
-            'unallocated_cost': round(unallocated_spend, 2),
+            'waf_traffic_summary': waf_traffic_summary,
+            'elb_summary': elb_summary,
+            'classified_cost': classified_cost,
+            'unallocated_cost': unallocated_spend,
             'unallocated_records_count': sum(1 for r in filtered if r['resource_id'].startswith('No-Resource-ID') or r['classification_status'] == 'USAGE_LEVEL_COST'),
             'selected_service': service,
             'selected_category': category,
@@ -1235,7 +1520,10 @@ def get_resource_detail(cur_data: Dict[str, Any], resource_id: str) -> Optional[
     if not cur_data or not cur_data.get('records'):
         return None
 
-    matching_rows = [r for r in cur_data['records'] if r.get('resource_id') == resource_id]
+    matching_rows = [
+        r for r in cur_data['records'] 
+        if r.get('resource_id') == resource_id or r.get('ri_arn') == resource_id or r.get('sp_arn') == resource_id or f"sub-{r.get('subscription_id')}" == resource_id
+    ]
     if not matching_rows:
         return None
 
@@ -1313,13 +1601,161 @@ def get_resource_detail(cur_data: Dict[str, Any], resource_id: str) -> Optional[
         else:
             usage_disp = '—'
 
+    # Check for RI commitment ARNs and Subscriptions on this resource
+    ri_arns_for_resource = {r.get('ri_arn') for r in matching_rows if r.get('ri_arn')}
+    sub_ids_for_resource = {r.get('subscription_id') for r in matching_rows if r.get('subscription_id')}
+    
+    benefiting_resources = []
+    applied_commitments = []
+    
+    if ri_arns_for_resource:
+        if cls['category'] == 'RI_SUBSCRIPTION_FEE' or any(r.get('line_type') == 'RIFee' for r in matching_rows):
+            benefiting = set()
+            for rec in cur_data.get('records', []):
+                if rec.get('line_type') == 'DiscountedUsage' and rec.get('ri_arn') in ri_arns_for_resource:
+                    rec_rid = rec.get('resource_id', '')
+                    if rec_rid and not rec_rid.startswith('No-Resource-ID'):
+                        benefiting.add(rec_rid)
+            benefiting_resources = sorted(list(benefiting))
+        else:
+            applied_commitments = sorted(list(ri_arns_for_resource))
+
+    # Additively enrich line items while strictly preserving data integrity
+    formatted_line_items = []
+    for r in matching_rows:
+        formatted_line_items.append({
+            'date': r.get('date', ''),
+            'month': r.get('month', ''),
+            'hour': r.get('hour', '00:00'),
+            'timestamp': r.get('timestamp', ''),
+            'service': r.get('service', cls['service']),
+            'resource_id': r.get('resource_id', resource_id),
+            'short_id': r.get('short_id', short_id),
+            'account_id': r.get('account_id', sample.get('account_id', '')),
+            'region': r.get('region', sample.get('region', '')),
+            'name': r.get('name', sample.get('name', '')),
+            'line_type': r.get('line_type') or r.get('line_item_type') or 'Usage',
+            'line_item_type': r.get('line_item_type') or r.get('line_type') or 'Usage',
+            'usage_type': r.get('usage_type', ''),
+            'operation': r.get('operation', ''),
+            'usage_amount': round(r.get('usage_amount', 0.0), 4),
+            'unit': r.get('unit', ''),
+            'cost': round(r.get('cost', 0.0), 4),
+            'unblended_cost': round(r.get('unblended_cost', r.get('cost', 0.0)), 4),
+            'currency': r.get('currency', 'USD'),
+            'pricing_term': r.get('term', 'OnDemand'),
+            'term': r.get('term', 'OnDemand'),
+            'desc': r.get('desc') or r.get('item_description') or '',
+            'item_description': r.get('item_description') or r.get('desc') or '',
+            'ri_arn': r.get('ri_arn', ''),
+            'subscription_id': r.get('subscription_id', ''),
+            'sp_arn': r.get('sp_arn', '')
+        })
+
+    # Build contract-level breakdown with specific benefiting workloads
+    contracts = []
+    is_comm = bool(ri_arns_for_resource or sub_ids_for_resource or cls['category'] == 'RI_SUBSCRIPTION_FEE')
+    if is_comm and (cls['category'] == 'RI_SUBSCRIPTION_FEE' or any(r.get('line_type') == 'RIFee' for r in matching_rows)):
+        contracts_dict = {}
+        for r in matching_rows:
+            c_arn = r.get('ri_arn') or ''
+            c_sub = r.get('subscription_id') or ''
+            c_key = c_arn or c_sub or f"Contract-{len(contracts_dict)+1}"
+            if c_key not in contracts_dict:
+                contracts_dict[c_key] = {
+                    'subscription_id': c_sub,
+                    'ri_arn': c_arn,
+                    'short_arn': c_arn.split('/')[-1] if '/' in c_arn else (c_arn.split(':')[-1] if ':' in c_arn else c_arn),
+                    'cost': 0.0,
+                    'usage_type': r.get('usage_type', ''),
+                    'operation': r.get('operation', ''),
+                    'benefiting_resources': set()
+                }
+            contracts_dict[c_key]['cost'] += r.get('cost', 0.0)
+
+        # Match benefiting resources per contract strictly by ri_arn
+        for rec in cur_data.get('records', []):
+            if rec.get('line_type') == 'DiscountedUsage':
+                r_arn = rec.get('ri_arn')
+                if r_arn and r_arn in contracts_dict:
+                    rec_rid = rec.get('resource_id', '')
+                    if rec_rid and not rec_rid.startswith('No-Resource-ID'):
+                        contracts_dict[r_arn]['benefiting_resources'].add(rec_rid)
+
+        for c_info in sorted(contracts_dict.values(), key=lambda x: x['cost'], reverse=True):
+            contracts.append({
+                'subscription_id': c_info['subscription_id'],
+                'ri_arn': c_info['ri_arn'],
+                'short_arn': c_info['short_arn'],
+                'cost': round(c_info['cost'], 4),
+                'usage_type': c_info['usage_type'],
+                'operation': c_info['operation'],
+                'benefiting_resources': sorted(list(c_info['benefiting_resources'])),
+                'is_attributed': len(c_info['benefiting_resources']) > 0
+            })
+
+    # Resolve authoritative lifecycle status
+    if resource_id.startswith('No-Resource-ID') or resource_id.startswith('TAX-') or cls['category'] == 'TAX_AND_FEES':
+        if cls['category'] == 'RI_SUBSCRIPTION_FEE' or is_comm:
+            lifecycle_status = 'COMMITMENT_CONTRACT'
+            lifecycle_label = 'Reserved Instance Commitment'
+        else:
+            lifecycle_status = 'ACCOUNT_LEVEL_FEES'
+            lifecycle_label = 'Account / Tax / Fee'
+    elif cls['category'] == 'RDS_DB_INSTANCE':
+        lifecycle_status = 'ACTIVE_INSTANCE'
+        lifecycle_label = 'Active DB Instance'
+    elif cls['category'] == 'EC2_INSTANCE':
+        lifecycle_status = 'ACTIVE_INSTANCE'
+        lifecycle_label = 'Active Compute Instance'
+    elif cls['category'] in ('EBS_SNAPSHOT', 'RDS_SNAPSHOT'):
+        lifecycle_status = 'SNAPSHOT_STORAGE'
+        lifecycle_label = 'Snapshot Storage Asset'
+    elif cls['category'] == 'RDS_BACKUP':
+        lifecycle_status = 'RETAINED_BACKUP_STORAGE'
+        lifecycle_label = 'Retained Backup (Terminated DB)'
+    elif cls['category'] == 'EBS_VOLUME':
+        lifecycle_status = 'PROVISIONED_STORAGE'
+        lifecycle_label = 'EBS Block Storage'
+    else:
+        lifecycle_status = 'ACTIVE_RESOURCE'
+        lifecycle_label = 'Active Cloud Resource'
+
+    if is_comm and (cls['category'] == 'RI_SUBSCRIPTION_FEE' or resource_id.startswith('No-Resource-ID')):
+        if len(sub_ids_for_resource) > 1:
+            clean_label = f"Reserved Instance Commitment Portfolio ({len(sub_ids_for_resource)} Contracts)"
+        elif len(sub_ids_for_resource) == 1:
+            clean_label = f"Reserved Instance Commitment Contract #{list(sub_ids_for_resource)[0]}"
+        else:
+            clean_label = "Reserved Instance Commitment Portfolio"
+    else:
+        clean_label = sample.get('name', '') or short_id
+
+    detail_inst_type = None
+    for ut in usage_type_spend.keys():
+        ut_lower = ut.lower()
+        if 'boxusage:' in ut_lower:
+            detail_inst_type = ut.split('BoxUsage:')[-1].split(':')[-1]
+            break
+        elif 'heavyusage:' in ut_lower:
+            detail_inst_type = ut.split('HeavyUsage:')[-1].split(':')[-1]
+            break
+        elif 'instanceusage:' in ut_lower:
+            detail_inst_type = ut.split('InstanceUsage:')[-1].split(':')[-1]
+            break
+        elif 'volumeusage.' in ut_lower:
+            detail_inst_type = ut.split('VolumeUsage.')[-1].upper()
+            break
+
     return {
         'resource_id': resource_id,
         'short_id': short_id,
         'name': sample.get('name', ''),
+        'display_label': clean_label,
         'service': cls['service'],
         'category': cls['category'],
         'category_label': cls['category_label'],
+        'instance_type': detail_inst_type,
         'asset_type': cls['asset_type'],
         'account_id': sample.get('account_id', 'Primary-Account'),
         'region': sample.get('region', 'us-east-1'),
@@ -1333,11 +1769,23 @@ def get_resource_detail(cur_data: Dict[str, Any], resource_id: str) -> Optional[
         'first_seen': min(daily_spend.keys()) if daily_spend else '',
         'last_seen': max(daily_spend.keys()) if daily_spend else '',
         'classification_status': cls['classification_status'],
+        'lifecycle_status': lifecycle_status,
+        'lifecycle_label': lifecycle_label,
         'verification_status': 'Not verified against live AWS state',
         'operations': list(operations),
         'line_types': list(line_types),
         'daily_timeline': [{ 'date': k, 'cost': round(v, 4) } for k, v in sorted(daily_spend.items())],
         'usage_breakdown': [{ 'usage_type': k, 'cost': round(v, 4) } for k, v in sorted(usage_type_spend.items(), key=lambda x: x[1], reverse=True)],
-        'recent_line_items': matching_rows[:50],
-        'line_items': matching_rows[:50]
+        'is_commitment': is_comm,
+        'commitment_type': 'ReservedInstance' if is_comm else '',
+        'ri_arn': list(ri_arns_for_resource)[0] if ri_arns_for_resource else '',
+        'ri_arns': sorted(list(ri_arns_for_resource)),
+        'subscription_id': list(sub_ids_for_resource)[0] if sub_ids_for_resource else '',
+        'subscription_ids': sorted(list(sub_ids_for_resource)),
+        'benefiting_resources': benefiting_resources,
+        'applied_commitments': applied_commitments,
+        'contracts': contracts,
+        'total_line_items': len(matching_rows),
+        'recent_line_items': formatted_line_items[:100],
+        'line_items': formatted_line_items[:100]
     }

@@ -408,11 +408,18 @@ export default function AnomaliesBudgetsView({ overview }) {
 
                 {/* Breach Warning or Safe Badge */}
                 <div className="text-[11px] pt-1">
-                  {b.is_breached ? (
+                  {b.is_current_breached || b.status === 'BREACHED' ? (
                     <div className="text-rose-600 dark:text-rose-400 font-bold flex items-center gap-1.5">
                       <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
                       <span>
-                        Projected breach on Day {b.projected_breach_day || '25'} (Forecast: <span className="font-mono">${b.forecasted_spend_usd.toLocaleString()}</span>).
+                        Budget limit exceeded! Actual spend <span className="font-mono">${b.current_spend_usd.toLocaleString()}</span> exceeds ${b.monthly_budget_usd.toLocaleString()} limit.
+                      </span>
+                    </div>
+                  ) : b.status === 'FORECASTED_BREACH' || b.is_breached ? (
+                    <div className="text-amber-600 dark:text-amber-400 font-bold flex items-center gap-1.5">
+                      <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
+                      <span>
+                        Projected breach on Day {b.projected_breach_day || '—'} (Forecast: <span className="font-mono">${b.forecasted_spend_usd.toLocaleString()}</span>).
                       </span>
                     </div>
                   ) : (

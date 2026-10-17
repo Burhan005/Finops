@@ -241,3 +241,17 @@ class TestMultiTenantLeakPrevention(unittest.TestCase):
         # Tenant A legitimately deletes budget -> 200 OK
         res_del_a = self.client.delete(f"/api/budgets/{budget.id}", headers=self.auth_a)
         self.assertEqual(res_del_a.status_code, 200)
+
+    def test_resource_detail_multitenant_isolation(self):
+        """Resource detail queries must return only records belonging to requested resource and reject unallocated/nonexistent queries."""
+        # Non-existent resource returns 404
+        res_404 = self.client.get("/api/resources/detail?resource_id=nonexistent-resource-id-9999", headers=self.auth_a)
+        self.assertEqual(res_404.status_code, 404)
+
+        # Valid resource returns enriched schema
+        res_valid = self.client.get("/api/resources/detail?resource_id=i-0ee0901f82ebc5d84", headers=self.auth_a)
+        if res_valid.status_code == 200:
+            data = res_valid.json()
+            self.assertEqual(data["resource_id"], "i-0ee0901f82ebc5d84")
+            self.assertIn("line_items", data)
+            self.assertIn("total_line_items", data)

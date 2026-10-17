@@ -82,6 +82,14 @@ add_column("datasets", "credits_total", "FLOAT DEFAULT 0.0")
 add_column("datasets", "refunds_total", "FLOAT DEFAULT 0.0")
 add_column("datasets", "taxes_total", "FLOAT DEFAULT 0.0")
 add_column("datasets", "is_active", "INTEGER DEFAULT 0")
+add_column("datasets", "billing_period_start", "VARCHAR(32)")
+add_column("datasets", "billing_period_end", "VARCHAR(32)")
+add_column("datasets", "payer_account_id", "VARCHAR(64)")
+add_column("datasets", "assembly_id", "VARCHAR(128)")
+add_column("datasets", "manifest_metadata", "TEXT")
+add_column("datasets", "revision_version", "INTEGER DEFAULT 1")
+add_column("datasets", "superseded_dataset_id", "INTEGER REFERENCES datasets(id)")
+add_column("billing_records", "line_item_id", "VARCHAR(255)")
 add_column("audit_events", "organization_id", "INTEGER REFERENCES organizations(id)")
 add_column("audit_events", "user_id", "INTEGER REFERENCES users(id)")
 add_column("audit_events", "ip_address", "VARCHAR(64)")
@@ -94,6 +102,42 @@ add_column("budget_configs", "organization_id", "INTEGER REFERENCES organization
 add_column("forecast_runs", "organization_id", "INTEGER REFERENCES organizations(id)")
 add_column("ai_analyst_queries", "organization_id", "INTEGER REFERENCES organizations(id)")
 add_column("s3_sync_execution_history", "organization_id", "INTEGER REFERENCES organizations(id)")
+
+cursor.execute("CREATE INDEX IF NOT EXISTS ix_billing_records_line_item ON billing_records(line_item_id)")
+cursor.execute("CREATE INDEX IF NOT EXISTS ix_datasets_org_period ON datasets(organization_id, billing_period_start, billing_period_end)")
+
+
+def ensure_schema_compatibility(target_engine):
+    """
+    Safely adds missing Phase 1 columns to existing SQLite tables if not present.
+    Executes in a safe inspection pass without resetting or vacuuming database.
+    """
+    with target_engine.connect() as conn:
+        def _get_cols(tbl):
+            res = conn.exec_driver_sql(f"PRAGMA table_info({tbl})").fetchall()
+            return [r[1] for r in res]
+
+        ds_cols = _get_cols("datasets")
+        phase1_ds_cols = [
+            ("billing_period_start", "VARCHAR(32)"),
+            ("billing_period_end", "VARCHAR(32)"),
+            ("payer_account_id", "VARCHAR(64)"),
+            ("assembly_id", "VARCHAR(128)"),
+            ("manifest_metadata", "TEXT"),
+            ("revision_version", "INTEGER DEFAULT 1"),
+            ("superseded_dataset_id", "INTEGER REFERENCES datasets(id)")
+        ]
+        for col_name, col_def in phase1_ds_cols:
+            if col_name not in ds_cols:
+                conn.exec_driver_sql(f"ALTER TABLE datasets ADD COLUMN {col_name} {col_def}")
+
+        br_cols = _get_cols("billing_records")
+        if "line_item_id" not in br_cols:
+            conn.exec_driver_sql("ALTER TABLE billing_records ADD COLUMN line_item_id VARCHAR(255)")
+
+        conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_billing_records_line_item ON billing_records(line_item_id)")
+        conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_datasets_org_period ON datasets(organization_id, billing_period_start, billing_period_end)")
+        conn.commit()
 
 # 5. Create export_tickets table if not exists
 cursor.execute("""

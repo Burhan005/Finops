@@ -45,20 +45,43 @@ function authHeaders(extraHeaders = {}) {
   return headers;
 }
 
+const inFlightGets = new Map();
+
+async function memoizedGet(url, headers = {}) {
+  const cacheKey = `${url}:${headers['Authorization'] || ''}`;
+  if (inFlightGets.has(cacheKey)) {
+    return inFlightGets.get(cacheKey);
+  }
+  const promise = (async () => {
+    try {
+      const res = await fetch(url, { headers });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `Request failed with status ${res.status}`);
+      }
+      return await res.json();
+    } catch (err) {
+      inFlightGets.delete(cacheKey);
+      throw err;
+    } finally {
+      setTimeout(() => inFlightGets.delete(cacheKey), 1500);
+    }
+  })();
+  inFlightGets.set(cacheKey, promise);
+  return promise;
+}
+
 export const api = {
   async getHealth() {
-    const res = await fetch(`${API_BASE}/health`, { headers: authHeaders() });
-    if (!res.ok) throw new Error('Failed to fetch health');
-    return res.json();
+    return memoizedGet(`${API_BASE}/health`, authHeaders());
   },
 
   async getDatasets() {
-    const res = await fetch(`${API_BASE}/datasets`, { headers: authHeaders() });
-    if (!res.ok) throw new Error('Failed to fetch datasets');
-    return res.json();
+    return memoizedGet(`${API_BASE}/datasets`, authHeaders());
   },
 
   async selectDataset(filename) {
+    inFlightGets.clear();
     const res = await fetch(`${API_BASE}/datasets/select`, {
       method: 'POST',
       headers: authHeaders({ 'Content-Type': 'application/json' }),
@@ -69,6 +92,7 @@ export const api = {
   },
 
   async uploadFile(fileOrFiles) {
+    inFlightGets.clear();
     const formData = new FormData();
     if (Array.isArray(fileOrFiles)) {
       fileOrFiles.forEach(f => formData.append('files', f));
@@ -95,9 +119,7 @@ export const api = {
     if (accountId && accountId !== 'all') params.append('account_id', accountId);
     if (service && service !== 'All') params.append('service', service);
     const qs = params.toString() ? `?${params.toString()}` : '';
-    const res = await fetch(`${API_BASE}/overview${qs}`, { headers: authHeaders() });
-    if (!res.ok) throw new Error('Failed to fetch overview');
-    return res.json();
+    return memoizedGet(`${API_BASE}/overview${qs}`, authHeaders());
   },
 
   async getTrends(startDate = null, endDate = null) {
@@ -105,9 +127,7 @@ export const api = {
     if (startDate) params.append('start_date', startDate);
     if (endDate) params.append('end_date', endDate);
     const qs = params.toString() ? `?${params.toString()}` : '';
-    const res = await fetch(`${API_BASE}/trends${qs}`, { headers: authHeaders() });
-    if (!res.ok) throw new Error('Failed to fetch trends');
-    return res.json();
+    return memoizedGet(`${API_BASE}/trends${qs}`, authHeaders());
   },
 
   async compareDates(baseline_date, target_date, account_id = null) {
@@ -411,6 +431,15 @@ export const api = {
     return res.json();
   },
 
+  async syncAnomalies() {
+    const res = await fetch(`${API_BASE}/anomalies/sync`, {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' })
+    });
+    if (!res.ok) throw new Error('Failed to trigger anomaly synchronization');
+    return res.json();
+  },
+
   // Forecasting & Budget Guard
   async getForecast() {
     const res = await fetch(`${API_BASE}/forecast`, { headers: authHeaders() });
@@ -457,6 +486,15 @@ export const api = {
   async getLedgerSummary() {
     const res = await fetch(`${API_BASE}/ledger/summary`, { headers: authHeaders() });
     if (!res.ok) throw new Error('Failed to fetch savings ledger summary');
+    return res.json();
+  },
+
+  async syncLedger() {
+    const res = await fetch(`${API_BASE}/ledger/sync`, {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' })
+    });
+    if (!res.ok) throw new Error('Failed to trigger ledger synchronization');
     return res.json();
   },
 
@@ -539,6 +577,7 @@ export const api = {
     } catch (e) {
       // ignore
     }
+    inFlightGets.clear();
     localStorage.removeItem('finops_token');
     localStorage.removeItem('finops_user');
     return { success: true };

@@ -413,9 +413,12 @@ export default function App() {
     try {
       const promises = [
         api.getOverview(start, end, account, service),
-        api.getTrends(start, end),
-        api.getRecommendations()
+        api.getTrends(start, end)
       ];
+      const needsRecs = reloadDatasets || !recommendations;
+      if (needsRecs) {
+        promises.push(api.getRecommendations());
+      }
       const needsDatasets = reloadDatasets || !datasets?.samples?.length;
       if (needsDatasets) {
         promises.push(api.getDatasets());
@@ -423,10 +426,14 @@ export default function App() {
       const results = await Promise.all(promises);
       const ov = results[0];
       const tr = results[1];
-      const recs = results[2];
       setOverview(ov);
       setTrends(tr);
-      setRecommendations(recs);
+
+      let nextIdx = 2;
+      if (needsRecs) {
+        setRecommendations(results[nextIdx]);
+        nextIdx++;
+      }
 
       if (ov?.services) {
         const sKeys = Object.keys(ov.services);
@@ -439,8 +446,8 @@ export default function App() {
         }
       }
 
-      if (results.length > 3) {
-        const dsets = results[3];
+      if (needsDatasets && results[nextIdx]) {
+        const dsets = results[nextIdx];
         setDatasets(dsets);
         setActiveDataset(dsets.active_dataset || dsets.active || ov?.filename || '');
       } else if (ov?.filename && !activeDataset) {

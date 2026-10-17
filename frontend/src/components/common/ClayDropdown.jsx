@@ -179,7 +179,7 @@ export default function ClayDropdown({
 
                 return (
                   <button
-                    key={opt.value}
+                    key={opt.key || `${opt.value}-${idx}`}
                     type="button"
                     onClick={() => handleSelect(opt.value)}
                     className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs transition-colors text-left ${

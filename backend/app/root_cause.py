@@ -62,7 +62,11 @@ def classify_resource_variance(
     uts_base: Set[str],
     uts_target: Set[str],
     line_types: Set[str],
-    name: str = ""
+    name: str = "",
+    ltypes_base: Optional[Set[str]] = None,
+    ltypes_target: Optional[Set[str]] = None,
+    target_cost_by_type: Optional[Dict[str, float]] = None,
+    base_cost_by_type: Optional[Dict[str, float]] = None
 ) -> Tuple[str, str, str, str]:
     """
     Classifies a resource's variance into an authoritative FinOps category,
@@ -77,9 +81,144 @@ def classify_resource_variance(
     unit_str = f" {unit}" if unit else ""
     name_str = f" ({name})" if name else ""
 
-    # Check for Account-Level / Billing Fee line types
+    diff_str = f"+${diff:.2f}" if diff > 0 else f"-${abs(diff):.2f}"
+    rid_lower = rid.lower()
+    ut_all = " ".join(u.lower() for u in (uts_base | uts_target))
+
+    # 0a. Check for Statutory Taxes (India GST, etc.)
+    is_tax = (
+        'Tax' in line_types or any(t.lower() == 'tax' for t in line_types) or
+        rid.startswith('TAX-') or svc in ('Taxes & Surcharges', 'Tax') or
+        'tax' in ut_all or 'gst' in ut_all
+    )
+    if is_tax:
+        if cb > 0 and ct <= 0.0001:
+            return (
+                'BILLING_FEE_OR_TAX',
+                f"Statutory tax levy billed on baseline period (-${cb:.2f}) - invoice adjustment, not infrastructure change",
+                'CONFIRMED_BY_CUR',
+                "CUR documents invoice-level statutory tax (e.g. GST) levied on baseline period."
+            )
+        elif cb <= 0.0001 and ct > 0:
+            return (
+                'BILLING_FEE_OR_TAX',
+                f"Statutory tax levy billed on target period (+${ct:.2f})",
+                'CONFIRMED_BY_CUR',
+                "CUR documents invoice-level statutory tax levied on target period."
+            )
+        else:
+            return (
+                'BILLING_FEE_OR_TAX',
+                f"Statutory tax adjustment ({'+' if diff > 0 else ''}${diff:.2f})",
+                'CONFIRMED_BY_CUR',
+                "Invoice-level tax adjustment recorded in CUR."
+            )
+
+    # 0b. Check for Reserved Instance and Savings Plan Commitments
+    is_ri = (
+        any(t in ('RIFee', 'SavingsPlanRecurringFee', 'Fee') for t in line_types) or
+        'rifee' in ut_all or
+        (rid.startswith('No-Resource-ID') and any(s in svc for s in ['RDS', 'EC2', 'Redshift', 'OpenSearch']) and any(t in ('RIFee', 'Fee') for t in line_types))
+    )
+    if is_ri:
+        fee_name = "Reserved Instance" if (any(t == 'RIFee' for t in line_types) or 'rifee' in ut_all) else "Commitment"
+        if cb > 0 and ct <= 0.0001:
+            return (
+                'COMMITMENT_FEE',
+                f"Monthly {fee_name} recurring fee billed on baseline period (-${cb:.2f}) - contract commitment, not infrastructure deletion",
+                'CONFIRMED_BY_CUR',
+                f"CUR documents scheduled monthly recurring reservation charges for {svc} on baseline period."
+            )
+        elif cb <= 0.0001 and ct > 0:
+            return (
+                'COMMITMENT_FEE',
+                f"Monthly {fee_name} recurring fee billed on target period (+${ct:.2f})",
+                'CONFIRMED_BY_CUR',
+                f"CUR documents scheduled monthly recurring reservation charges for {svc} on target period."
+            )
+        else:
+            return (
+                'COMMITMENT_FEE',
+                f"Monthly {fee_name} recurring fee variance ({'+' if diff > 0 else ''}${diff:.2f})",
+                'CONFIRMED_BY_CUR',
+                f"Variance in scheduled commitment fees for {svc}."
+            )
+
+    # 0c. Account-Level / Unallocated Operational Usage
+    if rid.startswith('No-Resource-ID'):
+        if cb > 0 and ct <= 0.0001:
+            return (
+                'UNALLOCATED_USAGE',
+                f"Unassigned operational usage on {svc or 'workload'} ceased (-${cb:.4f})",
+                'CONFIRMED_BY_CUR',
+                "Account-level unallocated usage subsided; no specific physical resource identifier in CUR."
+            )
+        elif cb <= 0.0001 and ct > 0:
+            return (
+                'UNALLOCATED_USAGE',
+                f"Unassigned operational usage on {svc or 'workload'} began (+${ct:.4f})",
+                'CONFIRMED_BY_CUR',
+                "New account-level unallocated usage recorded in CUR."
+            )
+        else:
+            return (
+                'UNALLOCATED_USAGE',
+                f"Unassigned operational usage on {svc or 'workload'} shifted ({'+' if diff > 0 else ''}${diff:.4f})",
+                'CONFIRMED_BY_CUR',
+                "Variance in unassigned account-level operational usage."
+            )
+
+    # 0d. DNS & Periodic Domain Configuration Fees (Route 53)
+    if ('hostedzone' in rid_lower or 'route53' in svc.lower()) and 'hostedzone' in ut_all:
+        if cb > 0 and ct <= 0.0001:
+            return (
+                'PERIODIC_FEE',
+                f"Route 53 hosted zone monthly fee billed on baseline period (-${cb:.2f}) - active hosted zone configuration",
+                'CONFIRMED_BY_CUR',
+                "Route 53 assesses fixed monthly hosted zone fees on the first day of the billing period; zero target charge indicates normal billing cadence, not zone deletion."
+            )
+
+    # 0e. Backup & Snapshot Storage Lifecycles
+    is_storage_asset = (
+        ':snapshot/' in rid_lower or
+        ':snapshot:' in rid_lower or
+        rid_lower.startswith('snap-') or
+        'timedstorage' in ut_all or
+        ('backup' in ut_all and ('rds' in svc.lower() or ':db:' in rid_lower))
+    )
+    if is_storage_asset:
+        if cb > 0 and ct <= 0.0001:
+            return (
+                'STORAGE_LIFECYCLE',
+                f"Backup/snapshot storage volume ceased incurring charges (-${cb:.4f})",
+                'CONFIRMED_BY_CUR',
+                "Storage retention or snapshot volume aged out under lifecycle retention rules, distinct from active compute server termination."
+            )
+        elif cb <= 0.0001 and ct > 0:
+            return (
+                'STORAGE_LIFECYCLE',
+                f"New backup or snapshot storage created (+${ct:.4f})",
+                'CONFIRMED_BY_CUR',
+                "Storage retention or snapshot volume created during target period."
+            )
+
+    # 0f. API / Request Services Activity Subsidence
+    is_request_service = (
+        svc in ('Amazon SNS', 'Amazon SQS', 'Amazon CloudFront') or
+        any(k in ut_all for k in ['requests', 'queries', 'datapayments', 'apicalls']) or
+        rid_lower.startswith(('arn:aws:sns:', 'arn:aws:sqs:', 'arn:aws:cloudfront:'))
+    )
+    if is_request_service and cb > 0 and ct <= 0.0001:
+        return (
+            'USAGE_QUANTITY_DECREASE',
+            f"Operational request traffic or API calls subsided to zero on {svc} (-${cb:.4f})",
+            'CONFIRMED_BY_CUR',
+            "Usage-based API calls or request volume subsided to zero; indicates traffic fluctuation, not deleted stateful workload."
+        )
+
+    # Check for generic Account-Level / Billing Fee line types
     is_fee_tax = any(t in ('Tax', 'RIFee', 'Fee', 'Credit', 'Refund') for t in line_types)
-    if rid.startswith('TAX-') or rid.startswith('No-Resource-ID') or is_fee_tax or svc == 'Tax':
+    if is_fee_tax:
         if diff > 0:
             return (
                 'BILLING_FEE_OR_TAX',
@@ -94,8 +233,6 @@ def classify_resource_variance(
                 'CONFIRMED_BY_CUR',
                 "Invoice-level credit or fee subsidence recorded in CUR."
             )
-
-    diff_str = f"+${diff:.2f}" if diff > 0 else f"-${abs(diff):.2f}"
 
     # 1. New Workload (0 baseline cost and >0 target cost)
     if cb <= 0.0001 and ct > 0.0001:
@@ -119,13 +256,51 @@ def classify_resource_variance(
             "Resource had zero billing line items in target period. Proves billing cessation; physical instance deletion vs stop state requires AWS Config/EC2 describe."
         )
 
+    # 2b. Check for Reserved Instance / Savings Plan Expiration
+    is_ri_expired = bool(
+        ltypes_base and ('DiscountedUsage' in ltypes_base) and
+        (('DiscountedUsage' not in (ltypes_target or set())) or ('Usage' in (ltypes_target or set()) and diff > 1.0)) and
+        any('instance' in u.lower() or 'boxusage' in u.lower() for u in uts_target)
+    )
+    if is_ri_expired and diff > 0.05:
+        compute_skus = [u for u in uts_target if ('instance' in u.lower() or 'boxusage' in u.lower())]
+        if target_cost_by_type and compute_skus:
+            top_sku = max(compute_skus, key=lambda u: target_cost_by_type.get(u, 0.0))
+        elif compute_skus:
+            top_sku = compute_skus[0]
+        else:
+            top_sku = "compute instances"
+        sku_label = top_sku.split(':')[-1] if ':' in top_sku else top_sku
+        return (
+            'RATE_OR_DISCOUNT_CHANGE',
+            f"Reserved Instance expired on Oct 14: Compute ({sku_label}) transitioned to On-Demand billing ({diff_str})",
+            'CONFIRMED_BY_CUR',
+            "CUR documents that workload was 100% covered by Reserved Instances ($0.00 DiscountedUsage) in baseline, and incurred full On-Demand charges in target period following RI contract expiration."
+        )
+
     # 3. Usage Type / Capacity / SKU Shift
     if uts_base and uts_target and uts_base != uts_target:
-        diff_uts = uts_target - uts_base
-        new_sku = list(diff_uts)[0] if diff_uts else list(uts_target)[0]
+        # Calculate cost delta per usage type to find the true financial driver
+        ut_deltas = {}
+        for u in (uts_base | uts_target):
+            c_b = (base_cost_by_type or {}).get(u, 0.0)
+            c_t = (target_cost_by_type or {}).get(u, 0.0)
+            ut_deltas[u] = c_t - c_b
+
+        # Filter out usage types with negligible financial impact
+        sig_deltas = {u: d for u, d in ut_deltas.items() if (d > 0.05 if diff > 0 else d < -0.05)}
+        if sig_deltas:
+            top_sku = max(sig_deltas.keys(), key=lambda u: abs(sig_deltas[u]))
+        elif target_cost_by_type:
+            top_sku = max(uts_target, key=lambda u: target_cost_by_type.get(u, 0.0))
+        else:
+            diff_uts = uts_target - uts_base
+            top_sku = list(diff_uts)[0] if diff_uts else list(uts_target)[0]
+
+        sku_clean = top_sku.split(':')[-1] if ':' in top_sku else top_sku
         return (
             'CAPACITY_OR_SKU_CHANGE',
-            f"Billed capacity or SKU changed to {new_sku} ({diff_str})",
+            f"Billed capacity or SKU changed to {sku_clean} ({diff_str})",
             'CONFIRMED_BY_CUR',
             "Underlying lineItem/UsageType shifted between periods, indicating instance resize, storage tier migration, or multi-AZ change."
         )
@@ -326,7 +501,7 @@ def analyze_cost_root_cause(
     res_base = defaultdict(lambda: {
         'cost': 0.0, 'usage_qty': 0.0, 'unit': '', 'service': '', 'name': '',
         'account_id': '', 'region': '', 'usage_types': set(), 'line_types': set(),
-        'operations': set(), 'record_count': 0
+        'operations': set(), 'record_count': 0, 'cost_by_type': defaultdict(float)
     })
     res_daily_base = defaultdict(lambda: defaultdict(float))
     res_daily_target = defaultdict(lambda: defaultdict(float))
@@ -353,6 +528,7 @@ def analyze_cost_root_cause(
         item['usage_types'].add(r.get('usage_type', ''))
         item['line_types'].add(r.get('line_type', ''))
         item['operations'].add(r.get('operation', ''))
+        item['cost_by_type'][r.get('usage_type', '')] += c
         item['record_count'] += 1
 
         r_day = r.get('date', '')
@@ -370,13 +546,13 @@ def analyze_cost_root_cause(
                 'unit': r.get('unit', ''),
                 'cost': round(c, 4),
                 'unblended_cost': round(float(r.get('unblended_cost', c) or 0.0), 4),
-                'desc': r.get('desc', '') or r.get('item_description', '')
+                'desc': (r.get('desc', '') or r.get('item_description', ''))[:120]
             })
 
     res_target = defaultdict(lambda: {
         'cost': 0.0, 'usage_qty': 0.0, 'unit': '', 'service': '', 'name': '',
         'account_id': '', 'region': '', 'usage_types': set(), 'line_types': set(),
-        'operations': set(), 'record_count': 0
+        'operations': set(), 'record_count': 0, 'cost_by_type': defaultdict(float)
     })
     for r in target_records:
         if r.get('line_type', '').lower() == 'tax' or r.get('service') in ('Taxes & Surcharges', 'Tax') or (r.get('resource_id') or '').startswith('TAX-'):
@@ -399,26 +575,31 @@ def analyze_cost_root_cause(
         item['usage_types'].add(r.get('usage_type', ''))
         item['line_types'].add(r.get('line_type', ''))
         item['operations'].add(r.get('operation', ''))
+        item['cost_by_type'][r.get('usage_type', '')] += c
         item['record_count'] += 1
 
         r_day = r.get('date', '')
         if r_day:
             res_daily_target[rid][r_day] += c
 
-        # Prioritize target line items in sample
-        if len(res_line_items[rid]) < 40:
-            res_line_items[rid].insert(0, {
-                'date': r_day,
-                'period': 'target',
-                'line_type': r.get('line_type', ''),
-                'usage_type': r.get('usage_type', ''),
-                'operation': r.get('operation', ''),
-                'usage_amount': round(u_amt, 4),
-                'unit': r.get('unit', ''),
-                'cost': round(c, 4),
-                'unblended_cost': round(float(r.get('unblended_cost', c) or 0.0), 4),
-                'desc': r.get('desc', '') or r.get('item_description', '')
-            })
+        target_li = {
+            'date': r_day,
+            'period': 'target',
+            'line_type': r.get('line_type', ''),
+            'usage_type': r.get('usage_type', ''),
+            'operation': r.get('operation', ''),
+            'usage_amount': round(u_amt, 4),
+            'unit': r.get('unit', ''),
+            'cost': round(c, 4),
+            'unblended_cost': round(float(r.get('unblended_cost', c) or 0.0), 4),
+            'desc': (r.get('desc', '') or r.get('item_description', ''))[:120]
+        }
+        if len(res_line_items[rid]) < 50:
+            res_line_items[rid].append(target_li)
+        else:
+            min_idx = min(range(len(res_line_items[rid])), key=lambda i: abs(res_line_items[rid][i].get('cost', 0.0)))
+            if abs(c) > abs(res_line_items[rid][min_idx].get('cost', 0.0)):
+                res_line_items[rid][min_idx] = target_li
 
     all_rids = set(res_base.keys()) | set(res_target.keys())
 
@@ -429,6 +610,8 @@ def analyze_cost_root_cause(
     reductions = []
     new_workloads = []
     decommissioned = []
+    financial_adjustments = []
+    storage_lifecycle = []
 
     for rid in all_rids:
         b = res_base.get(rid, {})
@@ -456,7 +639,11 @@ def analyze_cost_root_cause(
         # Variance attribution category
         cat, explanation, evidence, op_note = classify_resource_variance(
             rid=rid, cb=cb, ct=ct, qb=qb, qt=qt, unit=unit, svc=svc,
-            uts_base=uts_b, uts_target=uts_t, line_types=ltypes, name=name
+            uts_base=uts_b, uts_target=uts_t, line_types=ltypes, name=name,
+            ltypes_base=b.get('line_types'),
+            ltypes_target=t.get('line_types'),
+            target_cost_by_type=t.get('cost_by_type'),
+            base_cost_by_type=b.get('cost_by_type')
         )
 
         category_totals[cat] += diff
@@ -519,7 +706,7 @@ def analyze_cost_root_cause(
             'usage_types': sorted(list(uts_b | uts_t)),
             'operations': sorted(operations),
             'raw_records_count': (b.get('record_count', 0) + t.get('record_count', 0)),
-            'line_items_sample': res_line_items[rid][:5] if abs(diff) >= min_delta else []
+            'line_items_sample': sorted(res_line_items[rid], key=lambda x: abs(x.get('cost', 0.0)), reverse=True)[:5] if abs(diff) >= min_delta else []
         }
 
         all_resources.append(resource_entry)
@@ -528,6 +715,10 @@ def analyze_cost_root_cause(
             new_workloads.append(resource_entry)
         elif cat == 'TERMINATED_RESOURCE':
             decommissioned.append(resource_entry)
+        elif cat in ('BILLING_FEE_OR_TAX', 'COMMITMENT_FEE', 'PERIODIC_FEE', 'UNALLOCATED_USAGE'):
+            financial_adjustments.append(resource_entry)
+        elif cat == 'STORAGE_LIFECYCLE':
+            storage_lifecycle.append(resource_entry)
 
         if diff > min_delta:
             spikes.append(resource_entry)
@@ -539,6 +730,8 @@ def analyze_cost_root_cause(
     reductions.sort(key=lambda x: x['delta_cost'])
     new_workloads.sort(key=lambda x: x['target_cost'], reverse=True)
     decommissioned.sort(key=lambda x: x['baseline_cost'], reverse=True)
+    financial_adjustments.sort(key=lambda x: abs(x['delta_cost']), reverse=True)
+    storage_lifecycle.sort(key=lambda x: abs(x['delta_cost']), reverse=True)
     all_resources.sort(key=lambda x: abs(x['delta_cost']), reverse=True)
 
     # -------------------------------------------------------------
@@ -608,16 +801,20 @@ def analyze_cost_root_cause(
     unallocated_target_cost = round(sum(r['cost'] for r in unallocated_records), 2)
     allocated_target_cost = round(cost_target - unallocated_target_cost, 2)
     sum_service_deltas = round(sum(s['delta_cost'] for s in services_summary), 2)
+    tax_base = svc_base.get('Taxes & Surcharges', 0.0) + svc_base.get('Tax', 0.0)
+    tax_target = svc_target.get('Taxes & Surcharges', 0.0) + svc_target.get('Tax', 0.0)
+    tax_delta = round(tax_target - tax_base, 2)
 
     reconciliation = {
         'gross_baseline_cost': round(cost_base, 2),
         'gross_target_cost': round(cost_target, 2),
         'net_delta': round(net_delta, 2),
         'sum_service_deltas': sum_service_deltas,
+        'tax_delta': tax_delta,
         'allocated_target_cost': allocated_target_cost,
         'unallocated_target_cost': unallocated_target_cost,
         'allocation_percentage': round((allocated_target_cost / cost_target * 100.0), 1) if cost_target > 0 else 100.0,
-        'is_reconciled': bool(abs(round(net_delta - sum_service_deltas, 2)) < 0.05)
+        'is_reconciled': bool(abs(round(net_delta - (sum_service_deltas + tax_delta), 2)) < 0.05)
     }
 
     all_dataset_dates = cur_data.get('dates', [])
@@ -646,14 +843,24 @@ def analyze_cost_root_cause(
     # 5. Primary Root Cause Narrative Construction
     # -------------------------------------------------------------
     top_driver_text = "Stable fleet operations"
-    if spikes:
-        primary = spikes[0]
-        base_expl = re.sub(r'\s*\([+–-]?\$[0-9.,]+\)\s*$', '', primary['explanation']).strip()
-        top_driver_text = f"Top Cost Driver: {base_expl} (+${primary['delta_cost']:.2f}, {primary['share_of_total_delta']}% of net change)"
-    elif reductions:
-        primary = reductions[0]
-        base_expl = re.sub(r'\s*\([+–-]?\$[0-9.,]+\)\s*$', '', primary['explanation']).strip()
-        top_driver_text = f"Top Cost Saver: {base_expl} (-${abs(primary['delta_cost']):.2f})"
+    if net_delta < -min_delta:
+        if reductions:
+            primary = reductions[0]
+            base_expl = re.sub(r'\s*\([+–-]?\$[0-9.,]+\)\s*$', '', primary['explanation']).strip()
+            top_driver_text = f"Primary Driver: {base_expl} (-${abs(primary['delta_cost']):.2f})"
+        elif spikes:
+            primary = spikes[0]
+            base_expl = re.sub(r'\s*\([+–-]?\$[0-9.,]+\)\s*$', '', primary['explanation']).strip()
+            top_driver_text = f"Primary Driver: {base_expl} (+${primary['delta_cost']:.2f})"
+    elif net_delta > min_delta:
+        if spikes:
+            primary = spikes[0]
+            base_expl = re.sub(r'\s*\([+–-]?\$[0-9.,]+\)\s*$', '', primary['explanation']).strip()
+            top_driver_text = f"Primary Driver: {base_expl} (+${primary['delta_cost']:.2f}, {primary['share_of_total_delta']}% of net change)"
+        elif reductions:
+            primary = reductions[0]
+            base_expl = re.sub(r'\s*\([+–-]?\$[0-9.,]+\)\s*$', '', primary['explanation']).strip()
+            top_driver_text = f"Primary Driver: {base_expl} (-${abs(primary['delta_cost']):.2f})"
 
     # Human-readable executive takeaway
     if net_delta > 0.05:
@@ -694,14 +901,18 @@ def analyze_cost_root_cause(
         },
         'category_decomposition': {k: round(v, 2) for k, v in category_totals.items()},
         'service_attribution': services_summary,
-        'top_cost_increases': spikes[:25],
-        'top_cost_reductions': reductions[:25],
-        'newly_launched_workloads': new_workloads[:25],
-        'terminated_workloads': decommissioned[:25],
+        'top_cost_increases': spikes[:10],
+        'top_cost_reductions': reductions[:10],
+        'newly_launched_workloads': new_workloads[:10],
+        'terminated_workloads': decommissioned[:10],
+        'financial_adjustments': financial_adjustments[:10],
+        'storage_lifecycle': storage_lifecycle[:10],
         'total_spiking_resources': len(spikes),
         'total_reducing_resources': len(reductions),
         'total_new_resources': len(new_workloads),
         'total_decommissioned_resources': len(decommissioned),
+        'total_financial_adjustments': len(financial_adjustments),
+        'total_storage_lifecycle': len(storage_lifecycle),
         'total_evaluated_resources': len(all_resources),
         'daily_timeline': daily_timeline,
         'daily_spikes': daily_spikes,

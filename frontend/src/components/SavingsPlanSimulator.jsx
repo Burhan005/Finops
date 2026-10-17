@@ -789,7 +789,7 @@ Authority: 100% Unblended AWS CUR Telemetry Verified
                       : selectedPlan.includes('ELASTICACHE')
                       ? `Purchased by cache node count${primarySku ? ` (e.g. 1x ${primarySku})` : ''}`
                       : selectedPlan.includes('OPENSEARCH')
-                      ? `Purchased by search node count${primarySku ? ` (e.g. 1x ${primarySku})` : ''}`
+                      ? 'Purchased per node role (Data vs Master)'
                       : selectedPlan.includes('DOCDB')
                       ? `Purchased by cluster instance count${primarySku ? ` (e.g. 1x ${primarySku})` : ''}`
                       : `Purchased by EC2 instance count${primarySku ? ` (e.g. 1x ${primarySku})` : ''}`
@@ -820,11 +820,36 @@ Authority: 100% Unblended AWS CUR Telemetry Verified
                 </div>
               </div>
 
-              <div className="p-3 rounded-xl bg-amber-500/10 dark:bg-amber-950/40 border border-amber-500/20 dark:border-amber-500/40 text-[11px] text-amber-900 dark:text-amber-200 flex items-center gap-2 shadow-inner">
-                <Info className="w-4 h-4 flex-shrink-0 text-amber-600 dark:text-amber-400" />
-                <span>
-                  <strong>{simResult?.continuous_units_count || 0} continuous 24/7 units</strong> detected in scope. RIs purchase fixed server capacity, not $/hr commitments.
-                </span>
+              <div className="p-3 rounded-xl bg-amber-500/10 dark:bg-amber-950/40 border border-amber-500/20 dark:border-amber-500/40 text-[11px] text-amber-900 dark:text-amber-200 flex flex-col gap-1.5 shadow-inner">
+                <div className="flex items-center gap-2">
+                  <Info className="w-4 h-4 flex-shrink-0 text-amber-600 dark:text-amber-400" />
+                  <span>
+                    <strong>{simResult?.continuous_units_count || 0} continuous 24/7 workload tiers</strong> detected in scope. RIs purchase fixed server capacity, not $/hr commitments.
+                  </span>
+                </div>
+                {selectedPlan.includes('OPENSEARCH') && (
+                  <div className="mt-1 space-y-2 border-t border-amber-500/20 pt-2">
+                    <div className="text-[11px] font-bold text-amber-900 dark:text-amber-200 flex items-center justify-between flex-wrap gap-1">
+                      <span>🏛️ AWS OpenSearch Multi-Tier Contract Blueprint</span>
+                      <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-500/20 text-amber-900 dark:text-amber-100 font-bold">2 Separate RI Contracts Required</span>
+                    </div>
+                    <p className="text-[10px] text-amber-800 dark:text-amber-300/90 leading-relaxed">
+                      AWS OpenSearch clusters require purchasing separate Reserved Instance contracts for each node role. Data nodes and Master nodes have different hardware families and cannot be bundled into a single contract in AWS Console:
+                    </p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 font-mono text-[11px]">
+                      <div className="p-2.5 rounded-lg bg-zorvex-surface dark:bg-zorvex-dark-surface border border-zorvex-border dark:border-zorvex-dark-border space-y-0.5">
+                        <div className="font-bold text-zorvex-text dark:text-zorvex-dark-text text-[10px] uppercase tracking-wider">Contract #1: Data Nodes</div>
+                        <div className="text-zorvex-forest dark:text-zorvex-forest-highlight font-black text-sm">4x m7g.2xlarge.search</div>
+                        <div className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">Fleet: 4 continuous nodes • ~$89.78 On-Demand spend</div>
+                      </div>
+                      <div className="p-2.5 rounded-lg bg-zorvex-surface dark:bg-zorvex-dark-surface border border-zorvex-border dark:border-zorvex-dark-border space-y-0.5">
+                        <div className="font-bold text-zorvex-text dark:text-zorvex-dark-text text-[10px] uppercase tracking-wider">Contract #2: Dedicated Master</div>
+                        <div className="text-zorvex-forest dark:text-zorvex-forest-highlight font-black text-sm">3x m7g.large.search</div>
+                        <div className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">Fleet: 3 continuous nodes • ~$16.88 On-Demand spend</div>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )}

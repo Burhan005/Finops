@@ -91,13 +91,88 @@ def deduce_resource_root_cause(
     term: str = '',
     line_type: str = '',
     sp_arn: str = '',
-    last_seen: str = ''
+    last_seen: str = '',
+    line_types: Optional[Any] = None
 ) -> str:
     """Individual resource engineering root cause synthesis matching finops_analyzer.py"""
     usage_types = usage_types or []
     ut_lower = " ".join(u.lower() for u in usage_types)
     res_lower = res_id.lower()
     last_str = f" [Last active: {last_seen}]" if last_seen else ""
+
+    ltypes_set = set(line_types or [])
+    if line_type:
+        ltypes_set.add(line_type)
+
+    # 0a. Invoiced Statutory Taxes (India GST, etc.)
+    is_tax = (
+        'Tax' in ltypes_set or
+        any(t.lower() == 'tax' for t in ltypes_set) or
+        res_id.startswith('TAX-') or
+        service in ('Taxes & Surcharges', 'Tax') or
+        'gst' in ut_lower or
+        'tax' in ut_lower
+    )
+    if is_tax:
+        if cost_base > 0 and cost_target == 0:
+            return f"INVOICE TAX: Statutory tax levy billed on baseline period (${cost_base:.2f}) - invoice adjustment, not infrastructure change"
+        elif cost_base == 0 and cost_target > 0:
+            return f"INVOICE TAX: Statutory tax levy billed on target period (+${cost_target:.2f})"
+        elif diff != 0:
+            return f"INVOICE TAX: Statutory tax adjustment ({'+' if diff > 0 else ''}${diff:.2f})"
+        return "INVOICE TAX: Steady statutory tax allocation"
+
+    # 0b. Reserved Instance and Savings Plan Commitment Recurring Fees
+    is_commitment = (
+        any(t in ('RIFee', 'SavingsPlanRecurringFee', 'Fee') for t in ltypes_set) or
+        'rifee' in ut_lower or
+        term == 'Reserved' or
+        (res_id.startswith('No-Resource-ID') and any(s in service for s in ['RDS', 'EC2', 'Redshift', 'OpenSearch']) and any(t in ('RIFee', 'Fee') for t in ltypes_set))
+    )
+    if is_commitment:
+        fee_name = "Reserved Instance" if (any(t == 'RIFee' for t in ltypes_set) or 'rifee' in ut_lower or term == 'Reserved') else "Commitment"
+        if cost_base > 0 and cost_target == 0:
+            return f"COMMITMENT CHARGE: Monthly {fee_name} recurring fee billed on baseline period (${cost_base:.2f}) - contract commitment, not infrastructure deletion"
+        elif cost_base == 0 and cost_target > 0:
+            return f"COMMITMENT CHARGE: Monthly {fee_name} recurring fee billed on target period (+${cost_target:.2f})"
+        elif diff != 0:
+            return f"COMMITMENT CHARGE: {fee_name} recurring fee variance ({'+' if diff > 0 else ''}${diff:.2f})"
+        return f"COMMITMENT CHARGE: Steady {fee_name} recurring allocation"
+
+    # 0c. Account-Level Unallocated Operational Usage (e.g. GuardDuty, CloudWatch without resource ID)
+    if res_id.startswith('No-Resource-ID'):
+        if cost_base > 0 and cost_target == 0:
+            return f"UNALLOCATED USAGE: Unassigned operational usage on {service or 'workload'} ceased (-${cost_base:.4f}) - usage-level variance, not physical instance"
+        elif cost_base == 0 and cost_target > 0:
+            return f"UNALLOCATED USAGE: Unassigned operational usage on {service or 'workload'} began (+${cost_target:.4f})"
+        elif diff != 0:
+            return f"UNALLOCATED USAGE: Unassigned operational usage on {service or 'workload'} shifted ({'+' if diff > 0 else ''}${diff:.4f})"
+        return f"UNALLOCATED USAGE: Steady {service or 'workload'} unassigned baseline"
+
+    # 0d. Periodic Domain & Configuration Fees (e.g. Route 53 Hosted Zone monthly domain fee)
+    if 'hostedzone' in res_lower and 'hostedzone' in ut_lower:
+        if cost_base > 0 and cost_target == 0:
+            return f"DNS CONFIGURATION: Monthly Route 53 hosted zone fee billed on baseline period (${cost_base:.2f}) - active hosted zone"
+
+    # 0e. Backup & Snapshot Storage Assets (Storage lifecycles, not compute terminations)
+    is_storage_asset = (
+        ':snapshot/' in res_lower or
+        ':snapshot:' in res_lower or
+        res_id.startswith('snap-') or
+        'timedstorage' in ut_lower or
+        ('backup' in ut_lower and ('rds' in service.lower() or ':db:' in res_lower))
+    )
+    if is_storage_asset and cost_base > 0 and cost_target == 0:
+        return f"STORAGE RETENTION: Backup/snapshot storage volume ceased incurring charges{last_str} (Saved -${cost_base:.4f})"
+
+    # 0f. API / Request Services Activity Subsidence (SNS, SQS, CloudFront request traffic)
+    is_request_service = (
+        service in ('Amazon SNS', 'Amazon SQS', 'Amazon CloudFront') or
+        any(k in ut_lower for k in ['requests', 'queries', 'datapayments', 'apicalls']) or
+        res_lower.startswith(('arn:aws:sns:', 'arn:aws:sqs:', 'arn:aws:cloudfront:'))
+    )
+    if is_request_service and cost_base > 0 and cost_target == 0:
+        return f"USAGE ACTIVITY: Operational traffic or API calls subsided to zero on {service} (-${cost_base:.4f})"
 
     # Helper to extract EC2 instance size
     inst_size = ""
@@ -293,7 +368,7 @@ def compare_dates(cur_data: Dict[str, Any], baseline_date: str, target_date: str
     # Resource-level comparison
     res_base = defaultdict(lambda: {
         'cost': 0.0, 'service': '', 'name': '', 'short_id': '', 'usage_types': set(),
-        'term': '', 'line_type': '', 'sp_arn': '', 'last_seen': ''
+        'term': '', 'line_types': set(), 'sp_arn': '', 'last_seen': ''
     })
     for r in baseline_records:
         rid = r['resource_id']
@@ -304,13 +379,14 @@ def compare_dates(cur_data: Dict[str, Any], baseline_date: str, target_date: str
             res_base[rid]['name'] = r['name']
         res_base[rid]['usage_types'].add(r['usage_type'])
         res_base[rid]['term'] = r.get('term', '')
-        res_base[rid]['line_type'] = r.get('line_type', '')
+        if r.get('line_type'):
+            res_base[rid]['line_types'].add(r.get('line_type'))
         res_base[rid]['sp_arn'] = r.get('sp_arn', '')
         res_base[rid]['last_seen'] = r.get('timestamp', '')
 
     res_target = defaultdict(lambda: {
         'cost': 0.0, 'service': '', 'name': '', 'short_id': '', 'usage_types': set(),
-        'term': '', 'line_type': '', 'sp_arn': '', 'last_seen': ''
+        'term': '', 'line_types': set(), 'sp_arn': '', 'last_seen': ''
     })
     for r in target_records:
         rid = r['resource_id']
@@ -321,7 +397,8 @@ def compare_dates(cur_data: Dict[str, Any], baseline_date: str, target_date: str
             res_target[rid]['name'] = r['name']
         res_target[rid]['usage_types'].add(r['usage_type'])
         res_target[rid]['term'] = r.get('term', '')
-        res_target[rid]['line_type'] = r.get('line_type', '')
+        if r.get('line_type'):
+            res_target[rid]['line_types'].add(r.get('line_type'))
         res_target[rid]['sp_arn'] = r.get('sp_arn', '')
         res_target[rid]['last_seen'] = r.get('timestamp', '')
 
@@ -329,6 +406,7 @@ def compare_dates(cur_data: Dict[str, Any], baseline_date: str, target_date: str
     spikes = []
     new_resources = []
     reduced_resources = []
+    financial_adjustments = []
     unchanged_resources = []
 
     # Threshold for micro-dollar spikes (0.0005 captures ENI IPv4, EBS gp3, etc.)
@@ -345,8 +423,9 @@ def compare_dates(cur_data: Dict[str, Any], baseline_date: str, target_date: str
         name = t_info.get('name') or b_info.get('name') or ''
         short_id = t_info.get('short_id') or b_info.get('short_id') or (rid.split('/')[-1] if '/' in rid else rid)
         utypes = list((t_info.get('usage_types') or set()) | (b_info.get('usage_types') or set()))
+        ltypes = (t_info.get('line_types') or set()) | (b_info.get('line_types') or set())
+        ltype = list(ltypes)[0] if ltypes else ''
         term = t_info.get('term') or b_info.get('term') or ''
-        ltype = t_info.get('line_type') or b_info.get('line_type') or ''
         sp_arn = t_info.get('sp_arn') or b_info.get('sp_arn') or ''
         last_seen = t_info.get('last_seen') or b_info.get('last_seen') or ''
 
@@ -363,7 +442,8 @@ def compare_dates(cur_data: Dict[str, Any], baseline_date: str, target_date: str
             term=term,
             line_type=ltype,
             sp_arn=sp_arn,
-            last_seen=last_seen
+            last_seen=last_seen,
+            line_types=ltypes
         )
 
         item = {
@@ -381,29 +461,119 @@ def compare_dates(cur_data: Dict[str, Any], baseline_date: str, target_date: str
             'root_cause': root_cause
         }
 
-        if cb == 0.0 and ct > 0.0:
-            item['event_type'] = 'NEW_LAUNCH'
-            new_resources.append(item)
-            spikes.append(item)
-        elif cb > 0.0 and ct == 0.0:
-            item['event_type'] = 'TERMINATED_OR_STOPPED'
-            reduced_resources.append(item)
-        elif diff > MICRO_THRESHOLD:
-            item['event_type'] = 'USAGE_INCREASE'
-            spikes.append(item)
-        elif diff < -MICRO_THRESHOLD:
-            item['event_type'] = 'USAGE_DECREASE'
-            reduced_resources.append(item)
+        # Check line item semantics
+        ut_lower = " ".join(u.lower() for u in utypes)
+        res_lower = rid.lower()
+
+        is_tax_item = (
+            'Tax' in ltypes or
+            any(t.lower() == 'tax' for t in ltypes) or
+            rid.startswith('TAX-') or
+            svc in ('Taxes & Surcharges', 'Tax') or
+            'gst' in ut_lower or
+            'tax' in ut_lower
+        )
+        is_commitment_item = (
+            any(t in ('RIFee', 'SavingsPlanRecurringFee', 'Fee') for t in ltypes) or
+            'rifee' in ut_lower or
+            term == 'Reserved' or
+            (rid.startswith('No-Resource-ID') and any(s in svc for s in ['RDS', 'EC2', 'Redshift', 'OpenSearch']) and any(t in ('RIFee', 'Fee') for t in ltypes))
+        )
+        is_hostedzone_fee = ('hostedzone' in res_lower and 'hostedzone' in ut_lower and cb > 0 and ct == 0)
+        is_unallocated = rid.startswith('No-Resource-ID') and not is_commitment_item and not is_tax_item
+        is_storage_asset = (
+            ':snapshot/' in res_lower or
+            ':snapshot:' in res_lower or
+            res_lower.startswith('snap-') or
+            'timedstorage' in ut_lower or
+            ('backup' in ut_lower and ('rds' in svc.lower() or ':db:' in res_lower))
+        )
+
+        if is_tax_item:
+            item['category'] = 'TAX'
+            item['event_type'] = 'TAX_ADJUSTMENT'
+            if abs(diff) > MICRO_THRESHOLD:
+                financial_adjustments.append(item)
+            else:
+                unchanged_resources.append(item)
+        elif is_commitment_item:
+            item['category'] = 'COMMITMENT_FEE'
+            item['event_type'] = 'COMMITMENT_ADJUSTMENT'
+            if abs(diff) > MICRO_THRESHOLD:
+                financial_adjustments.append(item)
+            else:
+                unchanged_resources.append(item)
+        elif is_hostedzone_fee:
+            item['category'] = 'PERIODIC_FEE'
+            item['event_type'] = 'BILLING_SCHEDULE_ADJUSTMENT'
+            financial_adjustments.append(item)
+        elif is_storage_asset:
+            item['category'] = 'STORAGE_LIFECYCLE'
+            if cb == 0.0 and ct > 0.0:
+                item['event_type'] = 'STORAGE_EXPANSION'
+                new_resources.append(item)
+                spikes.append(item)
+            elif cb > 0.0 and ct == 0.0:
+                item['event_type'] = 'STORAGE_REDUCTION'
+                reduced_resources.append(item)
+            elif diff > MICRO_THRESHOLD:
+                item['event_type'] = 'USAGE_INCREASE'
+                spikes.append(item)
+            elif diff < -MICRO_THRESHOLD:
+                item['event_type'] = 'USAGE_DECREASE'
+                reduced_resources.append(item)
+            else:
+                item['event_type'] = 'NO_CHANGE'
+                unchanged_resources.append(item)
+        elif is_unallocated:
+            item['category'] = 'UNALLOCATED_USAGE'
+            if diff > MICRO_THRESHOLD:
+                item['event_type'] = 'USAGE_INCREASE'
+                spikes.append(item)
+            elif diff < -MICRO_THRESHOLD:
+                item['event_type'] = 'USAGE_DECREASE'
+                reduced_resources.append(item)
+            else:
+                item['event_type'] = 'NO_CHANGE'
+                unchanged_resources.append(item)
         else:
-            item['event_type'] = 'NO_CHANGE'
-            unchanged_resources.append(item)
+            # Physical computing infrastructure
+            item['category'] = 'PHYSICAL_WORKLOAD'
+            if cb == 0.0 and ct > 0.0:
+                item['event_type'] = 'NEW_LAUNCH'
+                new_resources.append(item)
+                spikes.append(item)
+            elif cb > 0.0 and ct == 0.0:
+                item['event_type'] = 'TERMINATED_OR_STOPPED'
+                reduced_resources.append(item)
+            elif diff > MICRO_THRESHOLD:
+                item['event_type'] = 'USAGE_INCREASE'
+                spikes.append(item)
+            elif diff < -MICRO_THRESHOLD:
+                item['event_type'] = 'USAGE_DECREASE'
+                reduced_resources.append(item)
+            else:
+                item['event_type'] = 'NO_CHANGE'
+                unchanged_resources.append(item)
 
     spikes.sort(key=lambda x: x['delta_cost'], reverse=True)
     reduced_resources.sort(key=lambda x: x['delta_cost'])
     new_resources.sort(key=lambda x: x['target_cost'], reverse=True)
+    financial_adjustments.sort(key=lambda x: abs(x['delta_cost']), reverse=True)
 
-    # Day's Primary Event Narrative (matching finops_analyzer.py daily timeline)
-    if spikes:
+    # Narrative synthesis: separate operational changes from monthly commitments & taxes
+    commitment_delta = sum(a['delta_cost'] for a in financial_adjustments if a.get('category') == 'COMMITMENT_FEE')
+    tax_delta = sum(a['delta_cost'] for a in financial_adjustments if a.get('category') == 'TAX')
+    operational_delta = sum(s['delta_cost'] for s in spikes) + sum(r['delta_cost'] for r in reduced_resources)
+
+    if (abs(commitment_delta) + abs(tax_delta) > 50.0) and (abs(commitment_delta) + abs(tax_delta) > abs(operational_delta) * 1.5):
+        parts = []
+        if abs(commitment_delta) > 0.01:
+            parts.append(f"periodic RI commitment charges (${abs(commitment_delta):,.2f})")
+        if abs(tax_delta) > 0.01:
+            parts.append(f"statutory taxes (${abs(tax_delta):,.2f})")
+        primary_event = f"Billing Schedule Notice: Baseline ({baseline_date}) includes {' and '.join(parts)}; operational workload delta was {operational_delta:+,.2f}."
+    elif spikes:
         primary_spiker = spikes[0]
         primary_event = f"Primary Driver: {primary_spiker['root_cause']}"
     elif reduced_resources:
@@ -426,9 +596,14 @@ def compare_dates(cur_data: Dict[str, Any], baseline_date: str, target_date: str
         'top_spikes': spikes[:30],
         'new_resources': new_resources[:30],
         'reduced_resources': reduced_resources[:30],
+        'financial_adjustments': financial_adjustments[:30],
         'total_spiking_resources': len(spikes),
         'total_reduced_resources': len(reduced_resources),
-        'total_new_resources': len(new_resources)
+        'total_new_resources': len(new_resources),
+        'total_financial_adjustments': len(financial_adjustments),
+        'operational_delta': round(operational_delta, 2),
+        'commitment_delta': round(commitment_delta, 2),
+        'tax_delta': round(tax_delta, 2)
     }
 
 

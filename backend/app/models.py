@@ -99,10 +99,20 @@ class DatasetRecord(Base):
     uploaded_at = Column(DateTime, default=utc_now)
     notes = Column(Text, nullable=True)
 
+    # Phase 1: Logical export identity, billing period, and revision tracking
+    billing_period_start = Column(String(32), index=True, nullable=True)
+    billing_period_end = Column(String(32), index=True, nullable=True)
+    payer_account_id = Column(String(64), index=True, nullable=True)
+    assembly_id = Column(String(128), index=True, nullable=True)
+    manifest_metadata = Column(Text, nullable=True)
+    revision_version = Column(Integer, default=1)
+    superseded_dataset_id = Column(Integer, ForeignKey("datasets.id", ondelete="SET NULL"), nullable=True)
+
     billing_records = relationship("BillingRecord", back_populates="dataset", cascade="all, delete-orphan")
 
     __table_args__ = (
         Index("ix_datasets_org_active", "organization_id", "is_active"),
+        Index("ix_datasets_org_period", "organization_id", "billing_period_start", "billing_period_end"),
     )
 
 
@@ -112,6 +122,7 @@ class BillingRecord(Base):
     id = Column(Integer, primary_key=True, index=True)
     organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), index=True, nullable=False)
     dataset_id = Column(Integer, ForeignKey("datasets.id", ondelete="CASCADE"), index=True, nullable=False)
+    line_item_id = Column(String(255), index=True, nullable=True)   # Source identity/LineItemId
     usage_date = Column(String(16), index=True, nullable=False)      # YYYY-MM-DD
     usage_month = Column(String(16), index=True, nullable=False)     # YYYY-MM
     usage_hour = Column(String(8), default="00:00")
@@ -136,6 +147,7 @@ class BillingRecord(Base):
         Index("ix_billing_records_dataset_service", "dataset_id", "service", "cost"),
         Index("ix_billing_records_dataset_date", "dataset_id", "usage_date", "cost"),
         Index("ix_billing_records_dataset_resource", "dataset_id", "resource_id", "cost"),
+        Index("ix_billing_records_dataset_line_item", "dataset_id", "line_item_id"),
     )
 
 

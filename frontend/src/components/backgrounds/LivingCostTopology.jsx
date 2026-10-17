@@ -146,7 +146,7 @@ export default function LivingCostTopology({
       lastTimeRef.current = timestamp;
 
       if (!width || !height || width <= 10 || height <= 10 || !Number.isFinite(width) || !Number.isFinite(height)) {
-        animId = requestAnimationFrame(render);
+        animFrameRef.current = requestAnimationFrame(render);
         return;
       }
 

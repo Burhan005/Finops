@@ -115,16 +115,17 @@ export default function Navbar({
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
 
-  // Dataset Options
-  const allFiles = [
-    ...(datasets?.samples || []),
-    ...(datasets?.uploads || [])
-  ];
+  // Dataset Options (Uploads strictly supersede any sample fixture with identical name)
+  const uploads = datasets?.uploads || [];
+  const uploadedFilenames = new Set(uploads.map((u) => u.filename));
+  const samples = (datasets?.samples || []).filter((s) => !uploadedFilenames.has(s.filename));
+
+  const allFiles = [...uploads, ...samples];
 
   const datasetOptions = allFiles.map((file) => ({
     value: file.filename,
     label: file.filename,
-    subtext: `${file.type === 'sample' || file.type === 'demo_fixture' ? 'Sample dataset' : 'Uploaded'} • ${file.size_kb} KB`
+    subtext: `${file.type === 'upload' ? 'Uploaded' : 'Sample dataset'} • ${file.size_kb} KB`
   }));
 
   // =========================================================================

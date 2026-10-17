@@ -387,7 +387,7 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
         } else if (bStart < earliestDate) {
           baselineStatus = 'PARTIAL';
           const availDays = dates.filter(d => d >= earliestDate && d <= bEnd).length;
-          baselineNote = `Preceding period partially truncated: ${availDays} of ${durationDays} days available in dataset.`;
+          baselineNote = `Dataset Boundary Note: Selected target spans ${durationDays} days (${tStart} to ${tEnd}), but this CUR starts on ${earliestDate}. Baseline compares all ${availDays} available preceding days (${earliestDate} to ${bEnd}).`;
           bStart = earliestDate;
           isLikeForLike = false;
         }
@@ -504,6 +504,24 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
     const rid = (res.resource_id || '').toLowerCase();
     const svc = (res.service || '').toLowerCase();
     const exp = (res.explanation || '').toLowerCase();
+    const cat = (res.change_category || res.category || '').toLowerCase();
+
+    // 0. Commitments & Taxes (RI Fees, Savings Plans, Invoiced Taxes, Domain Fees)
+    if (
+      cat === 'billing_fee_or_tax' ||
+      cat === 'commitment_fee' ||
+      cat === 'commitment_adjustment' ||
+      cat === 'tax_adjustment' ||
+      cat === 'tax' ||
+      cat === 'unallocated_usage' ||
+      rid.startsWith('tax-') ||
+      rid.startsWith('no-resource-id') ||
+      exp.includes('tax') ||
+      exp.includes('commitment') ||
+      exp.includes('reserved instance')
+    ) {
+      return { id: 'commitment', label: 'Commitments & Taxes', icon: FileText, badge: 'tax/fee' };
+    }
 
     // 1. EC2 Virtual Instances
     if (sid.startsWith('i-') || (svc.includes('ec2') && (sid.startsWith('i-') || exp.includes('instance')))) {
@@ -525,15 +543,19 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
     if (svc.includes('rds') || sid.includes('db:') || rid.includes(':db:') || exp.includes('rds')) {
       return { id: 'database', label: 'RDS Databases', icon: Database, badge: 'db' };
     }
-    // 6. S3 Buckets
+    // 6. OpenSearch Clusters
+    if (svc.includes('opensearch') || svc.includes('elasticsearch') || rid.includes(':domain/') || rid.includes(':es:') || sid.includes('opensearch')) {
+      return { id: 'opensearch', label: 'OpenSearch Clusters', icon: Search, badge: 'search' };
+    }
+    // 7. S3 Buckets
     if (svc.includes('s3') || rid.startsWith('arn:aws:s3:::') || sid.startsWith('s3:')) {
       return { id: 'bucket', label: 'S3 Buckets', icon: HardDrive, badge: 's3' };
     }
-    // 7. CloudFront CDN
-    if (svc.includes('cloudfront') || (sid.startsWith('e') && sid.length >= 12)) {
+    // 8. CloudFront CDN (Strict match: uppercase E followed by 11-15 hex/alphanumeric characters, or service is CloudFront)
+    if (svc.includes('cloudfront') || (/^E[A-Z0-9]{11,15}$/.test(sid))) {
       return { id: 'cloudfront', label: 'CloudFront CDN', icon: Globe, badge: 'cdn' };
     }
-    // 8. AWS Lambda
+    // 9. AWS Lambda
     if (svc.includes('lambda') || rid.includes(':function:')) {
       return { id: 'lambda', label: 'Lambda Functions', icon: Zap, badge: 'fn' };
     }
@@ -1055,9 +1077,14 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
         )}
 
         {currentWindows.baseline_status === 'PARTIAL' && (
-          <div className="p-3.5 rounded-xl bg-blue-500/10 border border-blue-500/30 text-blue-800 dark:text-blue-200 flex items-center gap-2 text-xs font-semibold">
-            <AlertTriangle className="w-4 h-4 text-blue-600 flex-shrink-0" />
-            <span>{currentWindows.baseline_note}</span>
+          <div className="p-3.5 rounded-xl bg-blue-500/10 border border-blue-500/30 text-blue-800 dark:text-blue-200 flex items-start gap-2 text-xs font-semibold">
+            <Info className="w-4 h-4 text-blue-600 flex-shrink-0 mt-0.5" />
+            <div>
+              <span>{currentWindows.baseline_note}</span>
+              <span className="block text-[11px] text-blue-700/80 dark:text-blue-300/80 font-normal mt-0.5">
+                💡 Tip: For an exact equal-duration (1-to-1) comparison, select a {currentWindows.duration_days ? Math.min(currentWindows.duration_days, 7) : 7}-day target range or choose <strong>Custom Baseline</strong>.
+              </span>
+            </div>
           </div>
         )}
       </div>

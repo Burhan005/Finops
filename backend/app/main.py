@@ -4,6 +4,7 @@ Multi-Tenant Architecture with Scoped Analytics, Cryptographic Reset Security,
 Decompression Bomb & Path Traversal Immunity, and Normalized SQLite Persistence.
 """
 
+import json
 import os
 import glob
 import shutil
@@ -41,8 +42,12 @@ from .savings_ledger import (
     sync_recommendations_to_ledger, update_recommendation_status, 
     get_ledger_records, get_executive_ledger_summary
 )
+from decimal import Decimal
 from .ai_analyst import ask_zorvex_analyst
-from .parser import parse_cur_file, parse_cur_files, merge_cur_files
+from .parser import (
+    parse_cur_file, parse_cur_files, merge_cur_files, round_currency,
+    parse_cur_manifest, validate_multipart_cur_export
+)
 from .analytics import compare_dates, get_trend_data, calculate_daily_delta, compare_months
 from .recommendations import generate_recommendations
 from .exporter import generate_executive_html, generate_executive_excel
@@ -51,11 +56,17 @@ from .forex import fetch_live_usd_to_inr
 from .resource_explorer import query_resource_explorer, get_available_hierarchies, get_resource_detail
 from .root_cause import analyze_cost_root_cause
 from .cache import global_cache
+from .repository import BillingRepository
 
 logger = logging.getLogger(__name__)
 
 # Initialize DB tables
 Base.metadata.create_all(bind=engine)
+try:
+    from .migrate import ensure_schema_compatibility
+    ensure_schema_compatibility(engine)
+except Exception as e:
+    logger.warning("Database schema compatibility check notice: %s", e)
 
 app = FastAPI(
     title="ZORVEX FinOps Clay Platform API",
@@ -63,10 +74,25 @@ app = FastAPI(
     description="Enterprise AWS Cost & Usage Analysis Engine with Multi-Tenant Isolation and Hardened Security"
 )
 
-# CORS setup
+# CORS setup with explicit, environment-configurable origin allowlist
+DEFAULT_CORS_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+
+cors_env = os.getenv("CORS_ORIGINS", "").strip()
+if cors_env:
+    CORS_ALLOWED_ORIGINS = [o.strip() for o in cors_env.split(",") if o.strip()]
+    # Ensure default development origins are preserved unless explicitly excluded
+    for def_orig in DEFAULT_CORS_ORIGINS:
+        if def_orig not in CORS_ALLOWED_ORIGINS:
+            CORS_ALLOWED_ORIGINS.append(def_orig)
+else:
+    CORS_ALLOWED_ORIGINS = list(DEFAULT_CORS_ORIGINS)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -150,6 +176,11 @@ def org_dataset_put(org_id: int, entry: Dict[str, Any]):
             ORG_DATASETS.popitem(last=False)
         ORG_DATASETS[org_id] = entry
 
+def org_dataset_del(org_id: int):
+    """Evicts an entry from ORG_DATASETS."""
+    with _ORG_DATASETS_LOCK:
+        ORG_DATASETS.pop(org_id, None)
+
 _RECS_CACHE: OrderedDict[str, Dict[str, Any]] = OrderedDict()
 _RECS_LOCK = threading.Lock()
 _LEDGER_SYNCED_SETS = set()
@@ -177,28 +208,19 @@ def load_initial_dataset():
     chosen = None
     db = next(get_db())
     try:
-        active_rec = db.query(DatasetRecord).filter(DatasetRecord.is_active == 1).order_by(DatasetRecord.id.desc()).first()
+        # Resolve active dataset record for default organization (org_id=1) first
+        active_rec = db.query(DatasetRecord).filter(
+            DatasetRecord.organization_id == 1,
+            DatasetRecord.is_active == 1
+        ).order_by(DatasetRecord.id.desc()).first()
+        if not active_rec:
+            active_rec = db.query(DatasetRecord).filter(DatasetRecord.is_active == 1).order_by(DatasetRecord.id.desc()).first()
         if active_rec and active_rec.filepath and os.path.exists(active_rec.filepath):
             chosen = active_rec.filepath
     except Exception as e:
-        print(f"Active record lookup warning: {e}")
+        logger.warning("Active record lookup warning: %s", e)
     finally:
         db.close()
-
-    if not chosen:
-        samples = glob.glob(os.path.join(SAMPLES_DIR, '*.csv')) + glob.glob(os.path.join(SAMPLES_DIR, '*.csv.gz'))
-        if samples:
-            for s in samples:
-                if 'CUR-Report-Daily' in s:
-                    chosen = s
-                    break
-            if not chosen:
-                for s in samples:
-                    if 'production_exact' in s or 'ultimate_master' in s:
-                        chosen = s
-                        break
-            if not chosen:
-                chosen = samples[0]
 
     if chosen and os.path.exists(chosen):
         try:
@@ -211,9 +233,14 @@ def load_initial_dataset():
             cache_put_parsed(chosen, parsed)
             cache_put_parsed(norm_path, parsed)
             cache_put_parsed(f"{norm_path}_{mtime}", parsed)
-            print(f" Loaded initial dataset: {os.path.basename(chosen)} (${parsed['total_cost']})")
+            logger.info("Loaded active dataset: %s ($%s)", os.path.basename(chosen), parsed.get('total_cost'))
         except Exception as e:
-            print(f"Failed to load initial dataset {chosen}: {e}")
+            logger.warning("Failed to load active dataset %s: %s", chosen, e)
+    else:
+        CURRENT_DATASET['filename'] = None
+        CURRENT_DATASET['filepath'] = None
+        CURRENT_DATASET['data'] = None
+        logger.info("No active dataset in database. Application initialized in clean empty state.")
 
 load_initial_dataset()
 
@@ -455,7 +482,7 @@ def get_active_dataset_for_org(org: Optional[Organization], db: Session) -> Dict
 
                     parsed = cache_get_parsed(cache_key)
                     if parsed is None:
-                        if norm_path == os.path.abspath(CURRENT_DATASET.get('filepath', '')) and CURRENT_DATASET.get('data'):
+                        if CURRENT_DATASET.get('data') and CURRENT_DATASET.get('filepath') and norm_path == os.path.abspath(CURRENT_DATASET['filepath']):
                             parsed = CURRENT_DATASET['data']
                             cache_put_parsed(cache_key, parsed)
                         else:
@@ -463,6 +490,7 @@ def get_active_dataset_for_org(org: Optional[Organization], db: Session) -> Dict
                             cache_put_parsed(cache_key, parsed)
 
                     entry = {
+                        'id': active_rec.id,
                         'filename': active_rec.filename,
                         'filepath': active_filepath,
                         'mtime': mtime,
@@ -473,7 +501,18 @@ def get_active_dataset_for_org(org: Optional[Organization], db: Session) -> Dict
                 except Exception as e:
                     logger.warning("Failed to parse cached dataset for org %s: %s", org.id, e)
 
-        # If org has no active record, isolate a dedicated copy for this org
+        if active_rec:
+            if not active_filepath:
+                org_dataset_del(org.id)
+                global_cache.invalidate_org(org.id)
+                return {
+                    'id': active_rec.id,
+                    'filename': active_rec.filename,
+                    'filepath': active_rec.filepath or '',
+                    'data': None
+                }
+
+        # If org has no active record, isolate a dedicated copy for this org if CURRENT_DATASET has a valid file
         if CURRENT_DATASET.get('filepath') and os.path.exists(CURRENT_DATASET['filepath']):
             cached_org = org_dataset_get(org.id)
             if not cached_org or not cached_org.get('data'):
@@ -486,7 +525,54 @@ def get_active_dataset_for_org(org: Optional[Organization], db: Session) -> Dict
                 org_dataset_put(org.id, cached_org)
             return cached_org
 
-    return CURRENT_DATASET
+        org_dataset_del(org.id)
+        global_cache.invalidate_org(org.id)
+        return {
+            'id': None,
+            'filename': None,
+            'filepath': None,
+            'data': None
+        }
+
+    return CURRENT_DATASET or {
+        'id': None,
+        'filename': None,
+        'filepath': None,
+        'data': None
+    }
+
+
+def get_billing_repository(org: Optional[Organization], dataset: Dict[str, Any], db: Session) -> BillingRepository:
+    """
+    Instantiates BillingRepository bound to the organization and active dataset record.
+    Supports both uploaded datasets and active catalog demo fixtures.
+    """
+    org_id = org.id if org else 1
+    ds_id = dataset.get('id')
+    d_rec = None
+    if ds_id is None:
+        fname = dataset.get('filename')
+        if fname:
+            d_rec = db.query(DatasetRecord).filter(
+                DatasetRecord.organization_id == org_id,
+                DatasetRecord.filename == fname,
+                DatasetRecord.is_active == 1
+            ).order_by(DatasetRecord.id.desc()).first()
+            if not d_rec:
+                # Fallback to shared demo sample fixture scoped to org_id if exists
+                d_rec = db.query(DatasetRecord).filter(
+                    DatasetRecord.organization_id == org_id,
+                    DatasetRecord.filename == fname
+                ).order_by(DatasetRecord.id.desc()).first()
+            if d_rec:
+                ds_id = d_rec.id
+    else:
+        d_rec = db.query(DatasetRecord).filter(DatasetRecord.id == ds_id).first()
+
+    repo = BillingRepository(db, org_id=org_id, dataset_id=ds_id)
+    repo.d_rec = d_rec
+    repo.parsed_data = dataset.get('data')
+    return repo
 
 
 # ==================== HEALTH API ====================
@@ -783,21 +869,10 @@ def list_datasets(
     user, org = auth
     active_ds = get_active_dataset_for_org(org, db)
     active_filename = active_ds.get('filename')
-
-    samples = []
-    for fp in glob.glob(os.path.join(SAMPLES_DIR, '*.*')):
-        if fp.endswith(('.csv', '.gz')):
-            size_kb = round(os.path.getsize(fp) / 1024, 1)
-            bname = os.path.basename(fp)
-            samples.append({
-                "filename": bname,
-                "type": "demo_fixture",
-                "provenance": "synthetic" if not bname.startswith("CUR-Report-Daily") else "demo_internal_telemetry",
-                "size_kb": size_kb,
-                "is_active": (bname == active_filename)
-            })
+    active_is_upload = bool(active_ds.get('id') is not None)
 
     uploads = []
+    uploaded_filenames = set()
     if org:
         records = db.query(DatasetRecord).filter(
             DatasetRecord.organization_id == org.id,
@@ -813,6 +888,23 @@ def list_datasets(
                 "total_cost": rec.total_cost,
                 "net_cost": rec.net_cost,
                 "is_active": bool(rec.is_active)
+            })
+            uploaded_filenames.add(rec.filename)
+
+    samples = []
+    for fp in glob.glob(os.path.join(SAMPLES_DIR, '*.*')):
+        if fp.endswith(('.csv', '.gz')):
+            bname = os.path.basename(fp)
+            # If organization has uploaded a dataset with the identical filename, supersede sample
+            if bname in uploaded_filenames:
+                continue
+            size_kb = round(os.path.getsize(fp) / 1024, 1)
+            samples.append({
+                "filename": bname,
+                "type": "demo_fixture",
+                "provenance": "synthetic" if not bname.startswith("CUR-Report-Daily") else "demo_internal_telemetry",
+                "size_kb": size_kb,
+                "is_active": (bname == active_filename and not active_is_upload)
             })
 
     return {
@@ -840,37 +932,19 @@ def select_dataset(
     if ".." in clean_fname.split(os.sep) or ".." in fname or os.path.isabs(fname) or ":" in fname:
         raise HTTPException(status_code=400, detail="Path traversal or absolute path injection rejected.")
 
-    # Canonical sample containment verification
-    canonical_samples_dir = os.path.realpath(SAMPLES_DIR)
-    candidate_sample_path = os.path.realpath(os.path.join(canonical_samples_dir, clean_fname))
-
-    try:
-        common_sample = os.path.commonpath([canonical_samples_dir, candidate_sample_path])
-        is_strictly_in_samples = (common_sample == canonical_samples_dir and candidate_sample_path != canonical_samples_dir)
-    except ValueError:
-        is_strictly_in_samples = False
-
-    is_sample = is_strictly_in_samples and os.path.isfile(candidate_sample_path)
-
-    if is_sample:
-        target_path = candidate_sample_path
-        fname = os.path.basename(candidate_sample_path)
-    else:
-        # Custom uploaded datasets strictly require tenant authentication and ownership
-        if not org:
-            raise HTTPException(status_code=401, detail="Authentication required to select uploaded datasets.")
-
-        rec = db.query(DatasetRecord).filter(
+    # 1. Tenant upload priority: If the authenticated organization owns an uploaded dataset, IT TAKES PRECEDENCE
+    upload_rec = None
+    if org:
+        upload_rec = db.query(DatasetRecord).filter(
             DatasetRecord.organization_id == org.id,
-            DatasetRecord.filename == fname,
+            DatasetRecord.filename == clean_fname,
             DatasetRecord.file_type == 'upload'
-        ).first()
-        if not rec or not rec.filepath or not os.path.exists(rec.filepath):
-            raise HTTPException(status_code=404, detail=f"Dataset '{fname}' not found or does not belong to your organization.")
+        ).order_by(DatasetRecord.id.desc()).first()
 
-        # Verify uploaded file path is strictly contained within UPLOADS_DIR
+    rec = None
+    if upload_rec and upload_rec.filepath and os.path.exists(upload_rec.filepath):
         canonical_uploads_dir = os.path.realpath(UPLOADS_DIR)
-        canonical_rec_path = os.path.realpath(rec.filepath)
+        canonical_rec_path = os.path.realpath(upload_rec.filepath)
         try:
             upload_common = os.path.commonpath([canonical_uploads_dir, canonical_rec_path])
             if upload_common != canonical_uploads_dir or not os.path.isfile(canonical_rec_path):
@@ -879,6 +953,28 @@ def select_dataset(
             raise HTTPException(status_code=403, detail="Dataset file location is invalid.")
 
         target_path = canonical_rec_path
+        fname = upload_rec.filename
+        is_sample = False
+        rec = upload_rec
+    else:
+        # 2. Canonical sample containment verification
+        canonical_samples_dir = os.path.realpath(SAMPLES_DIR)
+        candidate_sample_path = os.path.realpath(os.path.join(canonical_samples_dir, clean_fname))
+
+        try:
+            common_sample = os.path.commonpath([canonical_samples_dir, candidate_sample_path])
+            is_strictly_in_samples = (common_sample == canonical_samples_dir and candidate_sample_path != canonical_samples_dir)
+        except ValueError:
+            is_strictly_in_samples = False
+
+        is_sample = is_strictly_in_samples and os.path.isfile(candidate_sample_path)
+        if is_sample:
+            target_path = candidate_sample_path
+            fname = os.path.basename(candidate_sample_path)
+        else:
+            if not org:
+                raise HTTPException(status_code=401, detail="Authentication required to select uploaded datasets.")
+            raise HTTPException(status_code=404, detail=f"Dataset '{fname}' not found or does not belong to your organization.")
 
     try:
         parsed = parse_cur_file(target_path)
@@ -894,9 +990,11 @@ def select_dataset(
             # Deactivate previous active selections for this organization
             db.query(DatasetRecord).filter(DatasetRecord.organization_id == target_org.id).update({DatasetRecord.is_active: 0})
 
+            target_rec = None
             if not is_sample:
                 if rec:
                     rec.is_active = 1
+                    target_rec = rec
             else:
                 sample_rec = db.query(DatasetRecord).filter(
                     DatasetRecord.organization_id == target_org.id,
@@ -905,6 +1003,7 @@ def select_dataset(
                 ).first()
                 if sample_rec:
                     sample_rec.is_active = 1
+                    target_rec = sample_rec
                 else:
                     sample_rec = DatasetRecord(
                         organization_id=target_org.id,
@@ -921,7 +1020,23 @@ def select_dataset(
                         uploaded_at=datetime.now(timezone.utc)
                     )
                     db.add(sample_rec)
+                    db.flush()
+                    target_rec = sample_rec
             db.commit()
+
+            # Ensure billing records are persisted in SQLite for the selected dataset
+            if target_rec:
+                repo = BillingRepository(db, org_id=target_org.id, dataset_id=target_rec.id)
+                if not repo.has_records():
+                    repo.ensure_persisted(parsed)
+
+            # Controlled synchronization for selected dataset
+            try:
+                sync_anomalies_to_db(db, parsed, org_id=target_org.id)
+                recs_result = generate_recommendations(parsed)
+                sync_recommendations_to_ledger(db, recs_result.get('recommendations', []), org_id=target_org.id)
+            except Exception as e:
+                logger.warning("Dataset selection synchronization warning for org %s: %s", target_org.id, e)
 
         CURRENT_DATASET['filename'] = fname
         CURRENT_DATASET['filepath'] = target_path
@@ -948,15 +1063,68 @@ def _ingest_dataset_sync(
     final_filename: str,
     final_filepath: str,
     checksum_sha256: str,
-    parsed: Dict[str, Any]
+    parsed: Dict[str, Any],
+    manifest_metadata: Optional[Dict[str, Any]] = None
 ) -> int:
     """
     Executes database persistence transaction in worker thread off the event loop.
     Creates and owns its dedicated SessionLocal() to ensure thread safety.
     Guarantees atomic rollback on exception.
+    Implements idempotent replay detection and revision lineage tracking.
     """
     sync_db = SessionLocal()
     try:
+        # 1. IDEMPOTENT REPLAY DETECTION
+        # Check if this exact file/export checksum has already been persisted for this organization
+        existing_dataset = sync_db.query(DatasetRecord).filter(
+            DatasetRecord.organization_id == org_id,
+            DatasetRecord.checksum_sha256 == checksum_sha256
+        ).first()
+
+        if existing_dataset:
+            # Verify existing dataset actually has billing records
+            has_records = sync_db.query(BillingRecord.id).filter(
+                BillingRecord.organization_id == org_id,
+                BillingRecord.dataset_id == existing_dataset.id
+            ).first() is not None
+
+            if has_records:
+                # Replay detected: Activate existing dataset without duplicating rows
+                sync_db.query(DatasetRecord).filter(
+                    DatasetRecord.organization_id == org_id
+                ).update({DatasetRecord.is_active: 0})
+
+                existing_dataset.is_active = 1
+                sync_db.add(AuditEvent(
+                    organization_id=org_id,
+                    user_id=user_id,
+                    action="REPLAY_ACTIVATE",
+                    details=f"Re-activated existing dataset {existing_dataset.filename} (id={existing_dataset.id}, checksum={checksum_sha256[:12]}...) without inserting duplicate records."
+                ))
+                sync_db.commit()
+                logger.info("Replay detected for org %s: re-activated dataset %s without inserting duplicate rows", org_id, existing_dataset.id)
+                return existing_dataset.id
+
+        # 2. REVISION LINEAGE TRACKING
+        billing_period_start = parsed.get('billing_period_start')
+        billing_period_end = parsed.get('billing_period_end')
+        payer_account_id = parsed.get('payer_account_id')
+        assembly_id = parsed.get('assembly_id') or (manifest_metadata.get('assembly_id') if manifest_metadata else None)
+
+        revision_version = 1
+        superseded_dataset_id = None
+
+        if billing_period_start and billing_period_end:
+            prev_rev = sync_db.query(DatasetRecord).filter(
+                DatasetRecord.organization_id == org_id,
+                DatasetRecord.billing_period_start == billing_period_start,
+                DatasetRecord.billing_period_end == billing_period_end
+            ).order_by(DatasetRecord.revision_version.desc()).first()
+
+            if prev_rev:
+                revision_version = (prev_rev.revision_version or 1) + 1
+                superseded_dataset_id = prev_rev.id
+
         # Mark existing datasets for this org as inactive
         sync_db.query(DatasetRecord).filter(
             DatasetRecord.organization_id == org_id
@@ -968,6 +1136,13 @@ def _ingest_dataset_sync(
             filepath=final_filepath,
             file_type='upload',
             checksum_sha256=checksum_sha256,
+            billing_period_start=billing_period_start,
+            billing_period_end=billing_period_end,
+            payer_account_id=payer_account_id,
+            assembly_id=assembly_id,
+            manifest_metadata=json.dumps(manifest_metadata) if manifest_metadata else None,
+            revision_version=revision_version,
+            superseded_dataset_id=superseded_dataset_id,
             total_cost=parsed['gross_cost'],
             net_cost=parsed['net_cost'],
             credits_total=parsed['credits_total'],
@@ -984,9 +1159,12 @@ def _ingest_dataset_sync(
         ds_id = dataset_rec.id
         billing_dicts = []
         for r in parsed.get('records', []):
+            cost_val = float(r.get('cost', 0.0) or 0.0)
+            unblended_val = float(r.get('unblended_cost', cost_val) or 0.0)
             billing_dicts.append({
                 'organization_id': org_id,
                 'dataset_id': ds_id,
+                'line_item_id': r.get('line_item_id', ''),
                 'usage_date': r.get('date', 'Unknown'),
                 'usage_month': r.get('month', 'Unknown'),
                 'usage_hour': r.get('hour', '00:00'),
@@ -995,8 +1173,8 @@ def _ingest_dataset_sync(
                 'short_id': r.get('short_id', ''),
                 'account_id': r.get('account_id', 'Unknown'),
                 'region': r.get('region', 'us-east-1'),
-                'cost': r.get('cost', 0.0),
-                'unblended_cost': r.get('cost', 0.0),
+                'cost': cost_val,
+                'unblended_cost': unblended_val,
                 'line_item_type': r.get('line_type', 'Usage'),
                 'usage_type': r.get('usage_type', ''),
                 'pricing_term': r.get('term', 'OnDemand'),
@@ -1011,12 +1189,25 @@ def _ingest_dataset_sync(
         if billing_dicts:
             sync_db.bulk_insert_mappings(BillingRecord, billing_dicts)
 
+        audit_msg = f"Uploaded and ingested {final_filename} ({parsed['total_rows']} rows, gross ${parsed['gross_cost']}, net ${parsed['net_cost']})"
+        if revision_version > 1:
+            audit_msg += f" [Revision v{revision_version}, superseded dataset id={superseded_dataset_id}]"
+
         sync_db.add(AuditEvent(
             organization_id=org_id,
             user_id=user_id,
             action="UPLOAD",
-            details=f"Uploaded and ingested {final_filename} ({parsed['total_rows']} rows, gross ${parsed['gross_cost']}, net ${parsed['net_cost']})"
+            details=audit_msg
         ))
+
+        # Controlled synchronization of anomalies and savings ledger during ingestion
+        try:
+            sync_anomalies_to_db(sync_db, parsed, org_id=org_id)
+            recs_result = generate_recommendations(parsed)
+            sync_recommendations_to_ledger(sync_db, recs_result.get('recommendations', []), org_id=org_id)
+        except Exception as e:
+            logger.warning("Ingestion anomaly/ledger synchronization warning for org %s: %s", org_id, e)
+
         sync_db.commit()
         return dataset_rec.id
     except Exception:
@@ -1042,14 +1233,26 @@ async def upload_cur_file(
     if not incoming_files:
         raise HTTPException(status_code=400, detail="No file provided for upload.")
 
+    # Format validation: Reject unsupported formats explicitly (.parquet, .zip)
     for f in incoming_files:
-        raw_name = f.filename or "upload.csv"
-        if not (raw_name.endswith('.csv') or raw_name.endswith('.csv.gz') or raw_name.endswith('.gz')):
-            raise HTTPException(status_code=400, detail=f"File '{raw_name}' is not supported. Only .csv and .csv.gz files are allowed.")
+        raw_name = (f.filename or "upload.csv").lower()
+        if raw_name.endswith('.parquet') or raw_name.endswith('.zip'):
+            raise HTTPException(
+                status_code=400,
+                detail=f"File '{f.filename}' format is not supported in this phase. Parquet and ZIP CUR exports are unsupported; please use CSV (.csv or .csv.gz) with optional Manifest JSON."
+            )
+        if not (raw_name.endswith('.csv') or raw_name.endswith('.csv.gz') or raw_name.endswith('.gz') or raw_name.endswith('.json')):
+            raise HTTPException(
+                status_code=400,
+                detail=f"File '{f.filename}' is not supported. Only .csv, .csv.gz, and Manifest .json files are allowed."
+            )
 
     file_id = secrets.token_hex(8)
     saved_paths: List[str] = []
     saved_filenames: List[str] = []
+    manifest_paths: List[str] = []
+    data_paths: List[str] = []
+    data_filenames: List[str] = []
     MAX_UPLOAD_BYTES = 100 * 1024 * 1024
     hasher = hashlib.sha256()
 
@@ -1057,7 +1260,9 @@ async def upload_cur_file(
         for idx, f in enumerate(incoming_files):
             raw_fn = f.filename or f"upload_{idx}.csv"
             safe_fn = sanitize_upload_filename(raw_fn)
-            storage_name = f"cur_org_{org.id}_{file_id}_part{idx}_{safe_fn}"
+            is_json = safe_fn.lower().endswith('.json')
+            prefix = "manifest" if is_json else f"part{idx}"
+            storage_name = f"cur_org_{org.id}_{file_id}_{prefix}_{safe_fn}"
             part_path = os.path.join(UPLOADS_DIR, storage_name)
 
             bytes_written = 0
@@ -1070,7 +1275,8 @@ async def upload_cur_file(
                     if bytes_written > MAX_UPLOAD_BYTES:
                         buffer.close()
                         raise HTTPException(status_code=413, detail=f"File '{safe_fn}' exceeds maximum upload limit of 100MB.")
-                    hasher.update(chunk)
+                    if not is_json:
+                        hasher.update(chunk)
                     buffer.write(chunk)
 
             # Check gzip magic bytes
@@ -1087,6 +1293,11 @@ async def upload_cur_file(
 
             saved_paths.append(part_path)
             saved_filenames.append(safe_fn)
+            if is_json:
+                manifest_paths.append(part_path)
+            else:
+                data_paths.append(part_path)
+                data_filenames.append(safe_fn)
 
     except Exception as e:
         for p in saved_paths:
@@ -1096,30 +1307,60 @@ async def upload_cur_file(
             raise e
         raise HTTPException(status_code=500, detail=f"Failed to stream upload: {str(e)}")
 
+    if not data_paths:
+        for p in saved_paths:
+            if os.path.exists(p):
+                os.remove(p)
+        raise HTTPException(status_code=400, detail="No CUR data files (.csv or .csv.gz) were provided with the manifest.")
+
+    # 1. Parse manifest if provided
+    manifest_info = None
+    if manifest_paths:
+        try:
+            manifest_info = parse_cur_manifest(manifest_paths[0])
+        except ValueError as ve:
+            for p in saved_paths:
+                if os.path.exists(p):
+                    os.remove(p)
+            raise HTTPException(status_code=400, detail=f"Invalid CUR manifest: {str(ve)}")
+
     checksum_sha256 = hasher.hexdigest()
 
-    # Sort parts logically by filename (e.g. -00001, -00002)
-    saved_paths.sort(key=lambda p: os.path.basename(p))
+    # Sort data parts logically by filename (e.g. -00001, -00002)
+    data_paths.sort(key=lambda p: os.path.basename(p))
 
-    if len(saved_paths) == 1:
-        final_filepath = saved_paths[0]
-        final_filename = saved_filenames[0]
+    # 2. Multi-part validation
+    if len(data_paths) > 1 or manifest_info is not None:
+        try:
+            validate_multipart_cur_export(data_paths, manifest=manifest_info)
+        except ValueError as ve:
+            for p in saved_paths:
+                if os.path.exists(p):
+                    os.remove(p)
+            raise HTTPException(status_code=400, detail=f"Multi-part CUR validation failed: {str(ve)}")
+
+    # 3. Consolidation / Single part handling
+    intermediate_parts_to_clean: List[str] = []
+    if len(data_paths) == 1:
+        final_filepath = data_paths[0]
+        final_filename = data_filenames[0]
     else:
-        # Multiple part files: merge them into a single consolidated file on disk
-        first_base = saved_filenames[0].replace('.csv.gz', '').replace('.csv', '').replace('.gz', '')
+        # Multiple part files: merge them into a single consolidated file on disk with streaming dedup
+        first_base = data_filenames[0].replace('.csv.gz', '').replace('.csv', '').replace('.gz', '')
         import re
         clean_prefix = re.sub(r'[-_]00001$', '', first_base)
         combined_storage_name = f"cur_org_{org.id}_{file_id}_merged_{clean_prefix}.csv.gz"
         final_filepath = os.path.join(UPLOADS_DIR, combined_storage_name)
         try:
-            await asyncio.to_thread(merge_cur_files, saved_paths, final_filepath)
+            await asyncio.to_thread(merge_cur_files, data_paths, final_filepath, manifest=manifest_info)
+            intermediate_parts_to_clean.extend(data_paths)
         except Exception as e:
             for p in saved_paths:
                 if os.path.exists(p):
                     os.remove(p)
             raise HTTPException(status_code=500, detail=f"Failed to merge CUR part files: {str(e)}")
 
-        final_filename = f"{clean_prefix} (Merged {len(saved_paths)} parts).csv.gz"
+        final_filename = f"{clean_prefix} (Merged {len(data_paths)} parts).csv.gz"
 
     async with get_upload_semaphore():
         try:
@@ -1132,6 +1373,14 @@ async def upload_cur_file(
                     os.remove(p)
             raise HTTPException(status_code=500, detail=f"File uploaded but failed to parse: {str(e)}")
 
+    # Clean up intermediate parts now that merge and parse succeeded
+    for p in intermediate_parts_to_clean:
+        if os.path.exists(p):
+            try:
+                os.remove(p)
+            except Exception:
+                pass
+
     # Ingest line items into persistent SQLite BillingRecord in worker thread off event loop
     try:
         ds_id = await asyncio.to_thread(
@@ -1141,7 +1390,8 @@ async def upload_cur_file(
             final_filename,
             final_filepath,
             checksum_sha256,
-            parsed
+            parsed,
+            manifest_info
         )
     except Exception as e:
         if os.path.exists(final_filepath):
@@ -1162,7 +1412,10 @@ async def upload_cur_file(
 
     return {
         "success": True,
+        "dataset_id": ds_id,
         "filename": final_filename,
+        "billing_period_start": parsed.get('billing_period_start'),
+        "billing_period_end": parsed.get('billing_period_end'),
         "total_cost": parsed['total_cost'],
         "gross_cost": parsed['gross_cost'],
         "net_cost": parsed['net_cost'],
@@ -1180,6 +1433,7 @@ async def upload_cur_file(
 
 @app.get("/api/overview")
 def get_overview(
+    response: Response,
     start_date: Optional[str] = None, 
     end_date: Optional[str] = None,
     account_id: Optional[str] = None,
@@ -1189,19 +1443,6 @@ def get_overview(
 ):
     user, org = auth
     dataset = get_active_dataset_for_org(org, db)
-    if not dataset.get('data'):
-        raise HTTPException(status_code=400, detail="No active dataset loaded")
-
-    data = dataset['data']
-    ds_key = dataset.get('filepath') or dataset.get('filename') or 'active'
-    recs = get_cached_recommendations(ds_key, data)
-
-    dates = data.get('dates', [])
-    filtered_dates = dates
-    if start_date:
-        filtered_dates = [d for d in filtered_dates if d >= start_date]
-    if end_date:
-        filtered_dates = [d for d in filtered_dates if d <= end_date]
 
     svc_filter = service.strip() if service else None
     if svc_filter and svc_filter.lower() in ('all', ''):
@@ -1210,6 +1451,104 @@ def get_overview(
     acc_filter = account_id.strip() if account_id else None
     if acc_filter and acc_filter.lower() in ('all', ''):
         acc_filter = None
+
+    repo = get_billing_repository(org, dataset, db)
+
+    ds_key = dataset.get('filepath') or dataset.get('filename') or f'active_{repo.dataset_id or "default"}'
+    org_id = org.id if org else 1
+    cache_key = global_cache.build_key(
+        org_id, ds_key, "overview",
+        s=start_date, e=end_date, svc=svc_filter, acc=acc_filter
+    )
+    cached_res = global_cache.get(cache_key)
+    if cached_res is not None:
+        response.headers['X-Zorvex-Data-Source'] = cached_res.get('data_source', 'database')
+        return cached_res
+    if repo.has_records():
+        db_res = repo.get_overview(
+            start_date=start_date,
+            end_date=end_date,
+            account_id=acc_filter,
+            service=svc_filter
+        )
+        db_res['data_source'] = 'database'
+        response.headers['X-Zorvex-Data-Source'] = 'database'
+        data = dataset.get('data') or {}
+        recs = get_cached_recommendations(ds_key, data) if data else {}
+        db_res['potential_savings'] = recs.get('total_potential_savings', 0.0) if isinstance(recs, dict) else 0.0
+        db_res['total_resources'] = db_res.get('matching_resources_count') or len(data.get('resources', []))
+        if dataset.get('filename'):
+            db_res['filename'] = dataset.get('filename')
+        global_cache.set(cache_key, db_res, ttl=1800)
+        return db_res
+
+    # Deterministic source-selection policy (Phase 2):
+    # A registered dataset with expected rows must NEVER silently fall back to fixture.
+    # If its persisted billing records are missing, return HTTP 503 Service Unavailable.
+    if getattr(repo, 'd_rec', None) and (repo.d_rec.total_rows or 0) > 0:
+        logger.error(
+            "Dataset %s (ID %s) has %s expected rows in database catalog, but 0 persisted billing records",
+            repo.d_rec.filename, repo.dataset_id, repo.d_rec.total_rows
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Dataset billing records are not yet persisted or temporarily unavailable."
+        )
+
+    if not dataset.get('data'):
+        response.headers['X-Zorvex-Data-Source'] = 'empty-workspace'
+        return {
+            'total_cost': 0.0,
+            'gross_cost': 0.0,
+            'net_cost': 0.0,
+            'credits_total': 0.0,
+            'refunds_total': 0.0,
+            'taxes_total': 0.0,
+            'total_rows': 0,
+            'dates': [],
+            'months': [],
+            'services': {},
+            'accounts': {},
+            'regions': {},
+            'daily_costs': {},
+            'daily_totals': {},
+            'top_services': [],
+            'potential_savings': 0.0,
+            'total_resources': 0,
+            'filename': None,
+            'data_source': 'empty-workspace',
+            'status': 'EMPTY_WORKSPACE',
+            'default_comparison': {
+                'baseline_date': '',
+                'target_date': '',
+                'delta_cost': 0.0,
+                'pct_change': 0.0,
+                'pct_display': '0.0%'
+            },
+            'reconciliation': {
+                'gross_usage_cost': 0.0,
+                'credits_total': 0.0,
+                'refunds_total': 0.0,
+                'taxes_total': 0.0,
+                'net_cost': 0.0,
+                'formula': 'Net = Gross - Credits - Refunds + Taxes',
+                'formula_verified': True
+            }
+        }
+
+    # In-memory fixture path with explicit header and diagnostic logging
+    response.headers['X-Zorvex-Data-Source'] = 'in-memory-fixture'
+    logger.info("Serving overview from in-memory fixture for dataset: %s", dataset.get('filename'))
+
+    data = dataset['data']
+    recs = get_cached_recommendations(ds_key, data)
+
+    dates = data.get('dates', [])
+    filtered_dates = dates
+    if start_date:
+        filtered_dates = [d for d in filtered_dates if d >= start_date]
+    if end_date:
+        filtered_dates = [d for d in filtered_dates if d <= end_date]
 
     matching_res_count = None
     all_dates = data.get('dates', [])
@@ -1224,37 +1563,37 @@ def get_overview(
                 continue
             matching_recs.append(r)
 
-        daily_totals = defaultdict(float)
-        daily_gross_totals = defaultdict(float)
-        daily_tax_totals = defaultdict(float)
-        daily_credit_totals = defaultdict(float)
-        daily_refund_totals = defaultdict(float)
+        daily_totals_dec = defaultdict(Decimal)
+        daily_gross_totals_dec = defaultdict(Decimal)
+        daily_tax_totals_dec = defaultdict(Decimal)
+        daily_credit_totals_dec = defaultdict(Decimal)
+        daily_refund_totals_dec = defaultdict(Decimal)
 
         for r in matching_recs:
             d = r.get('date')
-            c = float(r.get('cost', 0.0) or 0.0)
+            c_dec = Decimal(str(r.get('cost', 0.0) or 0.0))
             lt = r.get('line_type', '')
-            daily_totals[d] += c
+            daily_totals_dec[d] += c_dec
             if lt == 'Tax':
-                daily_tax_totals[d] += c
+                daily_tax_totals_dec[d] += c_dec
             elif lt in ('Credit', 'SavingsPlanNegation'):
-                daily_credit_totals[d] += c
+                daily_credit_totals_dec[d] += c_dec
             elif lt == 'Refund':
-                daily_refund_totals[d] += c
+                daily_refund_totals_dec[d] += c_dec
             else:
-                daily_gross_totals[d] += c
+                daily_gross_totals_dec[d] += c_dec
 
-        daily_totals = {k: round(v, 2) for k, v in daily_totals.items()}
-        daily_gross_totals = {k: round(v, 2) for k, v in daily_gross_totals.items()}
-        daily_tax_totals = {k: round(v, 2) for k, v in daily_tax_totals.items()}
-        daily_credit_totals = {k: round(v, 2) for k, v in daily_credit_totals.items()}
-        daily_refund_totals = {k: round(v, 2) for k, v in daily_refund_totals.items()}
+        daily_totals = {k: round_currency(v) for k, v in daily_totals_dec.items()}
+        daily_gross_totals = {k: round_currency(v) for k, v in daily_gross_totals_dec.items()}
+        daily_tax_totals = {k: round_currency(v) for k, v in daily_tax_totals_dec.items()}
+        daily_credit_totals = {k: round_currency(v) for k, v in daily_credit_totals_dec.items()}
+        daily_refund_totals = {k: round_currency(v) for k, v in daily_refund_totals_dec.items()}
 
-        filtered_gross = round(sum(daily_gross_totals.get(d, 0.0) for d in filtered_dates), 2)
-        filtered_tax = round(sum(daily_tax_totals.get(d, 0.0) for d in filtered_dates), 2)
-        filtered_credit = round(sum(daily_credit_totals.get(d, 0.0) for d in filtered_dates), 2)
-        filtered_refund = round(sum(daily_refund_totals.get(d, 0.0) for d in filtered_dates), 2)
-        filtered_net = round(sum(daily_totals.get(d, 0.0) for d in filtered_dates), 2)
+        filtered_gross = round_currency(sum(daily_gross_totals_dec.get(d, Decimal('0')) for d in filtered_dates))
+        filtered_tax = round_currency(sum(daily_tax_totals_dec.get(d, Decimal('0')) for d in filtered_dates))
+        filtered_credit = round_currency(sum(daily_credit_totals_dec.get(d, Decimal('0')) for d in filtered_dates))
+        filtered_refund = round_currency(sum(daily_refund_totals_dec.get(d, Decimal('0')) for d in filtered_dates))
+        filtered_net = round_currency(sum(daily_totals_dec.get(d, Decimal('0')) for d in filtered_dates))
         filtered_cost = filtered_gross
         matching_res_count = len(set(r.get('resource_id') for r in matching_recs if r.get('resource_id')))
     else:
@@ -1263,6 +1602,12 @@ def get_overview(
         daily_tax_totals = data.get('daily_tax_totals', {})
         daily_credit_totals = data.get('daily_credit_totals', {})
         daily_refund_totals = data.get('daily_refund_totals', {})
+
+        unrounded_daily_gross = data.get('_unrounded_daily_gross')
+        unrounded_daily_totals = data.get('_unrounded_daily_totals')
+        unrounded_daily_tax = data.get('_unrounded_daily_tax')
+        unrounded_daily_credit = data.get('_unrounded_daily_credit')
+        unrounded_daily_refund = data.get('_unrounded_daily_refund')
 
         if start_date or end_date:
             if is_full_span:
@@ -1273,11 +1618,18 @@ def get_overview(
                 filtered_net = data.get('net_cost', filtered_gross)
                 filtered_cost = data['total_cost']
             else:
-                filtered_gross = round(sum(daily_gross_totals.get(d, 0.0) for d in filtered_dates), 2)
-                filtered_tax = round(sum(daily_tax_totals.get(d, 0.0) for d in filtered_dates), 2)
-                filtered_credit = round(sum(daily_credit_totals.get(d, 0.0) for d in filtered_dates), 2)
-                filtered_refund = round(sum(daily_refund_totals.get(d, 0.0) for d in filtered_dates), 2)
-                filtered_net = round(sum(daily_totals.get(d, 0.0) for d in filtered_dates), 2)
+                if unrounded_daily_gross:
+                    filtered_gross = round_currency(sum(Decimal(str(unrounded_daily_gross.get(d, '0'))) for d in filtered_dates))
+                    filtered_tax = round_currency(sum(Decimal(str(unrounded_daily_tax.get(d, '0'))) for d in filtered_dates)) if unrounded_daily_tax else round(sum(daily_tax_totals.get(d, 0.0) for d in filtered_dates), 2)
+                    filtered_credit = round_currency(sum(Decimal(str(unrounded_daily_credit.get(d, '0'))) for d in filtered_dates)) if unrounded_daily_credit else round(sum(daily_credit_totals.get(d, 0.0) for d in filtered_dates), 2)
+                    filtered_refund = round_currency(sum(Decimal(str(unrounded_daily_refund.get(d, '0'))) for d in filtered_dates)) if unrounded_daily_refund else round(sum(daily_refund_totals.get(d, 0.0) for d in filtered_dates), 2)
+                    filtered_net = round_currency(sum(Decimal(str(unrounded_daily_totals.get(d, '0'))) for d in filtered_dates)) if unrounded_daily_totals else round(sum(daily_totals.get(d, 0.0) for d in filtered_dates), 2)
+                else:
+                    filtered_gross = round(sum(daily_gross_totals.get(d, 0.0) for d in filtered_dates), 2)
+                    filtered_tax = round(sum(daily_tax_totals.get(d, 0.0) for d in filtered_dates), 2)
+                    filtered_credit = round(sum(daily_credit_totals.get(d, 0.0) for d in filtered_dates), 2)
+                    filtered_refund = round(sum(daily_refund_totals.get(d, 0.0) for d in filtered_dates), 2)
+                    filtered_net = round(sum(daily_totals.get(d, 0.0) for d in filtered_dates), 2)
                 filtered_cost = filtered_gross
         else:
             filtered_gross = data.get('gross_cost', data['total_cost'])
@@ -1291,23 +1643,23 @@ def get_overview(
         resp_services = {k: v for k, v in data['services'].items() if k not in ('Taxes & Surcharges', 'Tax')}
         resp_accounts = data.get('accounts', {})
     else:
-        agg_services = defaultdict(float)
-        agg_accounts = defaultdict(float)
+        agg_services = defaultdict(Decimal)
+        agg_accounts = defaultdict(Decimal)
         date_set = set(filtered_dates)
         recs_source = matching_recs if (svc_filter or acc_filter) else data.get('records', [])
         for r in recs_source:
             if r.get('date') in date_set:
-                c = float(r.get('cost', 0.0) or 0.0)
+                c_dec = Decimal(str(r.get('cost', 0.0) or 0.0))
                 lt = r.get('line_type', '')
-                if lt not in ('Credit', 'Refund', 'SavingsPlanNegation', 'Tax') and c > 0:
+                if lt not in ('Credit', 'Refund', 'SavingsPlanNegation', 'Tax') and c_dec > 0:
                     s = r.get('service', 'Other')
                     if s not in ('Taxes & Surcharges', 'Tax'):
-                        agg_services[s] += c
-                if c != 0:
+                        agg_services[s] += c_dec
+                if c_dec != 0:
                     a = r.get('account_id', 'Primary-Account')
-                    agg_accounts[a] += c
-        resp_services = {k: round(v, 2) for k, v in sorted(agg_services.items(), key=lambda item: item[1], reverse=True)}
-        resp_accounts = {k: round(v, 2) for k, v in sorted(agg_accounts.items(), key=lambda item: item[1], reverse=True)}
+                    agg_accounts[a] += c_dec
+        resp_services = {k: round_currency(v) for k, v in sorted(agg_services.items(), key=lambda item: item[1], reverse=True)}
+        resp_accounts = {k: round_currency(v) for k, v in sorted(agg_accounts.items(), key=lambda item: item[1], reverse=True)}
 
     baseline_default = filtered_dates[-2] if len(filtered_dates) >= 2 else (filtered_dates[0] if filtered_dates else "")
     target_default = filtered_dates[-1] if filtered_dates else ""
@@ -1337,7 +1689,7 @@ def get_overview(
         "taxes_total": taxes_val,
         "net_invoiced_spend": net_val,
         "formula": "net_invoiced_spend = gross_usage_cost + credits_total + refunds_total + taxes_total",
-        "is_reconciled": bool(abs(round(gross_val + credits_val + refunds_val + taxes_val - net_val, 2)) < 0.01)
+        "is_reconciled": bool(abs((Decimal(str(gross_val)) + Decimal(str(credits_val)) + Decimal(str(refunds_val)) + Decimal(str(taxes_val))) - Decimal(str(net_val))) < Decimal('0.01'))
     }
 
     return {
@@ -1370,6 +1722,7 @@ def get_overview(
 
 @app.get("/api/trends")
 def get_trends(
+    response: Response,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     auth: Tuple[Optional[User], Optional[Organization]] = Depends(get_current_user_and_org),
@@ -1377,8 +1730,30 @@ def get_trends(
 ):
     user, org = auth
     dataset = get_active_dataset_for_org(org, db)
+
+    repo = get_billing_repository(org, dataset, db)
+    if repo.has_records():
+        response.headers['X-Zorvex-Data-Source'] = 'database'
+        return repo.get_trend_data(start_date=start_date, end_date=end_date)
+
+    if getattr(repo, 'd_rec', None) and (repo.d_rec.total_rows or 0) > 0:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Dataset billing records are not yet persisted or temporarily unavailable."
+        )
+
     if not dataset.get('data'):
-        raise HTTPException(status_code=400, detail="No active dataset loaded")
+        response.headers['X-Zorvex-Data-Source'] = 'empty-workspace'
+        return {
+            'dates': [],
+            'daily_spend': {},
+            'daily_gross': {},
+            'daily_tax': {},
+            'daily_credit': {},
+            'daily_refund': {}
+        }
+
+    response.headers['X-Zorvex-Data-Source'] = 'in-memory-fixture'
     data = dataset['data']
     if not start_date and not end_date:
         if '_trends' not in data:
@@ -1390,13 +1765,44 @@ def get_trends(
 @app.post("/api/compare")
 def compare_spending(
     req: CompareRequest,
+    response: Response,
     auth: Tuple[Optional[User], Optional[Organization]] = Depends(get_current_user_and_org),
     db: Session = Depends(get_db)
 ):
     user, org = auth
     dataset = get_active_dataset_for_org(org, db)
+
+    repo = get_billing_repository(org, dataset, db)
+    if repo.has_records():
+        response.headers['X-Zorvex-Data-Source'] = 'database'
+        org_id = org.id if org else 0
+        ds_key = dataset.get('filename', 'default')
+        cache_key = global_cache.build_key(org_id, ds_key, "compare_spending", b=req.baseline_date, t=req.target_date, acc=req.account_id)
+        return global_cache.get_or_compute(
+            cache_key,
+            lambda: repo.compare_dates(req.baseline_date, req.target_date, account_id=req.account_id),
+            ttl=1800
+        )
+
+    if getattr(repo, 'd_rec', None) and (repo.d_rec.total_rows or 0) > 0:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Dataset billing records are not yet persisted or temporarily unavailable."
+        )
+
     if not dataset.get('data'):
-        raise HTTPException(status_code=400, detail="No active dataset loaded")
+        response.headers['X-Zorvex-Data-Source'] = 'empty-workspace'
+        return {
+            'status': 'EMPTY_WORKSPACE',
+            'baseline_date': req.baseline_date,
+            'target_date': req.target_date,
+            'baseline_cost': 0.0,
+            'target_cost': 0.0,
+            'delta_cost': 0.0,
+            'pct_change': 0.0,
+            'services_delta': {},
+            'resources_breakdown': []
+        }
 
     data = dataset['data']
     dates = set(data.get('dates', []))
@@ -1410,6 +1816,7 @@ def compare_spending(
     ds_key = dataset.get('filename', 'default')
     cache_key = global_cache.build_key(org_id, ds_key, "compare_spending", b=req.baseline_date, t=req.target_date, acc=req.account_id)
 
+    response.headers['X-Zorvex-Data-Source'] = 'in-memory-fixture'
     return global_cache.get_or_compute(
         cache_key,
         lambda: compare_dates(data, req.baseline_date, req.target_date, account_id=req.account_id),
@@ -1420,18 +1827,51 @@ def compare_spending(
 @app.post("/api/analytics/daily-delta")
 def get_daily_delta(
     req: DailyDeltaRequest,
+    response: Response,
     auth: Tuple[Optional[User], Optional[Organization]] = Depends(get_current_user_and_org),
     db: Session = Depends(get_db)
 ):
     user, org = auth
     dataset = get_active_dataset_for_org(org, db)
+
+    repo = get_billing_repository(org, dataset, db)
+    if repo.has_records():
+        response.headers['X-Zorvex-Data-Source'] = 'database'
+        org_id = org.id if org else 0
+        ds_key = dataset.get('filename', 'default')
+        cache_key = global_cache.build_key(org_id, ds_key, "daily_delta", t=req.target_date, b=req.baseline_date, acc=req.account_id)
+        return global_cache.get_or_compute(
+            cache_key,
+            lambda: repo.calculate_daily_delta(req.target_date, req.baseline_date, account_id=req.account_id),
+            ttl=1800
+        )
+
+    if getattr(repo, 'd_rec', None) and (repo.d_rec.total_rows or 0) > 0:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Dataset billing records are not yet persisted or temporarily unavailable."
+        )
+
     if not dataset.get('data'):
-        raise HTTPException(status_code=400, detail="No active dataset loaded")
+        response.headers['X-Zorvex-Data-Source'] = 'empty-workspace'
+        return {
+            'status': 'EMPTY_WORKSPACE',
+            'baseline_date': req.baseline_date,
+            'target_date': req.target_date,
+            'baseline_cost': 0.0,
+            'target_cost': 0.0,
+            'delta_cost': 0.0,
+            'pct_change': 0.0,
+            'services': {},
+            'top_increases': [],
+            'top_decreases': []
+        }
 
     org_id = org.id if org else 0
     ds_key = dataset.get('filename', 'default')
     cache_key = global_cache.build_key(org_id, ds_key, "daily_delta", t=req.target_date, b=req.baseline_date, acc=req.account_id)
 
+    response.headers['X-Zorvex-Data-Source'] = 'in-memory-fixture'
     return global_cache.get_or_compute(
         cache_key,
         lambda: calculate_daily_delta(dataset['data'], req.target_date, req.baseline_date, account_id=req.account_id),
@@ -1442,18 +1882,49 @@ def get_daily_delta(
 @app.post("/api/analytics/monthly-comparison")
 def get_monthly_comparison(
     req: MonthlyCompareRequest,
+    response: Response,
     auth: Tuple[Optional[User], Optional[Organization]] = Depends(get_current_user_and_org),
     db: Session = Depends(get_db)
 ):
     user, org = auth
     dataset = get_active_dataset_for_org(org, db)
+
+    repo = get_billing_repository(org, dataset, db)
+    if repo.has_records():
+        response.headers['X-Zorvex-Data-Source'] = 'database'
+        org_id = org.id if org else 0
+        ds_key = dataset.get('filename', 'default')
+        cache_key = global_cache.build_key(org_id, ds_key, "monthly_comparison", b=req.baseline_month, t=req.target_month, acc=req.account_id)
+        return global_cache.get_or_compute(
+            cache_key,
+            lambda: repo.compare_months(req.baseline_month, req.target_month, account_id=req.account_id),
+            ttl=1800
+        )
+
+    if getattr(repo, 'd_rec', None) and (repo.d_rec.total_rows or 0) > 0:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Dataset billing records are not yet persisted or temporarily unavailable."
+        )
+
     if not dataset.get('data'):
-        raise HTTPException(status_code=400, detail="No active dataset loaded")
+        response.headers['X-Zorvex-Data-Source'] = 'empty-workspace'
+        return {
+            'status': 'EMPTY_WORKSPACE',
+            'baseline_month': req.baseline_month,
+            'target_month': req.target_month,
+            'baseline_cost': 0.0,
+            'target_cost': 0.0,
+            'delta_cost': 0.0,
+            'pct_change': 0.0,
+            'services': {}
+        }
 
     org_id = org.id if org else 0
     ds_key = dataset.get('filename', 'default')
     cache_key = global_cache.build_key(org_id, ds_key, "monthly_comparison", b=req.baseline_month, t=req.target_month, acc=req.account_id)
 
+    response.headers['X-Zorvex-Data-Source'] = 'in-memory-fixture'
     return global_cache.get_or_compute(
         cache_key,
         lambda: compare_months(dataset['data'], req.baseline_month, req.target_month, account_id=req.account_id),
@@ -1464,6 +1935,7 @@ def get_monthly_comparison(
 @app.post("/api/analytics/root-cause")
 def get_cost_root_cause(
     req: RootCauseRequest,
+    response: Response,
     auth: Tuple[Optional[User], Optional[Organization]] = Depends(get_current_user_and_org),
     db: Session = Depends(get_db)
 ):
@@ -1475,7 +1947,14 @@ def get_cost_root_cause(
     user, org = auth
     dataset = get_active_dataset_for_org(org, db)
     if not dataset.get('data'):
-        raise HTTPException(status_code=400, detail="No active dataset loaded")
+        response.headers['X-Zorvex-Data-Source'] = 'empty-workspace'
+        return {
+            'status': 'EMPTY',
+            'variance_usd': 0.0,
+            'drivers': []
+        }
+
+    response.headers['X-Zorvex-Data-Source'] = 'in-memory-quantity-rate-engine'
 
     org_id = org.id if org else 0
     ds_key = dataset.get('filename', 'default')
@@ -1822,7 +2301,18 @@ def simulate_sp_endpoint(
     user, org = auth
     dataset = get_active_dataset_for_org(org, db)
     if not dataset.get('data'):
-        raise HTTPException(status_code=400, detail="No active dataset loaded")
+        return {
+            'status': 'EMPTY',
+            'commitment_hourly': req.commitment_hourly,
+            'plan_type': req.plan_type or "COMPUTE_SP",
+            'monthly_on_demand_spend': 0.0,
+            'monthly_sp_commitment': 0.0,
+            'monthly_sp_effective_spend': 0.0,
+            'monthly_savings': 0.0,
+            'savings_percentage': 0.0,
+            'coverage_percentage': 0.0,
+            'resources_breakdown': []
+        }
     return simulate_savings_plan(
         dataset['data'],
         commitment_hourly=req.commitment_hourly,
@@ -2030,24 +2520,18 @@ def get_recommendations(
     user, org = auth
     dataset = get_active_dataset_for_org(org, db)
     if not dataset.get('data'):
-        raise HTTPException(status_code=400, detail="No active dataset loaded")
+        return {
+            'recommendations': [],
+            'total_potential_savings': 0.0,
+            'total_recommendations': 0
+        }
     ds_key = dataset.get('filepath') or dataset.get('filename') or 'active'
-    raw = get_cached_recommendations(ds_key, dataset['data'])
-    with _LEDGER_SYNC_LOCK:
-        needs_sync = ds_key not in _LEDGER_SYNCED_SETS
-        if needs_sync:
-            _LEDGER_SYNCED_SETS.add(ds_key)
-
-    if needs_sync:
-        try:
-            sync_recommendations_to_ledger(db, raw.get('recommendations', []))
-        except Exception as e:
-            logger.warning("Ledger sync warning: %s", e)
-    return raw
+    return get_cached_recommendations(ds_key, dataset['data'])
 
 
 @app.get("/api/resources")
 def search_resources(
+    response: Response,
     query: Optional[str] = None,
     service: Optional[str] = "All",
     category: Optional[str] = "ALL",
@@ -2066,11 +2550,56 @@ def search_resources(
 ):
     user, org = auth
     dataset = get_active_dataset_for_org(org, db)
-    if not dataset.get('data'):
-        raise HTTPException(status_code=400, detail="No active dataset loaded")
 
     eff_page_size = limit if (limit and limit > 0) else page_size
 
+    repo = get_billing_repository(org, dataset, db)
+    if repo.has_records():
+        response.headers['X-Zorvex-Data-Source'] = 'database'
+        return repo.query_resources(
+            query=query,
+            service=service,
+            category=category,
+            account_id=account_id,
+            region=region,
+            min_cost=min_cost,
+            start_date=start_date,
+            end_date=end_date,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            page=page,
+            page_size=eff_page_size
+        )
+
+    if getattr(repo, 'd_rec', None) and (repo.d_rec.total_rows or 0) > 0:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Dataset billing records are not yet persisted or temporarily unavailable."
+        )
+
+    if not dataset.get('data'):
+        response.headers['X-Zorvex-Data-Source'] = 'empty-workspace'
+        return {
+            'status': 'EMPTY',
+            'summary': {
+                'total_cost': 0.0,
+                'unique_resources_count': 0
+            },
+            'resources': [],
+            'total_count': 0,
+            'pagination': {
+                'page': page,
+                'page_size': eff_page_size,
+                'total_pages': 0,
+                'total_resources': 0
+            },
+            'hierarchies': {
+                'services': [],
+                'categories_by_service': {}
+            }
+        }
+
+    response.headers['X-Zorvex-Data-Source'] = 'in-memory-fixture'
     return query_resource_explorer(
         dataset['data'],
         service=service,
@@ -2090,26 +2619,65 @@ def search_resources(
 
 @app.get("/api/resources/hierarchies")
 def get_resource_hierarchies(
+    response: Response,
     auth: Tuple[Optional[User], Optional[Organization]] = Depends(get_current_user_and_org),
     db: Session = Depends(get_db)
 ):
     user, org = auth
     dataset = get_active_dataset_for_org(org, db)
+
+    repo = get_billing_repository(org, dataset, db)
+    if repo.has_records():
+        response.headers['X-Zorvex-Data-Source'] = 'database'
+        return repo.get_resource_hierarchies()
+
+    if getattr(repo, 'd_rec', None) and (repo.d_rec.total_rows or 0) > 0:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Dataset billing records are not yet persisted or temporarily unavailable."
+        )
+
     if not dataset.get('data'):
-        raise HTTPException(status_code=400, detail="No active dataset loaded")
+        response.headers['X-Zorvex-Data-Source'] = 'empty-workspace'
+        return {
+            'services': [],
+            'categories_by_service': {},
+            'regions': [],
+            'accounts': []
+        }
+
+    response.headers['X-Zorvex-Data-Source'] = 'in-memory-fixture'
     return get_available_hierarchies(dataset['data'])
 
 
 @app.get("/api/resources/detail")
 def get_resource_detail_endpoint(
+    response: Response,
     resource_id: str = Query(..., description="AWS Resource ID or ARN to inspect"),
     auth: Tuple[Optional[User], Optional[Organization]] = Depends(get_current_user_and_org),
     db: Session = Depends(get_db)
 ):
     user, org = auth
     dataset = get_active_dataset_for_org(org, db)
+
+    repo = get_billing_repository(org, dataset, db)
+    if repo.has_records():
+        response.headers['X-Zorvex-Data-Source'] = 'database'
+        detail = repo.get_resource_detail(resource_id)
+        if not detail:
+            raise HTTPException(status_code=404, detail=f"Resource '{resource_id}' not found in active dataset")
+        return detail
+
+    if getattr(repo, 'd_rec', None) and (repo.d_rec.total_rows or 0) > 0:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Dataset billing records are not yet persisted or temporarily unavailable."
+        )
+
     if not dataset.get('data'):
-        raise HTTPException(status_code=400, detail="No active dataset loaded")
+        raise HTTPException(status_code=404, detail=f"No dataset loaded. Resource '{resource_id}' not found.")
+
+    response.headers['X-Zorvex-Data-Source'] = 'in-memory-fixture'
     detail = get_resource_detail(dataset['data'], resource_id)
     if not detail:
         raise HTTPException(status_code=404, detail=f"Resource '{resource_id}' not found in active dataset")
@@ -2125,15 +2693,44 @@ def list_anomalies(
     auth: Tuple[Optional[User], Optional[Organization]] = Depends(get_current_user_and_org),
     db: Session = Depends(get_db)
 ):
+    """
+    Side-effect free: returns stored anomaly alerts scoped to organization.
+    Guarantees zero database writes, updates, or deletions on repeated calls.
+    """
     user, org = auth
     org_id = org.id if org else None
-    dataset = get_active_dataset_for_org(org, db)
-    if dataset.get('data'):
-        try:
-            sync_anomalies_to_db(db, dataset['data'], org_id=org_id)
-        except Exception as e:
-            logger.warning("Anomaly sync warning: %s", e)
     return get_stored_anomalies(db, status=status, severity=severity, org_id=org_id)
+
+
+@app.post("/api/anomalies/sync")
+def trigger_anomalies_sync(
+    auth: Tuple[User, Organization] = Depends(require_auth),
+    db: Session = Depends(get_db)
+):
+    """
+    Explicit write workflow: synchronizes anomalies from active dataset to persistent storage.
+    Enforces authentication, tenant isolation, and guarantees GET endpoints remain strictly side-effect free.
+    """
+    user, org = auth
+    org_id = org.id
+    dataset = get_active_dataset_for_org(org, db)
+    cur_data = dataset.get('data')
+    if not cur_data:
+        repo = get_billing_repository(org, dataset, db)
+        if repo.has_records():
+            cur_data = repo.get_cur_data()
+    if not cur_data:
+        return {
+            "success": True,
+            "synced_count": 0,
+            "anomalies": get_stored_anomalies(db, org_id=org_id)
+        }
+    synced = sync_anomalies_to_db(db, cur_data, org_id=org_id)
+    return {
+        "success": True,
+        "synced_count": len(synced),
+        "anomalies": get_stored_anomalies(db, org_id=org_id)
+    }
 
 
 @app.post("/api/anomalies/{alert_id}/acknowledge")
@@ -2190,25 +2787,74 @@ def resolve_anomaly(
 
 @app.get("/api/forecast")
 def get_forecast(
+    response: Response,
     auth: Tuple[Optional[User], Optional[Organization]] = Depends(get_current_user_and_org),
     db: Session = Depends(get_db)
 ):
     user, org = auth
     dataset = get_active_dataset_for_org(org, db)
+
+    org_id = org.id if org else 0
+    ds_key = dataset.get('filename', 'default')
+    cache_key = global_cache.build_key(org_id, ds_key, "forecast")
+
+    repo = get_billing_repository(org, dataset, db)
+    if repo.has_records():
+        response.headers['X-Zorvex-Data-Source'] = 'database'
+        return global_cache.get_or_compute(
+            cache_key,
+            lambda: repo.get_forecast(),
+            ttl=1800
+        )
+
+    if getattr(repo, 'd_rec', None) and (repo.d_rec.total_rows or 0) > 0:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Dataset billing records are not yet persisted or temporarily unavailable."
+        )
+
     if not dataset.get('data'):
-        raise HTTPException(status_code=400, detail="No active dataset loaded")
+        response.headers['X-Zorvex-Data-Source'] = 'empty-workspace'
+        return {
+            'forecasted_month_end_usd': 0.0,
+            'actual_spend_to_date_usd': 0.0,
+            'projected_additional_spend_usd': 0.0,
+            'daily_run_rate_usd': 0.0,
+            'days_elapsed': 0,
+            'days_remaining': 0,
+            'total_days_in_month': 30,
+            'status': 'EMPTY'
+        }
+
+    response.headers['X-Zorvex-Data-Source'] = 'in-memory-fixture'
     return calculate_cost_forecast(dataset['data'])
 
 
 @app.get("/api/budgets")
 def get_budgets(
+    response: Response,
     auth: Tuple[Optional[User], Optional[Organization]] = Depends(get_current_user_and_org),
     db: Session = Depends(get_db)
 ):
     user, org = auth
     dataset = get_active_dataset_for_org(org, db)
+
+    repo = get_billing_repository(org, dataset, db)
+    if repo.has_records():
+        response.headers['X-Zorvex-Data-Source'] = 'database'
+        return repo.evaluate_budgets()
+
+    if getattr(repo, 'd_rec', None) and (repo.d_rec.total_rows or 0) > 0:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Dataset billing records are not yet persisted or temporarily unavailable."
+        )
+
     if not dataset.get('data'):
-        raise HTTPException(status_code=400, detail="No active dataset loaded")
+        response.headers['X-Zorvex-Data-Source'] = 'empty-workspace'
+        return []
+
+    response.headers['X-Zorvex-Data-Source'] = 'in-memory-fixture'
     return evaluate_budgets(db, dataset['data'], org_id=org.id if org else None)
 
 
@@ -2263,8 +2909,6 @@ def delete_budget(
     return {"success": True, "deleted_id": budget_id}
 
 
-# ==================== EXECUTIVE SAVINGS LEDGER API ====================
-
 @app.get("/api/ledger/records")
 def list_ledger_records(
     status: Optional[str] = None,
@@ -2272,12 +2916,12 @@ def list_ledger_records(
     auth: Tuple[Optional[User], Optional[Organization]] = Depends(get_current_user_and_org),
     db: Session = Depends(get_db)
 ):
+    """
+    Side-effect free: returns stored recommendation ledger records scoped to organization.
+    Guarantees zero database writes, updates, or deletions on repeated calls.
+    """
     user, org = auth
     org_id = org.id if org else None
-    dataset = get_active_dataset_for_org(org, db)
-    if dataset.get('data'):
-        raw = generate_recommendations(dataset['data'])
-        sync_recommendations_to_ledger(db, raw.get('recommendations', []), org_id=org_id)
     return get_ledger_records(db, status=status, category=category, org_id=org_id)
 
 
@@ -2286,13 +2930,45 @@ def get_ledger_summary(
     auth: Tuple[Optional[User], Optional[Organization]] = Depends(get_current_user_and_org),
     db: Session = Depends(get_db)
 ):
+    """
+    Side-effect free: returns executive savings ledger summary and ROI scoped to organization.
+    Guarantees zero database writes, updates, or deletions on repeated calls.
+    """
     user, org = auth
     org_id = org.id if org else None
-    dataset = get_active_dataset_for_org(org, db)
-    if dataset.get('data'):
-        raw = generate_recommendations(dataset['data'])
-        sync_recommendations_to_ledger(db, raw.get('recommendations', []), org_id=org_id)
     return get_executive_ledger_summary(db, org_id=org_id)
+
+
+@app.post("/api/ledger/sync")
+def trigger_ledger_sync(
+    auth: Tuple[User, Organization] = Depends(require_auth),
+    db: Session = Depends(get_db)
+):
+    """
+    Explicit write workflow: synchronizes algorithmic recommendations into the executive savings ledger.
+    Enforces authentication, tenant isolation, and guarantees GET endpoints remain strictly side-effect free.
+    """
+    user, org = auth
+    org_id = org.id
+    dataset = get_active_dataset_for_org(org, db)
+    cur_data = dataset.get('data')
+    if not cur_data:
+        repo = get_billing_repository(org, dataset, db)
+        if repo.has_records():
+            cur_data = repo.get_cur_data()
+    if not cur_data:
+        return {
+            "success": True,
+            "synced_count": 0,
+            "records": []
+        }
+    raw = generate_recommendations(cur_data)
+    records = sync_recommendations_to_ledger(db, raw.get('recommendations', []), org_id=org_id)
+    return {
+        "success": True,
+        "synced_count": len(records),
+        "records": records
+    }
 
 
 @app.post("/api/recommendations/{rec_id}/status")
@@ -2327,7 +3003,15 @@ def query_ai_analyst(
     user, org = auth
     dataset = get_active_dataset_for_org(org, db)
     if not dataset.get('data'):
-        raise HTTPException(status_code=400, detail="No active dataset loaded")
+        return {
+            "query": req.query,
+            "intent": "EMPTY_WORKSPACE",
+            "answer": "No billing dataset is currently active in this workspace. Please upload an AWS CUR report (.csv or .csv.gz) to start analyzing your cloud spend.",
+            "data_references": [],
+            "provider_used": "system_guard",
+            "is_deterministic": True,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
     return ask_zorvex_analyst(req.query, dataset['data'], db)
 
 

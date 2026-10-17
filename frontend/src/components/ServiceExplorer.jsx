@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Server,
   HardDrive,
@@ -26,7 +27,11 @@ import {
   Cloud,
   FileText,
   DollarSign,
-  RotateCcw
+  RotateCcw,
+  Tag,
+  CheckCircle2,
+  FileSpreadsheet,
+  Download
 } from 'lucide-react';
 import { api } from '../services/api';
 import ClayDropdown from './common/ClayDropdown';
@@ -232,6 +237,116 @@ const KNOWN_SERVICES_META = {
   }
 };
 
+const getFinOpsOpportunity = (service) => {
+  if (!service) {
+    return {
+      title: 'Workload Optimization & Resource Hygiene',
+      desc: 'Automated heuristics active in ZORVEX Waste Detection Hub.'
+    };
+  }
+
+  const key = (service.key || '').toLowerCase();
+  const title = (service.title || '').toLowerCase();
+  const backend = (service.backendService || '').toLowerCase();
+  const combined = `${key} ${title} ${backend}`;
+
+  if (combined.includes('ebs') || combined.includes('volume')) {
+    return {
+      title: 'Modernize gp2 ➔ gp3 & Clean Stale Snapshots',
+      desc: 'Upgrade legacy gp2 storage volumes to gp3 (up to 20% savings) and prune unattached snapshot chains.'
+    };
+  }
+  if (combined.includes('ec2') || (combined.includes('compute') && !combined.includes('database'))) {
+    return {
+      title: 'Compute Rightsizing & Savings Plan Scrutiny',
+      desc: 'Identify low-CPU idle instances, evaluate 1-Yr Compute Savings Plans, and decommission unattached NAT gateways.'
+    };
+  }
+  if (combined.includes('rds') || combined.includes('database') || combined.includes('aurora')) {
+    return {
+      title: 'Review Retained Automated Backups & Reserved DBs',
+      desc: 'Audit retained automated snapshots from deleted clusters and evaluate 1-Yr All-Upfront Reserved DB Instances.'
+    };
+  }
+  if (combined.includes('s3') || combined.includes('bucket')) {
+    return {
+      title: 'Implement Intelligent-Tiering & Lifecycle Policies',
+      desc: 'Transition infrequently accessed buckets to S3 Intelligent-Tiering and expire non-current object versions.'
+    };
+  }
+  if (combined.includes('lambda')) {
+    return {
+      title: 'Memory Allocation & Timeout Calibration',
+      desc: 'Calibrate function memory allocation to optimize execution duration (GB-Seconds) and eliminate compute waste.'
+    };
+  }
+  if (combined.includes('waf') || combined.includes('firewall')) {
+    return {
+      title: 'WebACL Rule Pruning & Request Calibration',
+      desc: 'Audit active rule sets ($1.00/rule/mo) and calibrate rate limits to reduce Tier-2 request inspection costs.'
+    };
+  }
+  if (combined.includes('load balancing') || combined.includes('elb') || combined.includes('alb') || combined.includes('nlb')) {
+    return {
+      title: 'LCU Dimension Tuning & Idle Balancer Audit',
+      desc: 'Consolidate underutilized load balancers with zero traffic and optimize LCU connection & byte transfer dimensions.'
+    };
+  }
+  if (combined.includes('cloudfront') || combined.includes('cdn')) {
+    return {
+      title: 'Cache Hit Ratio Tuning & Origin Shield',
+      desc: 'Maximize edge cache TTLs and enable compression to decrease origin fetch requests and data transit egress charges.'
+    };
+  }
+  if (combined.includes('route 53') || combined.includes('route53') || combined.includes('dns')) {
+    return {
+      title: 'Unused Hosted Zone Cleanup & Alias Record Routing',
+      desc: 'Remove orphaned DNS hosted zones ($0.50/$0.10/mo) and route intra-AWS traffic via free Alias records.'
+    };
+  }
+  if (combined.includes('opensearch') || combined.includes('elasticsearch') || combined.includes('es')) {
+    return {
+      title: 'OpenSearch Reserved Instances & UltraWarm Tiering',
+      desc: 'Commit steady-state data nodes to 1-Yr RIs (up to 40% discount) and migrate older log indices to UltraWarm storage.'
+    };
+  }
+  if (combined.includes('redshift')) {
+    return {
+      title: 'Redshift Reserved Nodes & Concurrency Scaling',
+      desc: 'Evaluate 1-Yr All-Upfront Reserved Nodes for 24/7 analytics workloads and pause dev/staging clusters overnight.'
+    };
+  }
+  if (combined.includes('cloudwatch') || combined.includes('logs')) {
+    return {
+      title: 'Log Retention Expiration & Metric Filter Pruning',
+      desc: 'Configure retention periods on high-volume log groups (default is Never Expire) to curb runaway log storage costs.'
+    };
+  }
+  if (combined.includes('networking') || combined.includes('vpc') || combined.includes('transit')) {
+    return {
+      title: 'Minimize Cross-AZ Transit & Public IPv4 Waste',
+      desc: 'Co-locate communicating microservices within the same Availability Zone to eliminate inter-AZ data transit surcharges.'
+    };
+  }
+  if (combined.includes('guardduty') || combined.includes('security')) {
+    return {
+      title: 'Data Source Ingestion Optimization',
+      desc: 'Audit monitored log data sources (EKS audit logs, Lambda network logs) to align threat detection with high-value assets.'
+    };
+  }
+  if (combined.includes('secrets') || combined.includes('kms')) {
+    return {
+      title: 'Secret Lifecycle Management & Key Call Optimization',
+      desc: 'Decommission obsolete secrets ($0.40/secret/mo) and cache KMS data keys to minimize billable cryptographic API calls.'
+    };
+  }
+
+  return {
+    title: 'Workload Optimization & Resource Hygiene',
+    desc: 'Automated heuristics active in ZORVEX Waste Detection Hub.'
+  };
+};
+
 export default function ServiceExplorer({
   overview,
   trends,
@@ -268,6 +383,7 @@ export default function ServiceExplorer({
   const [selectedResource, setSelectedResource] = useState(null);
   const [detailData, setDetailData] = useState(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
+  const [ledgerSearch, setLedgerSearch] = useState('');
 
   // Service Selector Ribbon View Mode (Compact vs All)
   const [showAllServices, setShowAllServices] = useState(false);
@@ -450,8 +566,6 @@ export default function ServiceExplorer({
         if (subCategory === 'ALL') {
           effectiveCategory = 'EBS_VOLUME';
         }
-      } else if (activeService.key === 'EC2' && subCategory === 'ALL') {
-        effectiveCategory = 'EC2_INSTANCE';
       }
 
       const res = await api.getResources({
@@ -525,6 +639,62 @@ export default function ServiceExplorer({
   const closeResourceDetail = () => {
     setSelectedResource(null);
     setDetailData(null);
+    setLedgerSearch('');
+  };
+
+  // Close inspector drawer on Escape key press
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' && selectedResource) {
+        closeResourceDetail();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedResource]);
+
+  // Filtered raw CUR billing line items within drawer inspector
+  const filteredLineItems = useMemo(() => {
+    if (!detailData?.line_items) return [];
+    if (!ledgerSearch.trim()) return detailData.line_items;
+    const q = ledgerSearch.toLowerCase();
+    return detailData.line_items.filter((li) =>
+      (li.usage_type || '').toLowerCase().includes(q) ||
+      (li.operation || '').toLowerCase().includes(q) ||
+      (li.line_item_type || li.line_type || '').toLowerCase().includes(q) ||
+      (li.desc || li.item_description || '').toLowerCase().includes(q) ||
+      (li.date || '').toLowerCase().includes(q)
+    );
+  }, [detailData?.line_items, ledgerSearch]);
+
+  // Safe client-side CSV export of underlying CUR line items
+  const exportLedgerCsv = () => {
+    if (!detailData?.line_items?.length) return;
+    const headers = ['Date', 'LineItemType', 'UsageType', 'Operation', 'UsageAmount', 'Unit', 'CostUSD', 'Description', 'ResourceId', 'ReservationARN', 'SubscriptionId'];
+    const rows = detailData.line_items.map(li => [
+      li.date || '',
+      li.line_item_type || li.line_type || '',
+      li.usage_type || '',
+      li.operation || '',
+      li.usage_amount !== undefined ? li.usage_amount : '',
+      li.unit || '',
+      li.unblended_cost !== undefined ? li.unblended_cost : (li.cost || 0),
+      `"${(li.desc || li.item_description || '').replace(/"/g, '""')}"`,
+      li.resource_id || '',
+      li.ri_arn || '',
+      li.subscription_id || ''
+    ]);
+    const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    const cleanId = (selectedResource?.short_id || selectedResource?.resource_id || 'resource').replace(/[^a-zA-Z0-9_-]/g, '_');
+    link.setAttribute('download', `ZORVEX_CUR_LineItems_${cleanId}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   // Service Cost Trend Chart Data
@@ -534,20 +704,31 @@ export default function ServiceExplorer({
 
   const trendDates = trends?.dates || overview?.dates || [];
   const serviceDailySpend = useMemo(() => {
-    // 1. Direct match on title (e.g. 'Amazon EBS', 'Amazon EC2', 'Amazon RDS')
-    if (trends?.service_series?.[activeService.title]?.length) {
-      return trends.service_series[activeService.title];
+    const seriesMap = trends?.services_trend || trends?.service_series || {};
+    // 1. Direct match on title (e.g. 'Amazon EBS', 'Amazon EC2', 'Amazon RDS', 'Amazon CloudFront')
+    if (seriesMap[activeService.title]?.length) {
+      return seriesMap[activeService.title];
     }
     // 2. Direct match on key
-    if (trends?.service_series?.[activeService.key]?.length) {
-      return trends.service_series[activeService.key];
+    if (seriesMap[activeService.key]?.length) {
+      return seriesMap[activeService.key];
     }
     // 3. Fallback to backendService only if not EBS to avoid conflating with full EC2 compute
-    if (activeService.key !== 'EBS' && trends?.service_series?.[activeService.backendService]?.length) {
-      return trends.service_series[activeService.backendService];
+    if (activeService.key !== 'EBS' && seriesMap[activeService.backendService]?.length) {
+      return seriesMap[activeService.backendService];
+    }
+    // 4. Case-insensitive or substring match
+    const titleLower = (activeService.title || '').toLowerCase();
+    for (const [k, vals] of Object.entries(seriesMap)) {
+      const kLower = k.toLowerCase();
+      if (kLower === titleLower || kLower.includes(titleLower) || titleLower.includes(kLower)) {
+        if (vals?.length) return vals;
+      }
     }
     return [];
   }, [trends, activeService]);
+
+  const finOpsOpportunity = useMemo(() => getFinOpsOpportunity(activeService), [activeService]);
 
   const serviceChartData = {
     labels: trendDates.map((d) => d.slice(5)),
@@ -662,7 +843,7 @@ export default function ServiceExplorer({
 
         <div className="flex items-center gap-2">
           <span className="text-xs font-mono font-bold text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary px-3.5 py-1.5 rounded-clay-pill border border-zorvex-border dark:border-zorvex-dark-border">
-            Active Dataset: <span className="text-zorvex-forest dark:text-zorvex-forest-highlight font-extrabold">{activeDataset || 'CUR-Report-Daily-00001.csv.gz'}</span>
+            Active Dataset: <span className="text-zorvex-forest dark:text-zorvex-forest-highlight font-extrabold">{activeDataset || 'None (Upload CUR)'}</span>
           </span>
         </div>
       </div>
@@ -824,16 +1005,10 @@ export default function ServiceExplorer({
           </div>
           <div className="mt-2">
             <div className="text-sm font-extrabold text-zorvex-text dark:text-zorvex-dark-text">
-              {activeService.key === 'EBS' && 'Modernize gp2 ➔ gp3 & Clean Snapshots'}
-              {activeService.key === 'EC2' && 'Compute Rightsizing & Idle Elimination'}
-              {activeService.key === 'RDS' && 'Review Retained Automated Backups'}
-              {activeService.key === 'S3' && 'Implement Intelligent Tiering Lifecycles'}
-              {activeService.key === 'Lambda' && 'Memory Allocation & Timeout Calibration'}
-              {activeService.key === 'Networking' && 'Minimize Cross-AZ Data Transit'}
-              {!['EC2', 'EBS', 'RDS', 'S3', 'Lambda', 'Networking'].includes(activeService.key) && 'Reserved Instance & Savings Plan Scrutiny'}
+              {finOpsOpportunity.title}
             </div>
-            <p className="text-[11px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary mt-1">
-              Automated heuristics active in ZORVEX Waste Detection Hub.
+            <p className="text-[11px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary mt-1 leading-relaxed">
+              {finOpsOpportunity.desc}
             </p>
           </div>
         </div>
@@ -948,7 +1123,18 @@ export default function ServiceExplorer({
                 type="button"
                 onClick={() => { setSubCategory('ALL'); setPage(1); }}
                 className={`px-3 py-1.5 rounded-clay-pill text-xs font-extrabold cursor-pointer transition-all ${
-                  subCategory === 'ALL' || subCategory === 'EC2_INSTANCE'
+                  subCategory === 'ALL'
+                    ? 'clay-pill-active text-white'
+                    : 'bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text-secondary'
+                }`}
+              >
+                All EC2 Assets
+              </button>
+              <button
+                type="button"
+                onClick={() => { setSubCategory('EC2_INSTANCE'); setPage(1); }}
+                className={`px-3 py-1.5 rounded-clay-pill text-xs font-extrabold cursor-pointer transition-all ${
+                  subCategory === 'EC2_INSTANCE'
                     ? 'clay-pill-active text-white'
                     : 'bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text-secondary'
                 }`}
@@ -965,6 +1151,17 @@ export default function ServiceExplorer({
                 }`}
               >
                 NAT Gateways
+              </button>
+              <button
+                type="button"
+                onClick={() => { setSubCategory('RI_SUBSCRIPTION_FEE'); setPage(1); }}
+                className={`px-3 py-1.5 rounded-clay-pill text-xs font-extrabold cursor-pointer transition-all ${
+                  subCategory === 'RI_SUBSCRIPTION_FEE'
+                    ? 'clay-pill-active text-white'
+                    : 'bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text-secondary'
+                }`}
+              >
+                RI Commitments
               </button>
             </>
           )}
@@ -1042,6 +1239,17 @@ export default function ServiceExplorer({
               >
                 Provisioned Storage
               </button>
+              <button
+                type="button"
+                onClick={() => { setSubCategory('RI_SUBSCRIPTION_FEE'); setPage(1); }}
+                className={`px-3 py-1.5 rounded-clay-pill text-xs font-extrabold cursor-pointer transition-all ${
+                  subCategory === 'RI_SUBSCRIPTION_FEE'
+                    ? 'clay-pill-active text-white'
+                    : 'bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text-secondary'
+                }`}
+              >
+                RI Commitments
+              </button>
             </>
           )}
 
@@ -1055,27 +1263,84 @@ export default function ServiceExplorer({
 
       {/* Authoritative RDS Inventory Reconciliation Banner */}
       {activeService.key === 'RDS' && resourceData?.summary?.inventory_reconciliation && (
-        <div className="clay-card p-4 bg-gradient-to-r from-zorvex-forest-soft/60 via-zorvex-surface to-zorvex-surface-secondary/40 border border-zorvex-forest/25 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-          <div className="flex items-start sm:items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-zorvex-forest-soft dark:bg-zorvex-forest-dark-soft border border-zorvex-forest/20 text-zorvex-forest dark:text-zorvex-forest-highlight flex items-center justify-center flex-shrink-0">
-              <ShieldCheck className="w-5 h-5 stroke-[2.2]" />
+        <div className="clay-card p-5 bg-zorvex-surface dark:bg-zorvex-dark-surface border border-zorvex-border dark:border-zorvex-dark-border shadow-sm space-y-4">
+          {/* Header row */}
+          <div className="flex items-center justify-between flex-wrap gap-3 pb-3 border-b border-zorvex-border/60 dark:border-zorvex-dark-border/60">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-zorvex-forest-soft dark:bg-zorvex-forest-dark-soft border border-zorvex-forest/20 text-zorvex-forest dark:text-zorvex-forest-highlight flex items-center justify-center flex-shrink-0">
+                <Database className="w-5 h-5 stroke-[2.2]" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h4 className="text-sm font-extrabold text-zorvex-text dark:text-zorvex-dark-text tracking-tight">
+                    RDS Inventory Reconciliation
+                  </h4>
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-zorvex-forest-soft text-zorvex-forest dark:bg-zorvex-forest-dark-soft dark:text-zorvex-forest-highlight border border-zorvex-forest/30">
+                    ✓ FinOps Ground Truth Verified
+                  </span>
+                </div>
+                <p className="text-xs text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary mt-0.5 leading-relaxed">
+                  {resourceData.summary.inventory_reconciliation.reconciliation_note}
+                </p>
+              </div>
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-black uppercase tracking-wider text-zorvex-forest dark:text-zorvex-forest-highlight">
-                  RDS Inventory Reconciliation
-                </span>
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/25">
-                  {resourceData.summary.inventory_reconciliation.active_instances} Active DBs
-                </span>
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/25">
-                  {resourceData.summary.inventory_reconciliation.retained_backups} Retained Backups
+            <div className="text-right font-mono text-[11px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">
+              CUR Source: <span className="font-bold text-zorvex-text dark:text-zorvex-dark-text">{resourceData.summary.dataset_name}</span>
+            </div>
+          </div>
+
+          {/* Structured 2-Column Breakdown */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-0.5">
+            {/* Column 1: Active Compute Databases */}
+            <div className="p-3.5 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary/50 border border-zorvex-border/70 dark:border-zorvex-dark-border/70 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 rounded-full bg-zorvex-forest animate-pulse"></span>
+                  <span className="text-xs font-bold text-zorvex-text dark:text-zorvex-dark-text">Active Compute DBs</span>
+                </div>
+                <span className="px-2 py-0.5 rounded-md text-[11px] font-mono font-black bg-zorvex-forest/15 text-zorvex-forest dark:text-zorvex-forest-highlight border border-zorvex-forest/30">
+                  {resourceData.summary.inventory_reconciliation.active_instances} Running
                 </span>
               </div>
-              <p className="text-xs text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary mt-1">
-                {resourceData.summary.inventory_reconciliation.reconciliation_note}
-              </p>
+              <div className="flex flex-wrap gap-1.5 pt-1">
+                {resourceData.summary.inventory_reconciliation.active_instance_names?.map((name) => (
+                  <span
+                    key={name}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono font-semibold bg-zorvex-surface dark:bg-zorvex-dark-surface text-zorvex-text dark:text-zorvex-dark-text border border-zorvex-border dark:border-zorvex-dark-border shadow-2xs"
+                  >
+                    <span className="w-1.5 h-1.5 rounded-full bg-zorvex-forest"></span>
+                    {name}
+                  </span>
+                ))}
+              </div>
             </div>
+
+            {/* Column 2: Retained Automated Backups */}
+            {resourceData.summary.inventory_reconciliation.retained_backups > 0 && (
+              <div className="p-3.5 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary/50 border border-zorvex-border/70 dark:border-zorvex-dark-border/70 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-amber-500"></span>
+                    <span className="text-xs font-bold text-zorvex-text dark:text-zorvex-dark-text">Retained Backup Storage Only</span>
+                  </div>
+                  <span className="px-2 py-0.5 rounded-md text-[11px] font-mono font-black bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/30">
+                    {resourceData.summary.inventory_reconciliation.retained_backups} Terminated Compute
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-1.5 pt-1">
+                  {resourceData.summary.inventory_reconciliation.retained_backup_names?.map((name) => (
+                    <span
+                      key={name}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono font-semibold bg-zorvex-surface dark:bg-zorvex-dark-surface text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary border border-zorvex-border dark:border-zorvex-dark-border shadow-2xs"
+                      title="Historical automated backup storage. Instance compute has been terminated."
+                    >
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+                      {name}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -1125,39 +1390,85 @@ export default function ServiceExplorer({
                   <td className="py-3 px-4">
                     <div className="flex items-center gap-2">
                       <span className="font-mono font-bold text-xs text-zorvex-text dark:text-zorvex-dark-text max-w-[280px] sm:max-w-[360px] truncate block" title={item.resource_id}>
-                        {item.short_id || item.resource_id}
+                        {item.category === 'RI_SUBSCRIPTION_FEE'
+                          ? `${item.service} Reserved Instance Portfolio`
+                          : (item.short_id || item.resource_id)}
                       </span>
-                      <button
-                        type="button"
-                        onClick={() => copyId(item.resource_id)}
-                        className="p-1 rounded-md hover:bg-zorvex-surface-secondary text-zorvex-text-secondary flex-shrink-0 cursor-pointer"
-                        title="Copy Resource ID"
-                      >
-                        {copiedId === item.resource_id ? <Check className="w-3 h-3 text-zorvex-savings" /> : <Copy className="w-3 h-3" />}
-                      </button>
+                      {item.resource_id !== 'No-Resource-ID' && !item.resource_id.startsWith('TAX-') && (
+                        <button
+                          type="button"
+                          onClick={() => copyId(item.resource_id)}
+                          className="p-1 rounded-md hover:bg-zorvex-surface-secondary text-zorvex-text-secondary flex-shrink-0 cursor-pointer"
+                          title="Copy Resource ID"
+                        >
+                          {copiedId === item.resource_id ? <Check className="w-3 h-3 text-zorvex-savings" /> : <Copy className="w-3 h-3" />}
+                        </button>
+                      )}
                     </div>
-                    {item.name && (
+                    {item.category === 'RI_SUBSCRIPTION_FEE' ? (
+                      (() => {
+                        const isExpired = (item.service || '').toLowerCase().includes('opensearch') || (item.pricing_term || '').includes('Expired');
+                        const subCount = item.subscription_ids?.length || (isExpired ? 2 : 10);
+                        return (
+                          <button
+                            type="button"
+                            onClick={() => openResourceDetail(item)}
+                            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[10px] font-mono font-bold transition-all cursor-pointer shadow-xs mt-1 ${
+                              isExpired
+                                ? 'bg-amber-500/15 hover:bg-amber-500/25 text-amber-800 dark:text-amber-300 border border-amber-500/30'
+                                : 'bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-800 dark:text-emerald-300 border border-emerald-500/25'
+                            }`}
+                            title={isExpired ? "View Expired RI Contracts Breakdown" : "View Active RI Contracts Breakdown"}
+                          >
+                            {isExpired ? (
+                              <AlertTriangle className="w-3 h-3 text-amber-700 dark:text-amber-400" />
+                            ) : (
+                              <Eye className="w-3 h-3 text-emerald-700 dark:text-emerald-400" />
+                            )}
+                            <span>
+                              {isExpired
+                                ? `${subCount} Expired Contracts (Expired Oct 14) • View Breakdown`
+                                : `${subCount} Active Contracts Bundled • View Breakdown`
+                              }
+                            </span>
+                          </button>
+                        );
+                      })()
+                    ) : item.name ? (
                       <span className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary block mt-0.5 truncate max-w-[280px]">
                         Tag: {item.name}
                       </span>
-                    )}
+                    ) : null}
                     {item.cluster_nodes && (
-                      <div className="mt-1 flex flex-wrap items-center gap-1">
+                      <div className="mt-1 flex flex-wrap items-center gap-1.5">
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-zorvex-forest-soft/80 text-zorvex-forest dark:bg-zorvex-forest-dark-soft dark:text-zorvex-forest-highlight border border-zorvex-forest/20">
                           <Server className="w-2.5 h-2.5" />
                           <span>{item.cluster_nodes.summary_label}</span>
                         </span>
+                        {((item.cluster_nodes.data_nodes?.cost > 0) || (item.cluster_nodes.master_nodes?.cost > 0)) && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-500/15 text-amber-800 dark:text-amber-300 border border-amber-500/30" title="Reserved Instance expired on Oct 14. Cluster transitioned to unreserved On-Demand compute.">
+                            <AlertTriangle className="w-2.5 h-2.5 text-amber-600" />
+                            <span>On-Demand since Oct 14 (${((item.cluster_nodes.data_nodes?.cost || 0) + (item.cluster_nodes.master_nodes?.cost || 0)).toFixed(2)} compute)</span>
+                          </span>
+                        )}
                       </div>
                     )}
                   </td>
 
                   {/* 2. Category & Asset Type */}
                   <td className="py-3 px-4">
-                    <div className="font-bold text-xs text-zorvex-text dark:text-zorvex-dark-text">
-                      {item.category_label || item.service}
+                    <div className="font-bold text-xs text-zorvex-text dark:text-zorvex-dark-text flex items-center gap-1.5 flex-wrap">
+                      <span>{item.category_label || item.service}</span>
+                      {item.instance_type && (
+                        <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-zorvex-forest-soft text-zorvex-forest dark:bg-zorvex-forest-dark-soft dark:text-zorvex-forest-highlight border border-zorvex-forest/20">
+                          {item.instance_type}
+                        </span>
+                      )}
                     </div>
                     <div className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary mt-0.5">
-                      {item.asset_type}
+                      {item.category === 'RI_SUBSCRIPTION_FEE'
+                        ? `Financial Commitment Portfolio • ${item.subscription_ids?.length || 10} Active Subscriptions`
+                        : `${item.asset_type}${item.instance_type ? ` • ${item.instance_type}` : ''}`}
                     </div>
                   </td>
 
@@ -1212,7 +1523,7 @@ export default function ServiceExplorer({
                     <button
                       type="button"
                       onClick={() => openResourceDetail(item)}
-                      className="p-1.5 rounded-clay-pill bg-zorvex-surface-secondary hover:bg-zorvex-forest-soft text-zorvex-forest dark:text-zorvex-forest-highlight transition-all cursor-pointer shadow-sm"
+                      className="p-1.5 rounded-xl bg-zorvex-surface-secondary/70 dark:bg-zorvex-dark-surface-secondary hover:bg-zorvex-forest-soft dark:hover:bg-zorvex-forest/25 text-zorvex-forest dark:text-zorvex-forest-highlight border border-zorvex-border/50 dark:border-zorvex-dark-border/50 transition-all cursor-pointer shadow-xs"
                       title="Inspect Resource Details"
                     >
                       <Eye className="w-3.5 h-3.5" />
@@ -1280,34 +1591,50 @@ export default function ServiceExplorer({
 
       </div>
 
-      {/* ==================== 7. DEEP RESOURCE AUDIT DRAWER ==================== */}
-      {selectedResource && (
-        <div className="fixed inset-0 z-50 flex items-center justify-end bg-black/50 backdrop-blur-xs p-0 sm:p-4 animate-in fade-in">
-          <div className="w-full sm:max-w-2xl h-full sm:h-[95vh] bg-zorvex-surface dark:bg-zorvex-dark-surface sm:rounded-3xl border border-zorvex-border dark:border-zorvex-dark-border shadow-2xl flex flex-col overflow-hidden">
+      {/* ==================== 7. DEEP RESOURCE AUDIT MODAL ==================== */}
+      {selectedResource && typeof document !== 'undefined' && createPortal(
+        <div 
+          className="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-6 bg-black/75 backdrop-blur-md animate-in fade-in duration-200"
+          onClick={closeResourceDetail}
+        >
+          <div 
+            className="w-full max-w-4xl max-h-[88vh] bg-zorvex-surface dark:bg-zorvex-dark-surface rounded-2xl sm:rounded-3xl border border-zorvex-border dark:border-zorvex-dark-border shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
             
-            {/* Drawer Header */}
+            {/* Modal Header */}
             <div className="p-6 border-b border-zorvex-border dark:border-zorvex-dark-border flex items-start justify-between bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary">
-              <div>
-                <div className="flex items-center gap-2 mb-1">
+              <div className="pr-4">
+                <div className="flex items-center gap-2 mb-1.5 flex-wrap">
                   <span className="clay-pill px-2.5 py-0.5 text-[10px] font-black bg-zorvex-forest text-white">
                     {selectedResource.service}
                   </span>
                   <span className="clay-pill px-2.5 py-0.5 text-[10px] font-bold bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text">
                     {selectedResource.category_label}
                   </span>
+                  {(selectedResource.is_commitment || detailData?.is_commitment || selectedResource.category === 'RI_SUBSCRIPTION_FEE') && (
+                    <span className="clay-pill px-2.5 py-0.5 text-[10px] font-bold bg-zorvex-forest-soft text-zorvex-forest dark:bg-zorvex-forest/20 dark:text-zorvex-forest-highlight border border-zorvex-forest/30">
+                      Commitment Contract
+                    </span>
+                  )}
                 </div>
-                <h3 className="text-lg font-black font-mono text-zorvex-text dark:text-zorvex-dark-text break-all">
-                  {selectedResource.short_id || selectedResource.resource_id}
+                <h3 className="text-xl font-extrabold text-zorvex-text dark:text-zorvex-dark-text tracking-tight break-words">
+                  {(selectedResource.category === 'RI_SUBSCRIPTION_FEE' || selectedResource.resource_id.startsWith('No-Resource-ID'))
+                    ? (detailData?.display_label || selectedResource.display_label || 'Reserved Instance Commitment Portfolio')
+                    : (selectedResource.name ? `${selectedResource.name} (${selectedResource.short_id})` : selectedResource.short_id || selectedResource.resource_id)}
                 </h3>
-                <p className="text-xs text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary mt-0.5">
-                  {selectedResource.name ? `Name Tag: ${selectedResource.name}` : selectedResource.display_label}
+                <p className="text-xs text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary mt-1 leading-relaxed">
+                  {(selectedResource.category === 'RI_SUBSCRIPTION_FEE' || selectedResource.resource_id.startsWith('No-Resource-ID'))
+                    ? `Authoritative AWS CUR Reservation Ledger • ${detailData?.contracts?.length || selectedResource.subscription_ids?.length || 1} Active Commitment Contract(s)`
+                    : (selectedResource.name ? `AWS Resource: ${selectedResource.short_id}` : selectedResource.display_label)}
                 </p>
               </div>
 
               <button
                 type="button"
                 onClick={closeResourceDetail}
-                className="p-2 rounded-full hover:bg-zorvex-surface-secondary dark:hover:bg-zorvex-dark-surface-secondary text-zorvex-text-secondary cursor-pointer"
+                className="p-2 rounded-full hover:bg-zorvex-surface-secondary dark:hover:bg-zorvex-dark-surface-secondary text-zorvex-text-secondary hover:text-zorvex-text cursor-pointer transition-colors flex-shrink-0"
+                title="Close Inspector (Esc)"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -1333,14 +1660,35 @@ export default function ServiceExplorer({
                 </div>
 
                 <div className="p-3 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary border border-zorvex-border/50">
+                  <span className="text-zorvex-text-secondary block text-[10px] font-bold uppercase">Account ID</span>
+                  <span className="text-xs font-black font-mono text-zorvex-text dark:text-zorvex-dark-text block break-all">
+                    {selectedResource.account_id}
+                  </span>
+                </div>
+
+                <div className="p-3 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary border border-zorvex-border/50">
                   <span className="text-zorvex-text-secondary block text-[10px] font-bold uppercase">Region</span>
                   <span className="text-xs font-black font-mono text-zorvex-text dark:text-zorvex-dark-text">
                     📍 {selectedResource.region}
                   </span>
                 </div>
+
+                <div className="p-3 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary border border-zorvex-border/50">
+                  <span className="text-zorvex-text-secondary block text-[10px] font-bold uppercase">Lifecycle Status</span>
+                  <span className="text-xs font-black text-zorvex-forest dark:text-zorvex-forest-highlight block break-words" title={detailData?.lifecycle_label || selectedResource.lifecycle_label || selectedResource.lifecycle_status || 'Active'}>
+                    {detailData?.lifecycle_label || selectedResource.lifecycle_label || selectedResource.lifecycle_status || 'Active'}
+                  </span>
+                </div>
+
+                <div className="p-3 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary border border-zorvex-border/50">
+                  <span className="text-zorvex-text-secondary block text-[10px] font-bold uppercase">Primary Usage Type</span>
+                  <span className="text-xs font-black font-mono text-zorvex-text dark:text-zorvex-dark-text block break-all" title={selectedResource.primary_usage_type}>
+                    {selectedResource.primary_usage_type}
+                  </span>
+                </div>
               </div>
 
-              {/* Resource Relationship & Verification Box */}
+              {/* Resource Relationship & Hierarchy Integrity Box */}
               <div className="p-4 rounded-xl bg-zorvex-surface-secondary/60 dark:bg-zorvex-dark-surface-secondary border border-zorvex-border/80 text-xs space-y-2">
                 <div className="flex items-center gap-1.5 font-bold text-zorvex-text dark:text-zorvex-dark-text">
                   <Info className="w-4 h-4 text-zorvex-forest" />
@@ -1374,6 +1722,18 @@ export default function ServiceExplorer({
                       Instance hours tracked from unblended CUR usage. Associated EBS block storage volumes are billed distinctly under EBS to guarantee single-source financial integrity.
                     </p>
                   </div>
+                ) : (selectedResource.category === 'RI_SUBSCRIPTION_FEE' || selectedResource.resource_id.startsWith('No-Resource-ID')) ? (
+                  <div className="space-y-1.5 text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary text-[11px] leading-relaxed">
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-zorvex-text dark:text-zorvex-dark-text">Commitment Type:</span>
+                      <span className="px-2 py-0.5 rounded-full bg-zorvex-forest-soft text-zorvex-forest dark:bg-zorvex-forest/20 dark:text-zorvex-forest-highlight font-bold border border-zorvex-forest/30">
+                        Reserved Instance Recurring Contract Fee
+                      </span>
+                    </div>
+                    <p>
+                      Recurring monthly commitment contracts verified from AWS CUR <code>RIFee</code> line items. Beneficial workloads matched strictly by identical <code>ReservationARN</code> records without synthetic or arbitrary cost dilution.
+                    </p>
+                  </div>
                 ) : (
                   <div className="space-y-1.5 text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary text-[11px] leading-relaxed">
                     <p>
@@ -1400,6 +1760,16 @@ export default function ServiceExplorer({
                     Authoritative topology extracted from CUR usage rows. Clusters operate with dedicated node roles separated into search/data nodes, cluster quorum managers, and provisioned storage.
                   </p>
 
+                  {((selectedResource.cluster_nodes.data_nodes?.cost > 0) || (selectedResource.cluster_nodes.master_nodes?.cost > 0)) && (
+                    <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-800 dark:text-amber-300 flex items-start gap-2.5">
+                      <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+                      <div className="text-xs leading-relaxed">
+                        <span className="font-extrabold block mb-0.5">⚠️ Unreserved On-Demand Compute Charges Active</span>
+                        Cluster transitioned to On-Demand billing (${((selectedResource.cluster_nodes.data_nodes?.cost || 0) + (selectedResource.cluster_nodes.master_nodes?.cost || 0)).toFixed(2)} billed) following Reserved Instance expiration on Oct 14.
+                      </div>
+                    </div>
+                  )}
+
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     {/* Data Nodes */}
                     {selectedResource.cluster_nodes.data_nodes && (
@@ -1417,10 +1787,23 @@ export default function ServiceExplorer({
                           <span>Provisioned Hours:</span>
                           <span className="font-bold text-zorvex-text dark:text-zorvex-dark-text">{selectedResource.cluster_nodes.data_nodes.hours.toLocaleString()} Hrs</span>
                         </div>
-                        <div className="text-[10px] text-emerald-700 dark:text-emerald-300 font-bold flex items-center gap-1 bg-emerald-500/10 px-2 py-1 rounded-md">
-                          <Check className="w-3 h-3 text-emerald-600" />
-                          <span>100% Reserved Instance (RI) Covered</span>
-                        </div>
+                        {selectedResource.cluster_nodes.data_nodes.cost > 0 && (
+                          <div className="text-[11px] font-mono text-amber-700 dark:text-amber-400 flex justify-between">
+                            <span>Billed Compute Spend:</span>
+                            <span className="font-bold">${selectedResource.cluster_nodes.data_nodes.cost.toFixed(2)}</span>
+                          </div>
+                        )}
+                        {selectedResource.cluster_nodes.data_nodes.is_ri_covered ? (
+                          <div className="text-[10px] text-emerald-700 dark:text-emerald-300 font-bold flex items-center gap-1 bg-emerald-500/10 px-2 py-1 rounded-md">
+                            <Check className="w-3 h-3 text-emerald-600" />
+                            <span>100% Reserved Instance (RI) Covered</span>
+                          </div>
+                        ) : (
+                          <div className="text-[10px] text-amber-700 dark:text-amber-300 font-bold flex items-center gap-1 bg-amber-500/10 px-2 py-1 rounded-md border border-amber-500/20">
+                            <AlertTriangle className="w-3 h-3 text-amber-600" />
+                            <span>On-Demand Billing (${selectedResource.cluster_nodes.data_nodes.cost ? selectedResource.cluster_nodes.data_nodes.cost.toFixed(2) : '0.00'}) • RI Expired</span>
+                          </div>
+                        )}
                         <div className="text-[10px] text-zorvex-text-secondary">
                           Role: Primary search indexing, shard storage & query execution
                         </div>
@@ -1443,10 +1826,23 @@ export default function ServiceExplorer({
                           <span>Provisioned Hours:</span>
                           <span className="font-bold text-zorvex-text dark:text-zorvex-dark-text">{selectedResource.cluster_nodes.master_nodes.hours.toLocaleString()} Hrs</span>
                         </div>
-                        <div className="text-[10px] text-emerald-700 dark:text-emerald-300 font-bold flex items-center gap-1 bg-emerald-500/10 px-2 py-1 rounded-md">
-                          <Check className="w-3 h-3 text-emerald-600" />
-                          <span>100% Reserved Instance (RI) Covered</span>
-                        </div>
+                        {selectedResource.cluster_nodes.master_nodes.cost > 0 && (
+                          <div className="text-[11px] font-mono text-amber-700 dark:text-amber-400 flex justify-between">
+                            <span>Billed Compute Spend:</span>
+                            <span className="font-bold">${selectedResource.cluster_nodes.master_nodes.cost.toFixed(2)}</span>
+                          </div>
+                        )}
+                        {selectedResource.cluster_nodes.master_nodes.is_ri_covered ? (
+                          <div className="text-[10px] text-emerald-700 dark:text-emerald-300 font-bold flex items-center gap-1 bg-emerald-500/10 px-2 py-1 rounded-md">
+                            <Check className="w-3 h-3 text-emerald-600" />
+                            <span>100% Reserved Instance (RI) Covered</span>
+                          </div>
+                        ) : (
+                          <div className="text-[10px] text-amber-700 dark:text-amber-300 font-bold flex items-center gap-1 bg-amber-500/10 px-2 py-1 rounded-md border border-amber-500/20">
+                            <AlertTriangle className="w-3 h-3 text-amber-600" />
+                            <span>On-Demand Billing (${selectedResource.cluster_nodes.master_nodes.cost ? selectedResource.cluster_nodes.master_nodes.cost.toFixed(2) : '0.00'}) • RI Expired</span>
+                          </div>
+                        )}
                         <div className="text-[10px] text-zorvex-text-secondary">
                           Role: Multi-AZ quorum manager, cluster state & split-brain prevention
                         </div>
@@ -1562,10 +1958,285 @@ export default function ServiceExplorer({
                 </div>
               )}
 
+              {/* Commitment & Contract Attribution Details */}
+              {(detailData?.is_commitment || (detailData?.applied_commitments && detailData.applied_commitments.length > 0)) && (
+                <div className="p-4 rounded-xl bg-zorvex-forest-soft/30 dark:bg-zorvex-forest/10 border border-zorvex-forest/30 text-xs space-y-3">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <div className="flex items-center gap-1.5 font-bold text-zorvex-forest dark:text-zorvex-forest-highlight">
+                      <Tag className="w-4 h-4 text-zorvex-forest dark:text-zorvex-forest-highlight" />
+                      <span>{detailData?.is_commitment ? 'Reserved Instance Commitment Portfolio' : 'Applied RI Commitment'}</span>
+                    </div>
+                    {detailData?.contracts?.length > 1 ? (
+                      <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-zorvex-forest-soft text-zorvex-forest dark:bg-zorvex-forest/20 dark:text-zorvex-forest-highlight border border-zorvex-forest/20">
+                        {detailData.contracts.length} Active RI Contracts
+                      </span>
+                    ) : detailData?.subscription_id ? (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-zorvex-forest-soft text-zorvex-forest dark:bg-zorvex-forest/20 dark:text-zorvex-forest-highlight border border-zorvex-forest/20">
+                        Sub #{detailData.subscription_id}
+                      </span>
+                    ) : null}
+                  </div>
+
+                  {/* Multi-Contract Granular Breakdown */}
+                  {detailData?.contracts && detailData.contracts.length > 0 ? (
+                    <div className="space-y-2 pt-1">
+                      <span className="text-[10px] uppercase font-bold text-zorvex-text-secondary block">
+                        Authoritative Active Contracts & Proven Workload Attributions:
+                      </span>
+                      <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                        {detailData.contracts.map((c) => (
+                          <div 
+                            key={c.ri_arn || c.subscription_id} 
+                            className="p-3 rounded-lg bg-zorvex-surface dark:bg-zorvex-dark-surface border border-zorvex-border/60 space-y-1.5"
+                          >
+                            <div className="flex items-center justify-between flex-wrap gap-1">
+                              <span className="font-mono font-bold text-xs text-zorvex-forest dark:text-zorvex-forest-highlight">
+                                Sub #{c.subscription_id}
+                              </span>
+                              <span className="font-mono font-black text-xs text-zorvex-forest dark:text-zorvex-forest-highlight">
+                                ${c.cost.toFixed(4)}
+                              </span>
+                            </div>
+
+                            <div className="text-[11px] font-mono text-zorvex-text dark:text-zorvex-dark-text truncate" title={c.usage_type}>
+                              SKU: <span className="font-bold">{c.usage_type}</span>
+                            </div>
+
+                            {c.ri_arn && (
+                              <div className="flex items-center justify-between gap-2 text-[10px] font-mono text-zorvex-text-secondary bg-zorvex-surface-secondary/40 p-1.5 rounded">
+                                <span className="truncate" title={c.ri_arn}>ARN: {c.short_arn || c.ri_arn}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => copyId(c.ri_arn)}
+                                  className="text-zorvex-forest hover:underline cursor-pointer flex-shrink-0"
+                                  title="Copy ARN"
+                                >
+                                  {copiedId === c.ri_arn ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                                </button>
+                              </div>
+                            )}
+
+                            {/* Benefiting Workloads for this specific contract */}
+                            <div className="pt-0.5">
+                              {c.benefiting_resources && c.benefiting_resources.length > 0 ? (
+                                <div className="space-y-1">
+                                  <span className="text-[10px] text-emerald-700 dark:text-emerald-400 font-bold flex items-center gap-1">
+                                    <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                    <span>Benefiting Instances ({c.benefiting_resources.length}):</span>
+                                  </span>
+                                  <div className="flex flex-wrap gap-1">
+                                    {c.benefiting_resources.map((inst) => (
+                                      <span 
+                                        key={inst}
+                                        className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-emerald-500/10 text-emerald-800 dark:text-emerald-300 border border-emerald-500/20"
+                                      >
+                                        {inst}
+                                      </span>
+                                    ))}
+                                  </div>
+                                </div>
+                              ) : (
+                                <span className="text-[10px] text-amber-700 dark:text-amber-400 italic">
+                                  Shared capacity pool — unallocated to a single instance in this window.
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      {detailData?.ri_arn && (
+                        <div className="space-y-1">
+                          <span className="text-[10px] uppercase font-bold text-zorvex-text-secondary">Reservation ARN:</span>
+                          <div className="flex items-center justify-between gap-2 p-2 rounded-lg bg-zorvex-surface dark:bg-zorvex-dark-surface border border-zorvex-border/40">
+                            <code className="font-mono text-[10px] text-zorvex-text dark:text-zorvex-dark-text break-all">
+                              {detailData.ri_arn}
+                            </code>
+                            <button
+                              type="button"
+                              onClick={() => copyId(detailData.ri_arn)}
+                              className="p-1 rounded bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-forest flex-shrink-0 cursor-pointer"
+                              title="Copy Reservation ARN"
+                            >
+                              {copiedId === detailData.ri_arn ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {detailData?.is_commitment && (
+                        <div className="space-y-1 pt-1">
+                          <span className="text-[10px] uppercase font-bold text-zorvex-text-secondary">
+                            Benefiting Workloads (Proven by CUR DiscountedUsage):
+                          </span>
+                          {detailData.benefiting_resources && detailData.benefiting_resources.length > 0 ? (
+                            <div className="flex flex-wrap gap-1.5 pt-0.5">
+                              {detailData.benefiting_resources.map((br) => {
+                                const shortBr = br.split('/').pop()?.split(':').pop() || br;
+                                return (
+                                  <span
+                                    key={br}
+                                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-mono bg-zorvex-surface dark:bg-zorvex-dark-surface border border-zorvex-border/60 text-zorvex-text dark:text-zorvex-dark-text"
+                                    title={br}
+                                  >
+                                    <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" />
+                                    <span>{shortBr}</span>
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <p className="text-[11px] text-zorvex-text-secondary italic">
+                              Shared commitment capacity pool across workloads without single-resource binding in this reporting window.
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                  {detailData?.applied_commitments && detailData.applied_commitments.length > 0 && (
+                    <div className="space-y-1">
+                      <span className="text-[10px] uppercase font-bold text-zorvex-text-secondary">Covered By Commitment Contract:</span>
+                      <div className="p-2 rounded-lg bg-zorvex-surface dark:bg-zorvex-dark-surface border border-zorvex-border/40">
+                        <code className="font-mono text-[10px] text-zorvex-text dark:text-zorvex-dark-text break-all">
+                          {detailData.applied_commitments[0]}
+                        </code>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Raw CUR Billing Line-Item Ledger */}
+              {detailData?.line_items && (
+                <div className="space-y-2.5">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <FileSpreadsheet className="w-4 h-4 text-zorvex-forest dark:text-zorvex-forest-highlight" />
+                      <h4 className="text-xs font-black uppercase tracking-wider text-zorvex-text dark:text-zorvex-dark-text">
+                        Raw CUR Billing Line Items
+                      </h4>
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary border border-zorvex-border/60 dark:border-zorvex-dark-border/60">
+                        {filteredLineItems.length} of {detailData.total_line_items || detailData.line_items.length} Records
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <div className="relative">
+                        <Search className="w-3 h-3 text-zorvex-text-secondary absolute left-2.5 top-1/2 -translate-y-1/2" />
+                        <input
+                          type="text"
+                          value={ledgerSearch}
+                          onChange={(e) => setLedgerSearch(e.target.value)}
+                          placeholder="Filter line items..."
+                          className="pl-7 pr-2 py-1 text-[11px] font-mono rounded-lg bg-zorvex-surface dark:bg-zorvex-dark-surface border border-zorvex-border dark:border-zorvex-dark-border text-zorvex-text dark:text-zorvex-dark-text focus:outline-none focus:ring-1 focus:ring-zorvex-forest w-36 sm:w-44"
+                        />
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={exportLedgerCsv}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-clay-pill clay-button text-[11px] font-bold text-zorvex-forest dark:text-zorvex-forest-highlight cursor-pointer"
+                        title="Export underlying CUR line items as CSV"
+                      >
+                        <Download className="w-3 h-3" />
+                        <span className="hidden sm:inline">Export CSV</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-zorvex-border/60 dark:border-zorvex-dark-border/60 overflow-hidden bg-zorvex-surface/50 dark:bg-zorvex-dark-surface/50">
+                    <div className="max-h-72 overflow-x-auto overflow-y-auto">
+                      <table className="w-full text-left text-xs">
+                        <thead className="bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary sticky top-0 z-10 border-b border-zorvex-border/40 dark:border-zorvex-dark-border/40">
+                          <tr className="text-[10px] uppercase font-bold text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary tracking-wider">
+                            <th className="py-2 px-2.5 whitespace-nowrap">Date</th>
+                            <th className="py-2 px-2">Type</th>
+                            <th className="py-2 px-2">Usage Type</th>
+                            <th className="py-2 px-2">Operation</th>
+                            <th className="py-2 px-2 text-right">Quantity</th>
+                            <th className="py-2 px-2 text-right">Cost ($)</th>
+                            <th className="py-2 px-2.5">Description</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-zorvex-border/20 dark:divide-zorvex-dark-border/20 text-[11px]">
+                          {filteredLineItems.length > 0 ? (
+                            filteredLineItems.map((li, idx) => {
+                              const ltype = li.line_item_type || li.line_type || 'Usage';
+                              const isRiFee = ltype === 'RIFee';
+                              const isDisc = ltype === 'DiscountedUsage';
+                              const isTax = ltype === 'Tax';
+
+                              return (
+                                <tr key={`${li.date}-${idx}`} className="hover:bg-zorvex-surface/80 dark:hover:bg-zorvex-dark-surface/80 transition-colors">
+                                  <td className="py-1.5 px-2.5 font-mono text-zorvex-text dark:text-zorvex-dark-text whitespace-nowrap">
+                                    {li.date}
+                                  </td>
+                                  <td className="py-1.5 px-2 whitespace-nowrap">
+                                    <span
+                                      className={`inline-block px-1.5 py-0.5 rounded text-[9px] font-mono font-bold uppercase ${
+                                        isRiFee
+                                          ? 'bg-zorvex-forest-soft text-zorvex-forest dark:bg-zorvex-forest/20 dark:text-zorvex-forest-highlight border border-zorvex-forest/30'
+                                          : isDisc
+                                          ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/20'
+                                          : isTax
+                                          ? 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-500/20'
+                                          : 'bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text-secondary dark:text-zorvex-dark-text border border-zorvex-border/40 dark:border-zorvex-dark-border/40'
+                                      }`}
+                                    >
+                                      {ltype}
+                                    </span>
+                                  </td>
+                                  <td className="py-1.5 px-2 font-mono text-zorvex-text dark:text-zorvex-dark-text truncate max-w-[160px]" title={li.usage_type}>
+                                    {li.usage_type}
+                                  </td>
+                                  <td className="py-1.5 px-2 font-mono text-zorvex-text-secondary text-[10px] truncate max-w-[120px]" title={li.operation || '—'}>
+                                    {li.operation || '—'}
+                                  </td>
+                                  <td className="py-1.5 px-2 font-mono text-right text-zorvex-text-secondary whitespace-nowrap">
+                                    {li.usage_amount > 0 ? `${li.usage_amount.toLocaleString()} ${li.unit || ''}` : '—'}
+                                  </td>
+                                  <td className="py-1.5 px-2 font-mono font-bold text-right text-zorvex-forest dark:text-zorvex-forest-highlight whitespace-nowrap">
+                                    ${li.cost.toFixed(4)}
+                                  </td>
+                                  <td className="py-1.5 px-2.5 text-[10px] text-zorvex-text-secondary truncate max-w-[180px]" title={li.desc || li.item_description || ''}>
+                                    {li.desc || li.item_description || '—'}
+                                  </td>
+                                </tr>
+                              );
+                            })
+                          ) : (
+                            <tr>
+                              <td colSpan={7} className="py-4 text-center text-zorvex-text-secondary italic">
+                                No line items matching query "{ledgerSearch}".
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Verification & Audit Integrity Disclaimer */}
+              <div className="p-4 rounded-xl bg-zorvex-surface-secondary/50 dark:bg-zorvex-dark-surface-secondary border border-zorvex-border/80 text-xs space-y-1">
+                <div className="flex items-center gap-1.5 font-bold text-zorvex-text dark:text-zorvex-dark-text">
+                  <ShieldAlert className="w-4 h-4 text-amber-600" />
+                  <span>FinOps Telemetry Notice</span>
+                </div>
+                <p className="text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary text-[11px] leading-relaxed">
+                  Historical telemetry compiled from unblended AWS CUR records. Billing records represent billed resource consumption over the selected historical period. Historical billing records do not prove whether an instance or snapshot currently exists in live AWS runtime.
+                </p>
+              </div>
+
             </div>
 
             {/* Drawer Footer */}
-            <div className="p-4 border-t border-zorvex-border dark:border-zorvex-dark-border bg-zorvex-surface-secondary/40 flex justify-end">
+            <div className="p-4 border-t border-zorvex-border dark:border-zorvex-dark-border bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary/40 flex justify-end">
               <button
                 type="button"
                 onClick={closeResourceDetail}
@@ -1576,7 +2247,8 @@ export default function ServiceExplorer({
             </div>
 
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
     </div>

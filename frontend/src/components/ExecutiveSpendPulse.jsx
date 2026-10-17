@@ -254,18 +254,23 @@ export default function ExecutiveSpendPulse({ overview, recommendations, forexDa
           {/* Stat 1: Month-End Spend Projection */}
           <div className="p-4 rounded-2xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary/40 border border-zorvex-border/40 flex flex-col justify-between">
             <span className="text-[10px] font-extrabold uppercase tracking-wider text-zorvex-text-secondary">
-              Month-End Run-Rate Forecast
+              Month-End Total Forecast
             </span>
             <div className="my-2">
               <div className="text-2xl font-black font-mono text-zorvex-text dark:text-zorvex-dark-text">
-                ${(forecast?.forecasted_month_end_usd || 16598.87).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                ${(forecast?.forecasted_month_end_usd ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </div>
               <div className="text-xs font-mono font-bold text-zorvex-forest dark:text-zorvex-forest-highlight mt-0.5">
-                ≈ ₹{Math.round((forecast?.forecasted_month_end_usd || 16598.87) * usdToInr).toLocaleString('en-IN')}
+                ≈ ₹{Math.round((forecast?.forecasted_month_end_usd ?? 0) * usdToInr).toLocaleString('en-IN')}
               </div>
             </div>
-            <div className="text-[11px] text-zorvex-text-secondary">
-              Observed <strong>{forecast?.days_observed || 13} days</strong> with a daily burn of <strong className="font-mono">${(forecast?.daily_burn_rate_usd || 426.89).toFixed(2)}/day</strong>.
+            <div className="text-[11px] text-zorvex-text-secondary space-y-0.5">
+              <div>
+                Observed <strong>{forecast?.days_observed ?? 0} days</strong> with operational burn of <strong className="font-mono">${(forecast?.daily_burn_rate_usd ?? 0).toFixed(2)}/day</strong>.
+              </div>
+              <div className="text-[10px] text-zorvex-text-secondary/80">
+                Combines actual MTD charges with projected remaining operational spend.
+              </div>
             </div>
           </div>
 

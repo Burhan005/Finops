@@ -213,5 +213,141 @@ class TestResourceExplorer(unittest.TestCase):
         self.assertEqual(res_empty['summary']['total_cost'], 0.0)
         self.assertEqual(len(res_empty['resources']), 0)
 
+    def test_ri_contract_commitment_attribution(self):
+        """Verify RI contracts are differentiated from physical resources and retain commitment metadata."""
+        res_rds = query_resource_explorer(self.cur_data, service='Amazon RDS')
+        ri_contract = next((r for r in res_rds['resources'] if r['category'] == 'RI_SUBSCRIPTION_FEE'), None)
+        self.assertIsNotNone(ri_contract, "Expected to find RI contract under Amazon RDS")
+        self.assertEqual(ri_contract['category'], 'RI_SUBSCRIPTION_FEE')
+        self.assertEqual(ri_contract['lifecycle_status'], 'COMMITMENT_CONTRACT')
+        self.assertTrue(ri_contract['is_commitment'])
+        self.assertEqual(ri_contract['commitment_type'], 'ReservedInstance')
+        self.assertTrue(bool(ri_contract['ri_arn']))
+        self.assertTrue(bool(ri_contract['subscription_id']))
+        self.assertAlmostEqual(ri_contract['total_cost'], 2400.14, delta=1.0)
+
+    def test_ri_contract_detail_and_benefiting_resources(self):
+        """Verify get_resource_detail enriches RI contracts with commitment metadata and line items."""
+        detail = get_resource_detail(self.cur_data, 'No-Resource-ID (Amazon RDS)')
+        self.assertIsNotNone(detail)
+        self.assertTrue(detail['is_commitment'])
+        self.assertEqual(detail['commitment_type'], 'ReservedInstance')
+        self.assertEqual(detail['total_line_items'], 2)
+        self.assertEqual(len(detail['line_items']), 2)
+        first_li = detail['line_items'][0]
+        self.assertIn('date', first_li)
+        self.assertIn('line_item_type', first_li)
+        self.assertEqual(first_li['line_item_type'], 'RIFee')
+        self.assertIn('usage_type', first_li)
+        self.assertIn('cost', first_li)
+        self.assertIn('ri_arn', first_li)
+        self.assertIn('subscription_id', first_li)
+
+    def test_line_item_ledger_schema_preservation(self):
+        """Verify line items for physical resources include operations, quantities, units, and descriptions."""
+        res_ec2 = query_resource_explorer(self.cur_data, service='Amazon EC2')
+        top_ec2_id = res_ec2['resources'][0]['resource_id']
+        detail = get_resource_detail(self.cur_data, top_ec2_id)
+        self.assertIsNotNone(detail)
+        self.assertGreater(detail['total_line_items'], 0)
+        first_li = detail['line_items'][0]
+        self.assertIn('date', first_li)
+        self.assertIn('line_item_type', first_li)
+        self.assertIn('usage_type', first_li)
+        self.assertIn('operation', first_li)
+        self.assertIn('usage_amount', first_li)
+        self.assertIn('unit', first_li)
+        self.assertIn('cost', first_li)
+        self.assertIn('desc', first_li)
+        self.assertIn('item_description', first_li)
+
+    def test_ec2_ri_contract_visibility_and_breakdown(self):
+        """Verify EC2 RI recurring fee contracts are visible under Amazon EC2 with contract-level breakdown."""
+        # 1. Query EC2 with ALL category
+        res_ec2 = query_resource_explorer(self.cur_data, service='Amazon EC2', category='ALL')
+        ri_contract = next((r for r in res_ec2['resources'] if r['category'] == 'RI_SUBSCRIPTION_FEE'), None)
+        self.assertIsNotNone(ri_contract, "Expected to find RI contract under Amazon EC2 with category='ALL'")
+        self.assertEqual(ri_contract['category'], 'RI_SUBSCRIPTION_FEE')
+        self.assertEqual(ri_contract['lifecycle_status'], 'COMMITMENT_CONTRACT')
+        self.assertTrue(ri_contract['is_commitment'])
+        self.assertEqual(ri_contract['commitment_type'], 'ReservedInstance')
+        self.assertAlmostEqual(ri_contract['total_cost'], 634.80, delta=0.5)
+
+        # 2. Query EC2 with RI_SUBSCRIPTION_FEE category
+        res_ri_only = query_resource_explorer(self.cur_data, service='Amazon EC2', category='RI_SUBSCRIPTION_FEE')
+        self.assertEqual(len(res_ri_only['resources']), 1)
+        self.assertEqual(res_ri_only['resources'][0]['category'], 'RI_SUBSCRIPTION_FEE')
+        self.assertAlmostEqual(res_ri_only['resources'][0]['total_cost'], 634.80, delta=0.5)
+
+        # 3. Resource detail for EC2 RI contract portfolio
+        detail = get_resource_detail(self.cur_data, 'No-Resource-ID (Amazon EC2)')
+        self.assertIsNotNone(detail)
+        self.assertTrue(detail['is_commitment'])
+        self.assertEqual(detail['commitment_type'], 'ReservedInstance')
+        self.assertEqual(detail['total_line_items'], 10)
+        self.assertEqual(len(detail['line_items']), 10)
+        self.assertIn('contracts', detail)
+        self.assertEqual(len(detail['contracts']), 10)
+
+        # 4. Verify each contract has subscription ID, ARN, cost, and matched benefiting instances
+        total_contract_cost = 0.0
+        all_benefiting = set()
+        for contract in detail['contracts']:
+            self.assertIn('subscription_id', contract)
+            self.assertTrue(bool(contract['subscription_id']))
+            self.assertIn('ri_arn', contract)
+            self.assertTrue(bool(contract['ri_arn']))
+            self.assertIn('cost', contract)
+            self.assertGreater(contract['cost'], 0)
+            total_contract_cost += contract['cost']
+            self.assertIn('benefiting_resources', contract)
+            for inst in contract['benefiting_resources']:
+                all_benefiting.add(inst)
+
+        self.assertAlmostEqual(total_contract_cost, 634.80, delta=0.5)
+        self.assertGreater(len(all_benefiting), 0, "Expected matching benefiting EC2 instances via CUR DiscountedUsage")
+        for inst in all_benefiting:
+            self.assertTrue(inst.startswith('i-'), f"Benefiting resource {inst} should be an EC2 instance ID")
+
+    def test_ec2_financial_reconciliation_no_double_counting(self):
+        """Verify EC2 financial totals reconcile without double-counting between RIFee and DiscountedUsage."""
+        from app.resource_explorer import build_materialized_explorer_index
+        index = build_materialized_explorer_index(self.cur_data)
+        ec2_resources = [r for r in index['all_resources'] if r['service'] == 'Amazon EC2']
+        total_ec2_res_cost = sum(r['total_cost'] for r in ec2_resources)
+        
+        # Verify total of all EC2 resources matches sum of raw CUR EC2 records
+        raw_ec2_cost = sum(float(r.get('cost', 0) or 0) for r in self.cur_data['records'] if r.get('service') == 'Amazon EC2')
+        self.assertAlmostEqual(total_ec2_res_cost, raw_ec2_cost, places=2)
+        self.assertAlmostEqual(total_ec2_res_cost, 1191.05, places=2)
+
+        # Verify component breakdowns
+        ri_cost = sum(r['total_cost'] for r in ec2_resources if r['category'] == 'RI_SUBSCRIPTION_FEE')
+        compute_cost = sum(r['total_cost'] for r in ec2_resources if r['category'] == 'EC2_INSTANCE')
+        nat_cost = sum(r['total_cost'] for r in ec2_resources if r['category'] == 'NAT_GATEWAY')
+        ebs_vol_cost = sum(r['total_cost'] for r in ec2_resources if r['category'] == 'EBS_VOLUME')
+        ebs_snap_cost = sum(r['total_cost'] for r in ec2_resources if r['category'] == 'EBS_SNAPSHOT')
+
+        self.assertAlmostEqual(ri_cost, 634.80, delta=0.5)
+        self.assertAlmostEqual(compute_cost, 28.18, delta=0.5)
+        self.assertAlmostEqual(nat_cost, 491.83, delta=0.5)
+        self.assertAlmostEqual(ebs_vol_cost, 18.74, delta=0.5)
+        self.assertAlmostEqual(ebs_snap_cost, 17.50, delta=0.5)
+        self.assertAlmostEqual(ri_cost + compute_cost + nat_cost + ebs_vol_cost + ebs_snap_cost, 1191.05, places=1)
+
+    def test_query_aws_waf_service(self):
+        """Verify AWS WAF queries execute safely with waf_traffic_summary and human-readable WebACL names."""
+        res_waf = query_resource_explorer(self.cur_data, service='AWS WAF', page_size=25)
+        self.assertEqual(res_waf['status'], 'SUCCESS')
+        self.assertIn('summary', res_waf)
+        self.assertIn('waf_traffic_summary', res_waf['summary'])
+        waf_sum = res_waf['summary']['waf_traffic_summary']
+        if waf_sum:
+            self.assertIn('total_requests', waf_sum)
+            self.assertIn('requests_cost', waf_sum)
+            self.assertIn('rules_cost', waf_sum)
+            self.assertIn('webacl_cost', waf_sum)
+            self.assertIn('primary_webacl', waf_sum)
+
 if __name__ == '__main__':
     unittest.main()
