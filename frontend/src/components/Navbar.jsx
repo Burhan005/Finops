@@ -490,6 +490,18 @@ export default function Navbar({
                 <Upload className="w-4 h-4 stroke-[2.2]" />
                 <span>Upload CUR Report</span>
               </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  if (onLogout) onLogout();
+                }}
+                className="w-full flex items-center justify-center gap-2 py-2 rounded-xl text-xs font-bold text-zorvex-spike hover:bg-zorvex-spike-soft dark:hover:bg-red-950/30 transition-colors cursor-pointer"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span>Sign Out</span>
+              </button>
             </div>
 
           </div>

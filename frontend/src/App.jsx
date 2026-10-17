@@ -392,7 +392,7 @@ export default function App() {
     localStorage.removeItem('finops_token');
     localStorage.removeItem('finops_user');
     setCurrentUser(null);
-    window.location.href = '/login';
+    window.location.href = '/';
   };
 
   useEffect(() => {
