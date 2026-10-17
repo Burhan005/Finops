@@ -104,6 +104,17 @@ class TestFinancialAndSecurityGate(unittest.TestCase):
         cls.headers_org1 = {"Authorization": f"Bearer {cls.token1}"}
         cls.headers_org2 = {"Authorization": f"Bearer {cls.token2}"}
 
+        # Ensure org1 has an active dataset for export ticket tests
+        active_ds = cls.db.query(DatasetRecord).filter(DatasetRecord.organization_id == cls.org1.id, DatasetRecord.is_active == 1).first()
+        if not active_ds:
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False, newline='', encoding='utf-8') as tf:
+                writer = csv.writer(tf)
+                writer.writerow(["identity/LineItemId", "lineItem/UsageStartDate", "lineItem/ProductCode", "lineItem/ResourceId", "lineItem/UnblendedCost", "lineItem/LineItemType"])
+                writer.writerow(["item-init-01", "2026-10-01 00:00:00", "AmazonEC2", "i-init-001", "100.00", "Usage"])
+                init_path = tf.name
+            with open(init_path, "rb") as f:
+                cls.client.post("/api/upload", files={"file": ("init_gate.csv", f, "text/csv")}, headers=cls.headers_org1)
+
     # ==================== FINDING A: FINANCIAL METRIC RECONCILIATION ====================
 
     def test_finding_a_controlled_cur_reconciliation(self):

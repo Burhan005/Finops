@@ -597,6 +597,9 @@ def health_check(
 
 # ==================== AUTHENTICATION API ====================
 
+SESSION_TTL_HOURS = 8  # Enterprise standard workday session duration (8 hours)
+
+
 @app.post("/api/auth/register")
 def register_user(req: RegisterRequest, db: Session = Depends(get_db)):
     clean_email = req.email.strip().lower()
@@ -637,7 +640,7 @@ def register_user(req: RegisterRequest, db: Session = Depends(get_db)):
         token=token,
         user_id=user.id,
         organization_id=org.id,
-        expires_at=datetime.now(timezone.utc) + timedelta(days=30)
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=SESSION_TTL_HOURS)
     )
     db.add(session)
     db.add(AuditEvent(
@@ -698,7 +701,7 @@ def login_user(req: LoginRequest, db: Session = Depends(get_db)):
         token=token,
         user_id=user.id,
         organization_id=org.id,
-        expires_at=datetime.now(timezone.utc) + timedelta(days=30)
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=SESSION_TTL_HOURS)
     )
     db.add(session)
     db.add(AuditEvent(
