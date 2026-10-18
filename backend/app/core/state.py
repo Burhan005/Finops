@@ -121,7 +121,11 @@ def load_initial_dataset():
     """
     Initializes global public demo dataset exclusively from curated sample catalog.
     Strict tenant boundary: Never loads private organization uploads from UPLOADS_DIR.
+    Idempotent single-flight: Skips re-parsing if already initialized.
     """
+    if CURRENT_DATASET.get('data') is not None and CURRENT_DATASET.get('filepath'):
+        return
+
     sample_path = os.path.join(SAMPLES_DIR, "aws_cur_production_exact.csv")
     if not os.path.exists(sample_path):
         candidates = glob.glob(os.path.join(SAMPLES_DIR, "*.csv"))

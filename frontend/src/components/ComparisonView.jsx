@@ -160,6 +160,7 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
   const [selectedSubtypeFilter, setSelectedSubtypeFilter] = useState('ALL');
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState('ALL');
   const [resourceSearchQuery, setResourceSearchQuery] = useState('');
+  const [serviceSearchQuery, setServiceSearchQuery] = useState('');
 
   // Sorting State
   const [serviceSortField, setServiceSortField] = useState('delta_cost');
@@ -421,11 +422,16 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
   ]);
 
   // Execute Root-Cause Investigation Query
-  const runInvestigation = async () => {
+  const runInvestigation = async (pageOverride = null, pageSizeOverride = null, sortFieldOverride = null, sortOrderOverride = null) => {
     if (!currentWindows.target_start || currentWindows.validation_error) return;
     setLoading(true);
     setError('');
-    setResourcePage(1);
+    const targetPage = pageOverride !== null ? pageOverride : resourcePage;
+    const targetSize = pageSizeOverride !== null ? pageSizeOverride : resourcePageSize;
+    const targetSortField = sortFieldOverride !== null ? sortFieldOverride : resourceSortField;
+    const targetSortOrder = sortOrderOverride !== null ? sortOrderOverride : resourceSortOrder;
+    const offset = (targetPage - 1) * targetSize;
+
     try {
       const res = await api.getRootCause({
         baseline_start: currentWindows.baseline_start || '',
@@ -434,7 +440,13 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
         target_end: currentWindows.target_end,
         service: selectedServiceFilter !== 'ALL' ? selectedServiceFilter : null,
         account_id: activeAccount !== 'all' ? activeAccount : null,
-        min_delta: 0.0001
+        min_delta: 0.0001,
+        limit: targetSize,
+        offset: offset,
+        category: selectedCategoryFilter !== 'ALL' ? selectedCategoryFilter : null,
+        search: resourceSearchQuery.trim() || null,
+        sort_by: targetSortField,
+        sort_order: targetSortOrder
       });
       setRootCauseData(res);
       loadCacheTelemetry();
@@ -446,7 +458,8 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
   };
 
   useEffect(() => {
-    runInvestigation();
+    setResourcePage(1);
+    runInvestigation(1);
   }, [
     currentWindows.target_start,
     currentWindows.target_end,
@@ -465,7 +478,12 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
   // Filter & Sort Services Attribution
   const sortedServices = useMemo(() => {
     if (!rootCauseData?.service_attribution) return [];
-    const list = [...rootCauseData.service_attribution];
+    let list = [...rootCauseData.service_attribution];
+
+    if (serviceSearchQuery && serviceSearchQuery.trim()) {
+      const q = serviceSearchQuery.trim().toLowerCase();
+      list = list.filter(s => (s.service || '').toLowerCase().includes(q));
+    }
 
     list.sort((a, b) => {
       let valA = a[serviceSortField];
@@ -484,7 +502,7 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
     });
 
     return list;
-  }, [rootCauseData?.service_attribution, serviceSortField, serviceSortOrder]);
+  }, [rootCauseData?.service_attribution, serviceSortField, serviceSortOrder, serviceSearchQuery]);
 
   // Max absolute delta across services for proportional impact bars
   const maxServiceDelta = useMemo(() => {
@@ -631,12 +649,18 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
       if (resourceSortField === 'delta_cost') {
         valA = Math.abs(valA || 0);
         valB = Math.abs(valB || 0);
+        if (Math.abs(valA - valB) > 0.0001) {
+          return resourceSortOrder === 'asc' ? valA - valB : valB - valA;
+        }
+        // Secondary tie-breaker: rank higher spend workloads above zero-dollar snapshots
+        const spendA = Math.max(a.target_cost || 0, a.baseline_cost || 0);
+        const spendB = Math.max(b.target_cost || 0, b.baseline_cost || 0);
+        return spendB - spendA;
       } else {
         valA = Number(valA || 0);
         valB = Number(valB || 0);
+        return resourceSortOrder === 'asc' ? valA - valB : valB - valA;
       }
-
-      return resourceSortOrder === 'asc' ? valA - valB : valB - valA;
     });
 
     return list;
@@ -647,20 +671,45 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
     resourceSortOrder
   ]);
 
-  // Pagination Slice
-  const totalResourcePages = Math.max(1, Math.ceil(filteredAndSortedResources.length / resourcePageSize));
+  // Total Evaluated & Matching Resources
+  const totalResourceCount = rootCauseData?.pagination?.total_count ?? rootCauseData?.total_count ?? rootCauseData?.total_evaluated_resources ?? (rootCauseData?.resources?.length || 0);
+  const totalResourcePages = Math.max(1, Math.ceil(totalResourceCount / resourcePageSize));
+
+  // Resources to render: use backend paginated slice when available, or client slice fallback
   const paginatedResources = useMemo(() => {
+    if (rootCauseData?.pagination) {
+      return filteredAndSortedResources;
+    }
     const startIdx = (resourcePage - 1) * resourcePageSize;
     return filteredAndSortedResources.slice(startIdx, startIdx + resourcePageSize);
-  }, [filteredAndSortedResources, resourcePage, resourcePageSize]);
+  }, [filteredAndSortedResources, rootCauseData?.pagination, resourcePage, resourcePageSize]);
 
-  // Unique Categories Available in current result
+  // Unique Categories Available in current result (from full dataset metadata)
   const availableCategories = useMemo(() => {
+    if (rootCauseData?.available_categories && rootCauseData.available_categories.length > 0) {
+      return rootCauseData.available_categories;
+    }
+    if (rootCauseData?.category_decomposition) {
+      return Object.keys(rootCauseData.category_decomposition);
+    }
     if (!rootCauseData?.resources) return [];
     const set = new Set();
     rootCauseData.resources.forEach(r => set.add(r.change_category));
     return Array.from(set);
   }, [rootCauseData]);
+
+  // Page Navigation Handlers
+  const handlePageChange = (newPage) => {
+    setResourcePage(newPage);
+    runInvestigation(newPage, resourcePageSize);
+  };
+
+  const handlePageSizeChange = (newSize) => {
+    const sizeNum = Number(newSize);
+    setResourcePageSize(sizeNum);
+    setResourcePage(1);
+    runInvestigation(1, sizeNum);
+  };
 
   // Service Sort Toggle
   const handleServiceSort = (field) => {
@@ -672,15 +721,16 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
     }
   };
 
-  // Resource Sort Toggle
+  // Resource Sort Toggle with server-side re-query
   const handleResourceSort = (field) => {
+    let nextOrder = 'desc';
     if (resourceSortField === field) {
-      setResourceSortOrder(prev => prev === 'asc' ? 'desc' : 'asc');
-    } else {
-      setResourceSortField(field);
-      setResourceSortOrder('desc');
+      nextOrder = resourceSortOrder === 'asc' ? 'desc' : 'asc';
     }
+    setResourceSortField(field);
+    setResourceSortOrder(nextOrder);
     setResourcePage(1);
+    runInvestigation(1, resourcePageSize, field, nextOrder);
   };
 
   // Daily Timeline Chart Data Preparation
@@ -774,22 +824,28 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
   const getCategoryMeta = (catKey) => {
     switch (catKey) {
       case 'USAGE_QUANTITY_INCREASE':
+      case 'USAGE_INCREASE':
         return { label: 'Usage Surge', icon: TrendingUp, style: 'bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-500/25' };
       case 'USAGE_QUANTITY_DECREASE':
+      case 'USAGE_DECREASE':
         return { label: 'Usage Reduction', icon: TrendingDown, style: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/25' };
       case 'NEW_RESOURCE':
+      case 'NEW_WORKLOAD':
         return { label: 'New Workload', icon: Rocket, style: 'bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/25' };
       case 'TERMINATED_RESOURCE':
+      case 'TERMINATED_WORKLOAD':
         return { label: 'Decommissioned', icon: Trash2, style: 'bg-teal-500/10 text-teal-700 dark:text-teal-300 border-teal-500/25' };
       case 'CAPACITY_OR_SKU_CHANGE':
         return { label: 'Capacity / SKU Shift', icon: SlidersHorizontal, style: 'bg-purple-500/10 text-purple-700 dark:text-purple-300 border-purple-500/25' };
       case 'RATE_OR_DISCOUNT_CHANGE':
         return { label: 'Discount Shift', icon: Zap, style: 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/25' };
       case 'BILLING_FEE_OR_TAX':
+      case 'COMMITMENT_FEE':
         return { label: 'Fees & Taxes', icon: Layers, style: 'bg-stone-500/10 text-stone-700 dark:text-stone-300 border-stone-500/25' };
       case 'STABLE_USAGE':
+      case 'STEADY_STATE':
       default:
-        return { label: 'Steady Operations', icon: Activity, style: 'bg-zorvex-surface-secondary text-zorvex-text-secondary border-zorvex-border' };
+        return { label: 'Steady Operations', icon: Activity, style: 'bg-slate-500/10 text-slate-700 dark:text-slate-300 border-slate-500/25' };
     }
   };
 
@@ -892,11 +948,11 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
                     ? 'bg-rose-500/15 text-rose-700 dark:text-rose-300' 
                     : rootCauseData.variance_summary.net_delta < -0.005 
                       ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300' 
-                      : 'bg-zorvex-surface-secondary text-zorvex-text-secondary'
+                      : 'bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary'
                 }`}>
                   {rootCauseData.variance_summary.pct_display}
                 </span>
-                <span className="text-[11px] text-zorvex-text-secondary">
+                <span className="text-[11px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">
                   {rootCauseData.variance_summary.net_delta > 0 ? 'Cost Increase' : rootCauseData.variance_summary.net_delta < 0 ? 'Cost Reduction' : 'Steady State'}
                 </span>
               </div>
@@ -1150,7 +1206,7 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
                     ? 'bg-rose-500/20 text-rose-700 dark:text-rose-300'
                     : rootCauseData.variance_summary.net_delta < -0.005
                       ? 'bg-emerald-500/20 text-emerald-700 dark:text-emerald-300'
-                      : 'bg-zorvex-surface-secondary text-zorvex-text-secondary'
+                      : 'bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary'
                 }`}>
                   {rootCauseData.variance_summary.pct_display}
                 </span>
@@ -1201,6 +1257,28 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
                 </div>
                 <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">
                   {rootCauseData.financial_reconciliation.is_reconciled ? '✓ Zero Double-Counting Verified' : 'Reconciliation Pending'}
+                </span>
+              </div>
+            )}
+
+            {/* Cost Comparison Semantics & Accounting Caveats */}
+            {rootCauseData.cost_change_semantics && (
+              <div className="p-3.5 rounded-xl bg-zorvex-forest-soft/30 dark:bg-zorvex-forest-dark-soft/20 border border-zorvex-forest/20 text-xs flex flex-wrap items-center justify-between gap-3 font-mono">
+                <div className="flex items-center gap-2">
+                  <Info className="w-4 h-4 text-zorvex-forest dark:text-zorvex-forest-highlight flex-shrink-0" />
+                  <span className="font-bold text-zorvex-text dark:text-zorvex-dark-text">Comparison Semantics:</span>
+                  <span className="text-zorvex-text-secondary">
+                    Metric: <strong className="text-zorvex-text dark:text-zorvex-dark-text">{rootCauseData.cost_change_semantics.cost_metric}</strong> • 
+                    Timezone: <strong className="text-zorvex-text dark:text-zorvex-dark-text">{rootCauseData.cost_change_semantics.timezone}</strong> • 
+                    Boundaries: <strong className="text-zorvex-text dark:text-zorvex-dark-text">{rootCauseData.cost_change_semantics.inclusive_boundaries ? 'Inclusive' : 'Exclusive'}</strong>
+                  </span>
+                </div>
+                <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
+                  rootCauseData.comparison_window?.is_like_for_like
+                    ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/25'
+                    : 'bg-amber-500/15 text-amber-800 dark:text-amber-200 border border-amber-500/25'
+                }`}>
+                  {rootCauseData.cost_change_semantics.comparison_type}
                 </span>
               </div>
             )}
@@ -1396,6 +1474,27 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
                     </span>
                   </h3>
                 </div>
+
+                {/* Service Search Input */}
+                <div className="relative w-full sm:w-72">
+                  <Search className="w-3.5 h-3.5 text-zorvex-text-secondary absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={serviceSearchQuery}
+                    onChange={(e) => setServiceSearchQuery(e.target.value)}
+                    placeholder="Search services (e.g. S3, RDS, EC2)..."
+                    className="w-full pl-8 pr-7 py-1.5 rounded-clay-pill bg-zorvex-surface-secondary/70 dark:bg-zorvex-dark-surface-secondary/70 border border-zorvex-border/60 text-xs font-mono text-zorvex-text dark:text-zorvex-dark-text placeholder:text-zorvex-text-secondary/60 focus:outline-none focus:ring-1 focus:ring-zorvex-forest transition-all"
+                  />
+                  {serviceSearchQuery && (
+                    <button
+                      onClick={() => setServiceSearchQuery('')}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zorvex-text-secondary hover:text-zorvex-text transition-colors"
+                      title="Clear search"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
               </div>
 
               <div className="overflow-x-auto rounded-2xl border border-zorvex-border/70">
@@ -1437,7 +1536,20 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zorvex-border/40 font-mono">
-                    {sortedServices.map((svc) => {
+                    {sortedServices.length === 0 ? (
+                      <tr>
+                        <td colSpan={7} className="py-8 text-center text-zorvex-text-secondary font-sans">
+                          <p className="text-sm font-semibold">No AWS services match "{serviceSearchQuery}"</p>
+                          <button
+                            onClick={() => setServiceSearchQuery('')}
+                            className="mt-2 text-xs font-bold text-zorvex-forest dark:text-zorvex-forest-highlight hover:underline"
+                          >
+                            Clear search filter
+                          </button>
+                        </td>
+                      </tr>
+                    ) : (
+                      sortedServices.map((svc) => {
                       const isSelected = selectedServiceFilter === svc.service;
                       const isSpike = svc.delta_cost > 0.005;
                       const isDrop = svc.delta_cost < -0.005;
@@ -1505,7 +1617,8 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
                           </td>
                         </tr>
                       );
-                    })}
+                    })
+                  )}
                   </tbody>
                 </table>
               </div>
@@ -1744,7 +1857,7 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
                             {formatMoney(res.target_cost)}
                           </td>
 
-                          {/* Delta Cost */}
+                          {/* Delta Cost & Decomposition Summary */}
                           <td className={`py-3 px-4 text-right font-black ${
                             isSpike ? 'text-rose-600 dark:text-rose-400' : isDrop ? 'text-emerald-600 dark:text-emerald-400' : 'text-zorvex-text-secondary'
                           }`}>
@@ -1752,6 +1865,18 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
                             <div className="text-[10px] text-zorvex-text-secondary font-normal">
                               ({res.pct_display})
                             </div>
+                            {res.decomposition_status === 'RECONCILED' && (
+                              <div className="text-[9px] font-mono text-zorvex-text-secondary font-normal flex items-center justify-end gap-1 mt-0.5" title="Reconciled: Quantity Impact + Rate Impact = Delta Cost">
+                                <span>Q:{formatMoney(res.quantity_impact ?? res.quantity_effect, true)}</span>
+                                <span>|</span>
+                                <span>R:{formatMoney(res.rate_impact ?? res.rate_effect, true)}</span>
+                              </div>
+                            )}
+                            {res.decomposition_status === 'UNIT_MISMATCH' && (
+                              <div className="text-[9px] font-sans text-amber-600 dark:text-amber-400 font-semibold mt-0.5" title={res.decomposition_note}>
+                                Unit Mismatch
+                              </div>
+                            )}
                           </td>
 
                           {/* Usage Quantity Change */}
@@ -1775,9 +1900,39 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
                             <div className="font-semibold text-zorvex-text dark:text-zorvex-dark-text leading-snug">
                               {res.explanation}
                             </div>
-                            <div className="flex items-center gap-1 text-[10px] font-mono text-emerald-700 dark:text-emerald-400 mt-1 font-bold">
-                              <ShieldCheck className="w-3 h-3 text-emerald-600 flex-shrink-0" />
-                              <span>{res.evidence_status?.replace(/_/g, ' ') || 'CONFIRMED BY CUR'}</span>
+                            <div className="flex items-center gap-1.5 text-[10px] font-mono mt-1 font-bold flex-wrap">
+                              {res.evidence_status === 'SUPPORTED_EXPLANATION' ? (
+                                <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20" title="Jointly corroborated by AWS CloudTrail lifecycle event and CUR line items">
+                                  <ShieldCheck className="w-3 h-3 text-emerald-600 flex-shrink-0" />
+                                  <span>SUPPORTED EXPLANATION</span>
+                                </span>
+                              ) : res.evidence_status === 'CORRELATED_WITH_AWS_EVENT' ? (
+                                <span className="inline-flex items-center gap-1 text-purple-700 dark:text-purple-300 bg-purple-500/10 px-1.5 py-0.5 rounded border border-purple-500/20" title="Correlated with recorded AWS CloudTrail lifecycle activity">
+                                  <Info className="w-3 h-3 text-purple-500 flex-shrink-0" />
+                                  <span>CORRELATED EVENT</span>
+                                </span>
+                              ) : (res.evidence_status === 'CONFIRMED_BY_CUR' || res.evidence_status === 'CONFIRMED_BY_BILLING_DATA') ? (
+                                <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20" title="Directly confirmed by CUR billing line items">
+                                  <ShieldCheck className="w-3 h-3 text-emerald-600 flex-shrink-0" />
+                                  <span>CONFIRMED BY CUR</span>
+                                </span>
+                              ) : res.evidence_status === 'INFERRED' ? (
+                                <span className="inline-flex items-center gap-1 text-blue-700 dark:text-blue-400 bg-blue-500/10 px-1.5 py-0.5 rounded border border-blue-500/20" title="Inferred fleet operational pattern">
+                                  <Info className="w-3 h-3 text-blue-600 flex-shrink-0" />
+                                  <span>INFERRED</span>
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 text-zinc-600 dark:text-zinc-400 bg-zinc-500/10 px-1.5 py-0.5 rounded border border-zinc-500/20" title="Insufficient CUR evidence to attribute change">
+                                  <AlertCircle className="w-3 h-3 text-zinc-500 flex-shrink-0" />
+                                  <span>UNKNOWN</span>
+                                </span>
+                              )}
+
+                              {res.lifecycle_correlation?.primary_event && (
+                                <span className="inline-flex items-center gap-1 text-[9px] text-purple-700 dark:text-purple-300 bg-purple-500/10 px-1.5 py-0.5 rounded border border-purple-500/20 font-mono">
+                                  <span>☁️ {res.lifecycle_correlation.primary_event.event_name}</span>
+                                </span>
+                              )}
                             </div>
                           </td>
 
@@ -1807,8 +1962,8 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
             {/* Pagination Controls */}
             <div className="pt-2 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
               <span className="text-zorvex-text-secondary">
-                Showing {paginatedResources.length > 0 ? (resourcePage - 1) * resourcePageSize + 1 : 0} to{' '}
-                {Math.min(resourcePage * resourcePageSize, filteredAndSortedResources.length)} of {filteredAndSortedResources.length} evaluated resources
+                Showing {totalResourceCount > 0 ? (resourcePage - 1) * resourcePageSize + 1 : 0} to{' '}
+                {Math.min(resourcePage * resourcePageSize, totalResourceCount)} of {totalResourceCount} evaluated resources
               </span>
 
               <div className="flex items-center gap-3">
@@ -1823,10 +1978,7 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
                       { value: 1000, label: 'All resources' }
                     ]}
                     value={resourcePageSize}
-                    onChange={(val) => {
-                      setResourcePageSize(Number(val));
-                      setResourcePage(1);
-                    }}
+                    onChange={(val) => handlePageSizeChange(val)}
                     width="w-32"
                   />
                 </div>
@@ -1835,7 +1987,7 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
                   <button
                     type="button"
                     disabled={resourcePage <= 1}
-                    onClick={() => setResourcePage(prev => Math.max(1, prev - 1))}
+                    onClick={() => handlePageChange(Math.max(1, resourcePage - 1))}
                     className="p-1.5 rounded-lg border border-zorvex-border disabled:opacity-40 disabled:cursor-not-allowed hover:bg-zorvex-surface-secondary text-zorvex-text cursor-pointer"
                   >
                     <ChevronLeft className="w-4 h-4" />
@@ -1846,7 +1998,7 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
                   <button
                     type="button"
                     disabled={resourcePage >= totalResourcePages}
-                    onClick={() => setResourcePage(prev => Math.min(totalResourcePages, prev + 1))}
+                    onClick={() => handlePageChange(Math.min(totalResourcePages, resourcePage + 1))}
                     className="p-1.5 rounded-lg border border-zorvex-border disabled:opacity-40 disabled:cursor-not-allowed hover:bg-zorvex-surface-secondary text-zorvex-text cursor-pointer"
                   >
                     <ChevronRight className="w-4 h-4" />
@@ -1870,9 +2022,9 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
           >
             
             {/* Pinned Drawer Header */}
-            <div className="p-5 border-b border-zorvex-border/50 flex items-start justify-between gap-3 bg-zorvex-surface-secondary/50 flex-shrink-0">
+            <div className="p-5 border-b border-zorvex-border/50 dark:border-zorvex-dark-border flex items-start justify-between gap-3 bg-zorvex-surface dark:bg-zorvex-dark-surface flex-shrink-0">
               <div>
-                <span className="text-[10px] font-mono font-black uppercase text-zorvex-text-secondary flex items-center gap-1.5">
+                <span className="text-[10px] font-mono font-black uppercase text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary flex items-center gap-1.5">
                   <FileText className="w-3.5 h-3.5 text-zorvex-forest dark:text-zorvex-forest-highlight" />
                   <span>CUR Telemetry & Line-Item Audit Drawer</span>
                 </span>
@@ -1880,7 +2032,7 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
                   {inspectModalResource.short_id || inspectModalResource.resource_id}
                 </h4>
                 {inspectModalResource.name && (
-                  <span className="text-xs text-zorvex-text-secondary block">
+                  <span className="text-xs text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary block">
                     Tag: {inspectModalResource.name} • {inspectModalResource.service} ({inspectModalResource.region || 'global'})
                   </span>
                 )}
@@ -1888,7 +2040,7 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
               <button
                 type="button"
                 onClick={() => setInspectModalResource(null)}
-                className="p-1.5 rounded-clay-pill bg-zorvex-surface hover:bg-zorvex-border text-zorvex-text-secondary hover:text-zorvex-text cursor-pointer transition-colors shadow-xs"
+                className="p-1.5 rounded-clay-pill bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary/80 hover:bg-zorvex-border dark:hover:bg-zorvex-dark-border text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary hover:text-zorvex-text dark:hover:text-zorvex-dark-text cursor-pointer transition-colors border border-zorvex-border/40 dark:border-zorvex-dark-border shadow-xs"
                 title="Close Drawer (ESC)"
               >
                 <X className="w-4 h-4" />
@@ -1899,8 +2051,8 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
             <div className="flex-1 overflow-y-auto p-5 space-y-4 font-sans">
               
               {/* Full Resource ARN Box */}
-              <div className="p-3 rounded-xl bg-zorvex-surface-secondary/50 border border-zorvex-border text-xs font-mono space-y-1">
-                <span className="text-[10px] font-bold uppercase text-zorvex-text-secondary block">Full AWS Resource Identifier / ARN:</span>
+              <div className="p-3 rounded-xl bg-zorvex-surface-secondary/30 dark:bg-zorvex-dark-surface-secondary/40 border border-zorvex-border/60 dark:border-zorvex-dark-border/60 text-xs font-mono space-y-1">
+                <span className="text-[10px] font-bold uppercase text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary block">Full AWS Resource Identifier / ARN:</span>
                 <div className="flex items-center justify-between gap-2">
                   <code className="break-all text-[11px] font-bold text-zorvex-text dark:text-zorvex-dark-text">
                     {inspectModalResource.resource_id}
@@ -1908,22 +2060,22 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
                   <button
                     type="button"
                     onClick={() => copyId(inspectModalResource.resource_id)}
-                    className="p-1 rounded bg-zorvex-surface shadow-xs cursor-pointer flex-shrink-0 hover:bg-zorvex-border"
+                    className="p-1.5 rounded-md bg-zorvex-surface dark:bg-zorvex-dark-surface-secondary hover:bg-zorvex-border dark:hover:bg-zorvex-dark-border text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary border border-zorvex-border/40 dark:border-zorvex-dark-border/40 shadow-xs cursor-pointer flex-shrink-0"
                     title="Copy ARN"
                   >
-                    {copiedId === inspectModalResource.resource_id ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                    {copiedId === inspectModalResource.resource_id ? <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
                   </button>
                 </div>
               </div>
 
               {/* Authoritative Root Cause Verdict Card */}
-              <div className="p-4 rounded-xl bg-zorvex-forest-soft/40 dark:bg-zorvex-forest-dark-soft/30 border border-zorvex-forest/20 space-y-1.5">
+              <div className="p-4 rounded-xl bg-zorvex-forest-soft/40 dark:bg-zorvex-forest-dark-soft/30 border border-zorvex-forest/20 dark:border-zorvex-forest-highlight/30 space-y-1.5">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-extrabold text-zorvex-forest dark:text-zorvex-forest-highlight uppercase tracking-wider text-[10px]">
                     Authoritative Root-Cause Explanation:
                   </span>
                   <span className="flex items-center gap-1 text-[10px] font-mono font-bold text-emerald-700 dark:text-emerald-400">
-                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
                     <span>{inspectModalResource.evidence_status?.replace(/_/g, ' ') || 'CONFIRMED BY CUR'}</span>
                   </span>
                 </div>
@@ -1934,51 +2086,151 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
 
               {/* Quantitative Mathematical Decomposition Grid */}
               <div className="grid grid-cols-2 gap-2.5 text-xs font-mono">
-                <div className="p-3 rounded-xl bg-zorvex-surface dark:bg-zorvex-dark-surface border border-zorvex-border">
-                  <span className="text-[10px] text-zorvex-text-secondary block">Baseline Spend</span>
-                  <strong className="text-sm block">{formatMoney(inspectModalResource.baseline_cost)}</strong>
-                  <span className="text-[10px] text-zorvex-text-secondary block mt-0.5">
+                <div className="p-3 rounded-xl bg-zorvex-surface dark:bg-zorvex-dark-surface border border-zorvex-border/60 dark:border-zorvex-dark-border/60">
+                  <span className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary block">Baseline Spend</span>
+                  <strong className="text-sm block text-zorvex-text dark:text-zorvex-dark-text">{formatMoney(inspectModalResource.baseline_cost)}</strong>
+                  <span className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary block mt-0.5">
                     ({inspectModalResource.baseline_usage_qty?.toLocaleString()} {inspectModalResource.usage_unit})
                   </span>
                 </div>
-                <div className="p-3 rounded-xl bg-zorvex-surface dark:bg-zorvex-dark-surface border border-zorvex-border">
-                  <span className="text-[10px] text-zorvex-text-secondary block">Target Spend</span>
-                  <strong className="text-sm block">{formatMoney(inspectModalResource.target_cost)}</strong>
-                  <span className="text-[10px] text-zorvex-text-secondary block mt-0.5">
+                <div className="p-3 rounded-xl bg-zorvex-surface dark:bg-zorvex-dark-surface border border-zorvex-border/60 dark:border-zorvex-dark-border/60">
+                  <span className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary block">Target Spend</span>
+                  <strong className="text-sm block text-zorvex-text dark:text-zorvex-dark-text">{formatMoney(inspectModalResource.target_cost)}</strong>
+                  <span className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary block mt-0.5">
                     ({inspectModalResource.target_usage_qty?.toLocaleString()} {inspectModalResource.usage_unit})
                   </span>
                 </div>
-                <div className="p-3 rounded-xl bg-zorvex-surface dark:bg-zorvex-dark-surface border border-zorvex-border">
-                  <span className="text-[10px] text-zorvex-text-secondary block">Quantity Effect (ΔQ)</span>
-                  <strong className={`text-sm block ${inspectModalResource.quantity_effect > 0 ? 'text-rose-600' : inspectModalResource.quantity_effect < 0 ? 'text-emerald-600' : 'text-zorvex-text'}`}>
+                <div className="p-3 rounded-xl bg-zorvex-surface dark:bg-zorvex-dark-surface border border-zorvex-border/60 dark:border-zorvex-dark-border/60">
+                  <span className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary block">Quantity Effect (ΔQ)</span>
+                  <strong className={`text-sm block ${inspectModalResource.quantity_effect > 0 ? 'text-rose-500 dark:text-rose-400' : inspectModalResource.quantity_effect < 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-zorvex-text dark:text-zorvex-dark-text'}`}>
                     {formatMoney(inspectModalResource.quantity_effect, true)}
                   </strong>
-                  <span className="text-[10px] text-zorvex-text-secondary block mt-0.5">
+                  <span className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary block mt-0.5">
                     {inspectModalResource.delta_usage_qty > 0 ? '+' : ''}{inspectModalResource.delta_usage_qty?.toLocaleString()} {inspectModalResource.usage_unit}
                   </span>
                 </div>
-                <div className="p-3 rounded-xl bg-zorvex-surface dark:bg-zorvex-dark-surface border border-zorvex-border">
-                  <span className="text-[10px] text-zorvex-text-secondary block">Rate / SKU Effect (ΔR)</span>
-                  <strong className={`text-sm block ${inspectModalResource.rate_effect > 0 ? 'text-rose-600' : inspectModalResource.rate_effect < 0 ? 'text-emerald-600' : 'text-zorvex-text'}`}>
+                <div className="p-3 rounded-xl bg-zorvex-surface dark:bg-zorvex-dark-surface border border-zorvex-border/60 dark:border-zorvex-dark-border/60">
+                  <span className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary block">Rate / SKU Effect (ΔR)</span>
+                  <strong className={`text-sm block ${inspectModalResource.rate_effect > 0 ? 'text-rose-500 dark:text-rose-400' : inspectModalResource.rate_effect < 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-zorvex-text dark:text-zorvex-dark-text'}`}>
                     {formatMoney(inspectModalResource.rate_effect, true)}
                   </strong>
-                  <span className="text-[10px] text-zorvex-text-secondary block mt-0.5">
+                  <span className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary block mt-0.5">
                     {inspectModalResource.effective_rate_base > 0 ? `$${inspectModalResource.effective_rate_base.toFixed(4)}` : '$0.00'} ➔ ${inspectModalResource.effective_rate_target?.toFixed(4)}
                   </span>
                 </div>
               </div>
 
+              {/* Phase 2 Quantity vs Rate Exact Impact Card */}
+              <div className="p-3.5 rounded-xl bg-zorvex-surface-secondary/30 dark:bg-zorvex-dark-surface-secondary/40 border border-zorvex-border/60 dark:border-zorvex-dark-border/60 text-xs font-mono space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] uppercase font-bold text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">
+                    Quantity vs Rate Impact Decomposition
+                  </span>
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                    inspectModalResource.decomposition_status === 'RECONCILED'
+                      ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-500/25'
+                      : inspectModalResource.decomposition_status === 'UNIT_MISMATCH'
+                        ? 'bg-amber-500/15 text-amber-800 dark:text-amber-300 border-amber-500/25'
+                        : 'bg-slate-500/15 text-slate-700 dark:text-slate-300 border-slate-500/25'
+                  }`}>
+                    {inspectModalResource.decomposition_status || 'ATTRIBUTED'}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 text-[11px]">
+                  <div className="p-2.5 rounded-lg bg-zorvex-surface dark:bg-zorvex-dark-surface border border-zorvex-border/40 dark:border-zorvex-dark-border/40">
+                    <span className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary block">Quantity Impact:</span>
+                    <strong className={inspectModalResource.quantity_impact > 0 ? 'text-rose-500 dark:text-rose-400' : inspectModalResource.quantity_impact < 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-zorvex-text dark:text-zorvex-dark-text'}>
+                      {formatMoney(inspectModalResource.quantity_impact ?? inspectModalResource.quantity_effect, true)}
+                    </strong>
+                    <span className="text-[9px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary block mt-0.5">
+                      (ΔQ × R_base)
+                    </span>
+                  </div>
+
+                  <div className="p-2.5 rounded-lg bg-zorvex-surface dark:bg-zorvex-dark-surface border border-zorvex-border/40 dark:border-zorvex-dark-border/40">
+                    <span className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary block">Rate Impact:</span>
+                    <strong className={inspectModalResource.rate_impact > 0 ? 'text-rose-500 dark:text-rose-400' : inspectModalResource.rate_impact < 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-zorvex-text dark:text-zorvex-dark-text'}>
+                      {formatMoney(inspectModalResource.rate_impact ?? inspectModalResource.rate_effect, true)}
+                    </strong>
+                    <span className="text-[9px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary block mt-0.5">
+                      (Q_curr × ΔR)
+                    </span>
+                  </div>
+                </div>
+
+                {inspectModalResource.decomposition_note && (
+                  <p className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary font-sans leading-normal">
+                    {inspectModalResource.decomposition_note}
+                  </p>
+                )}
+              </div>
+
+              {/* Phase 5: AWS Resource Lifecycle & CloudTrail Evidence Card */}
+              {inspectModalResource.lifecycle_correlation && (
+                <div className={`p-3.5 rounded-xl border text-xs font-mono space-y-2.5 ${
+                  inspectModalResource.lifecycle_correlation.has_lifecycle_events
+                    ? 'bg-purple-500/10 dark:bg-purple-950/20 border-purple-500/30'
+                    : 'bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary/40 border-zorvex-border/60'
+                }`}>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] uppercase font-bold text-zorvex-text dark:text-zorvex-dark-text flex items-center gap-1.5">
+                      <span>☁️</span> AWS Resource Lifecycle Correlation
+                    </span>
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                      inspectModalResource.lifecycle_correlation.classification === 'SUPPORTED_EXPLANATION'
+                        ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-500/30'
+                        : inspectModalResource.lifecycle_correlation.classification === 'CORRELATED_WITH_AWS_EVENT'
+                          ? 'bg-purple-500/15 text-purple-700 dark:text-purple-300 border-purple-500/30'
+                          : 'bg-zinc-500/15 text-zinc-700 dark:text-zinc-300 border-zinc-500/30'
+                    }`}>
+                      {inspectModalResource.lifecycle_correlation.classification?.replace(/_/g, ' ')}
+                    </span>
+                  </div>
+
+                  <p className="text-[11px] font-sans text-zorvex-text dark:text-zorvex-dark-text leading-relaxed">
+                    {inspectModalResource.lifecycle_correlation.explanation}
+                  </p>
+
+                  {inspectModalResource.lifecycle_correlation.has_lifecycle_events && inspectModalResource.lifecycle_correlation.events?.length > 0 && (
+                    <div className="space-y-1.5 pt-1">
+                      <span className="text-[10px] font-bold text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary uppercase">
+                        Matched CloudTrail Events:
+                      </span>
+                      <div className="space-y-1">
+                        {inspectModalResource.lifecycle_correlation.events.map((ev, idx) => (
+                          <div key={idx} className="flex items-center justify-between p-2 rounded-lg bg-zorvex-surface dark:bg-zorvex-dark-surface border border-zorvex-border/40 text-[10px]">
+                            <div className="flex items-center gap-2">
+                              <span className="font-bold text-purple-600 dark:text-purple-400 font-mono">{ev.event_name}</span>
+                              <span className="text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">by {ev.actor}</span>
+                            </div>
+                            <span className="font-mono text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">{ev.event_time?.replace('T', ' ')}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {inspectModalResource.lifecycle_correlation.operational_boundaries && (
+                    <div className="p-2.5 rounded-lg bg-zorvex-surface dark:bg-zorvex-dark-surface border border-zorvex-border/40 text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary font-sans leading-normal">
+                      <strong className="text-zorvex-text dark:text-zorvex-dark-text block mb-0.5">Operational Boundary & Billing Mechanics:</strong>
+                      {inspectModalResource.lifecycle_correlation.operational_boundaries}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Raw CUR Line-Item Audit Evidence */}
               {inspectModalResource.line_items_sample && inspectModalResource.line_items_sample.length > 0 && (
                 <div className="space-y-2">
                   <div className="flex items-center justify-between text-xs">
-                    <span className="text-[10px] font-bold uppercase text-zorvex-text-secondary tracking-wider">
+                    <span className="text-[10px] font-bold uppercase text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary tracking-wider">
                       Authoritative CUR Line-Item Records ({inspectModalResource.line_items_sample.length} sampled):
                     </span>
                   </div>
-                  <div className="overflow-x-auto rounded-xl border border-zorvex-border/60 max-h-56 overflow-y-auto">
+                  <div className="overflow-x-auto rounded-xl border border-zorvex-border/60 dark:border-zorvex-dark-border/60 max-h-56 overflow-y-auto">
                     <table className="w-full text-left text-[11px] font-mono border-collapse">
-                      <thead className="bg-zorvex-surface-secondary/90 dark:bg-zorvex-dark-surface-secondary/90 sticky top-0 text-[10px] text-zorvex-text-secondary uppercase">
+                      <thead className="bg-zorvex-surface-secondary/90 dark:bg-zorvex-dark-surface-secondary/90 sticky top-0 text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary uppercase">
                         <tr>
                           <th className="py-2 px-3">Date</th>
                           <th className="py-2 px-3">Period</th>
@@ -1988,9 +2240,9 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
                           <th className="py-2 px-3 text-right">Billed Cost ($)</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-zorvex-border/30">
+                      <tbody className="divide-y divide-zorvex-border/30 dark:divide-zorvex-dark-border/30">
                         {inspectModalResource.line_items_sample.map((li, idx) => (
-                          <tr key={idx} className="hover:bg-zorvex-surface-secondary/20">
+                          <tr key={idx} className="hover:bg-zorvex-surface-secondary/20 dark:hover:bg-zorvex-dark-surface-secondary/30">
                             <td className="py-2 px-3 font-bold text-zorvex-text dark:text-zorvex-dark-text whitespace-nowrap">{li.date}</td>
                             <td className="py-2 px-3">
                               <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${
@@ -2001,7 +2253,7 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
                                 {li.period || 'current'}
                               </span>
                             </td>
-                            <td className="py-2 px-3 text-zorvex-text-secondary">{li.line_type}</td>
+                            <td className="py-2 px-3 text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">{li.line_type}</td>
                             <td className="py-2 px-3 truncate max-w-[180px]" title={li.usage_type}>
                               {li.usage_type}
                             </td>
@@ -2022,7 +2274,7 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
               {/* Operational Boundary Note */}
               <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/25 text-xs space-y-1 text-amber-900 dark:text-amber-200">
                 <div className="font-bold flex items-center gap-1.5">
-                  <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
+                  <AlertCircle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
                   <span>Operational Investigation Boundary</span>
                 </div>
                 <p className="text-[11px] leading-relaxed">
@@ -2033,7 +2285,7 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
             </div>
 
             {/* Pinned Drawer Footer */}
-            <div className="p-4 border-t border-zorvex-border/50 bg-zorvex-surface-secondary/70 flex items-center justify-between gap-3 flex-shrink-0">
+            <div className="p-4 border-t border-zorvex-border/50 dark:border-zorvex-dark-border bg-zorvex-surface dark:bg-zorvex-dark-surface flex items-center justify-between gap-3 flex-shrink-0">
               <button
                 type="button"
                 onClick={() => {
@@ -2048,7 +2300,7 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
               <button
                 type="button"
                 onClick={() => setInspectModalResource(null)}
-                className="px-5 py-2 rounded-clay-pill bg-zorvex-forest hover:bg-zorvex-forest-dark text-white text-xs font-bold cursor-pointer transition-all shadow-sm"
+                className="px-5 py-2 rounded-clay-pill bg-zorvex-forest hover:bg-zorvex-forest/90 dark:bg-zorvex-forest-dark-soft dark:text-zorvex-forest-highlight dark:hover:bg-zorvex-forest/25 border border-transparent dark:border-zorvex-forest-highlight/30 text-white text-xs font-bold cursor-pointer transition-all shadow-sm"
               >
                 Close Audit
               </button>

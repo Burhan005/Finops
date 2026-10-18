@@ -343,7 +343,7 @@ export default function ExecutiveSpendPulse({ overview, recommendations, forexDa
                 Top Identified Cloud Optimization Actions
               </h3>
             </div>
-            <span className="text-xs text-zorvex-text-secondary">
+            <span className="text-xs text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">
               Derived from deterministic heuristics & usage thresholds
             </span>
           </div>
@@ -356,7 +356,7 @@ export default function ExecutiveSpendPulse({ overview, recommendations, forexDa
               >
                 <div>
                   <div className="flex items-center justify-between">
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-zorvex-surface-secondary text-zorvex-text-secondary">
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary border border-zorvex-border/50 dark:border-zorvex-dark-border/50">
                       {rec.category}
                     </span>
                     <span className="font-mono font-black text-xs text-zorvex-forest dark:text-zorvex-forest-highlight">
@@ -373,7 +373,7 @@ export default function ExecutiveSpendPulse({ overview, recommendations, forexDa
                 </div>
 
                 <div className="pt-2 border-t border-zorvex-border/40 flex items-center justify-between text-[11px]">
-                  <span className="text-zorvex-text-secondary">
+                  <span className="text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">
                     {rec.affected_count || 1} asset{rec.affected_count === 1 ? '' : 's'} affected
                   </span>
                   <button

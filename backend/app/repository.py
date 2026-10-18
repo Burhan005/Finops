@@ -15,13 +15,14 @@ import calendar
 import logging
 
 from sqlalchemy.orm import Session
-from sqlalchemy import func, and_, or_, distinct
+from sqlalchemy import func, and_, or_, distinct, case
 
 from .models import BillingRecord, DatasetRecord, BudgetConfig
 from .parser import normalize_service_code, round_currency
 from .resource_explorer import classify_cur_record, get_available_hierarchies, query_resource_explorer, CATEGORY_LABELS, get_resource_detail
 from .forex import get_live_usd_to_inr_rate
 from .analytics import deduce_service_cause, deduce_resource_root_cause, clean_resource_label
+from .root_cause import analyze_cost_root_cause
 
 logger = logging.getLogger("zorvex.repository")
 
@@ -1501,17 +1502,529 @@ class BillingRepository:
 
         resource_comparison.sort(key=lambda x: abs(x['diff']), reverse=True)
 
+        top_spikes = []
+        reduced_resources = []
+        new_resources = []
+        financial_adjustments = []
+
+        for r_item in resource_comparison:
+            cb = r_item['baseline_cost']
+            ct = r_item['target_cost']
+            diff = r_item['diff']
+            rid = r_item['resource_id']
+            meta = res_meta.get(rid, {})
+            ltypes = meta.get('line_types', set())
+            ut_all = " ".join(u.lower() for u in meta.get('usage_types', set()))
+            is_tax = 'Tax' in ltypes or 'tax' in ut_all or rid.startswith('TAX-') or r_item['service'] in ('Taxes & Surcharges', 'Tax')
+            is_ri = any(t in ('RIFee', 'SavingsPlanRecurringFee', 'Fee') for t in ltypes) or 'rifee' in ut_all
+
+            item_copy = dict(r_item)
+            item_copy['delta_cost'] = diff
+
+            if is_tax:
+                item_copy['category'] = 'TAX'
+                financial_adjustments.append(item_copy)
+            elif is_ri:
+                item_copy['category'] = 'COMMITMENT_FEE'
+                financial_adjustments.append(item_copy)
+            elif cb <= 0.0001 and ct > 0.0001:
+                item_copy['category'] = 'NEW_LAUNCH'
+                new_resources.append(item_copy)
+                top_spikes.append(item_copy)
+            elif cb > 0.0001 and ct <= 0.0001:
+                item_copy['category'] = 'TERMINATED_OR_STOPPED'
+                reduced_resources.append(item_copy)
+            elif diff > 0.001:
+                item_copy['category'] = 'USAGE_INCREASE'
+                top_spikes.append(item_copy)
+            elif diff < -0.001:
+                item_copy['category'] = 'USAGE_DECREASE'
+                reduced_resources.append(item_copy)
+
+        top_spikes.sort(key=lambda x: x['diff'], reverse=True)
+        reduced_resources.sort(key=lambda x: x['diff'])
+        new_resources.sort(key=lambda x: x['target_cost'], reverse=True)
+        financial_adjustments.sort(key=lambda x: abs(x['diff']), reverse=True)
+
+        commitment_delta = sum(a['diff'] for a in financial_adjustments if a.get('category') == 'COMMITMENT_FEE')
+        tax_delta = sum(a['diff'] for a in financial_adjustments if a.get('category') == 'TAX')
+        operational_delta = sum(s['diff'] for s in top_spikes) + sum(r['diff'] for r in reduced_resources)
+
+        if (abs(commitment_delta) + abs(tax_delta) > 50.0) and (abs(commitment_delta) + abs(tax_delta) > abs(operational_delta) * 1.5):
+            parts = []
+            if abs(commitment_delta) > 0.01:
+                parts.append(f"periodic RI commitment charges (${abs(commitment_delta):,.2f})")
+            if abs(tax_delta) > 0.01:
+                parts.append(f"statutory taxes (${abs(tax_delta):,.2f})")
+            primary_event = f"Billing Schedule Notice: Baseline ({baseline_date}) includes {' and '.join(parts)}; operational workload delta was {operational_delta:+,.2f}."
+        elif top_spikes:
+            primary_spiker = top_spikes[0]
+            primary_event = f"Primary Driver: {primary_spiker.get('root_cause', 'Cost Spike')}"
+        elif reduced_resources:
+            primary_saver = reduced_resources[0]
+            primary_event = f"Primary Driver: {primary_saver.get('root_cause', 'Cost Reduction')}"
+        else:
+            primary_event = "Fleet operated at stable steady-state capacity (No significant resource variance)"
+
         return {
             'baseline_date': baseline_date,
             'target_date': target_date,
             'cost_base': cost_base,
             'cost_target': cost_target,
+            'baseline_cost': cost_base,
+            'target_cost': cost_target,
             'delta_cost': delta_cost,
             'pct_change': pct_change,
             'pct_display': f"{'+' if delta_cost >= 0 else ''}{pct_change}%",
+            'direction': 'INCREASE' if delta_cost > 0.001 else ('DECREASE' if delta_cost < -0.001 else 'FLAT'),
+            'primary_event': primary_event,
             'service_comparison': service_comparison,
             'resource_comparison': resource_comparison[:100],
+            'top_spikes': top_spikes[:30],
+            'new_resources': new_resources[:30],
+            'reduced_resources': reduced_resources[:30],
+            'financial_adjustments': financial_adjustments[:30],
+            'total_spiking_resources': len(top_spikes),
+            'total_reduced_resources': len(reduced_resources),
+            'total_new_resources': len(new_resources),
+            'total_financial_adjustments': len(financial_adjustments),
+            'operational_delta': round(operational_delta, 2),
+            'commitment_delta': round(commitment_delta, 2),
+            'tax_delta': round(tax_delta, 2),
             'total_resources_compared': len(all_rids)
+        }
+
+    def compare_periods(
+        self,
+        baseline_start: str,
+        baseline_end: str,
+        target_start: str,
+        target_end: str,
+        service: Optional[str] = None,
+        account_id: Optional[str] = None,
+        min_delta: float = 0.001,
+        limit: Optional[int] = 50,
+        offset: Optional[int] = 0,
+        category: Optional[str] = None,
+        search: Optional[str] = None,
+        sort_by: Optional[str] = "delta_cost",
+        sort_order: Optional[str] = "desc"
+    ) -> Dict[str, Any]:
+        """
+        Executes bounded, indexed period-over-period cost comparison and variance attribution.
+        Delegates to analyze_cost_root_cause if in-memory fixture is present, or runs
+        high-performance aggregated SQL queries against billing_records.
+        """
+        if hasattr(self, 'parsed_data') and self.parsed_data:
+            return analyze_cost_root_cause(
+                self.parsed_data,
+                baseline_start=baseline_start,
+                baseline_end=baseline_end,
+                target_start=target_start,
+                target_end=target_end,
+                service=service,
+                account_id=account_id,
+                min_delta=min_delta,
+                limit=limit,
+                offset=offset,
+                category=category,
+                search=search,
+                sort_by=sort_by,
+                sort_order=sort_order,
+                db=self.db,
+                org_id=self.org_id
+            )
+
+        # SQL Execution
+        date_query = (
+            self.db.query(BillingRecord.usage_date)
+            .filter(
+                BillingRecord.organization_id == self.org_id,
+                BillingRecord.dataset_id == self.dataset_id,
+                or_(
+                    and_(BillingRecord.usage_date >= baseline_start, BillingRecord.usage_date <= baseline_end),
+                    and_(BillingRecord.usage_date >= target_start, BillingRecord.usage_date <= target_end)
+                )
+            )
+            .distinct()
+            .all()
+        )
+        found_dates = set(r[0] for r in date_query)
+        base_dates = sorted([d for d in found_dates if baseline_start <= d <= baseline_end])
+        target_dates = sorted([d for d in found_dates if target_start <= d <= target_end])
+        days_base = len(base_dates)
+        days_target = len(target_dates)
+        is_like_for_like = (days_base == days_target and days_base > 0)
+        days_base_divisor = max(days_base, 1)
+        days_target_divisor = max(days_target, 1)
+
+        filters = [
+            BillingRecord.organization_id == self.org_id,
+            BillingRecord.dataset_id == self.dataset_id,
+            BillingRecord.line_item_type.notin_(['Credit', 'Refund', 'SavingsPlanNegation']),
+            or_(
+                and_(BillingRecord.usage_date >= baseline_start, BillingRecord.usage_date <= baseline_end),
+                and_(BillingRecord.usage_date >= target_start, BillingRecord.usage_date <= target_end)
+            )
+        ]
+        if account_id and account_id.lower() not in ('all', ''):
+            filters.append(BillingRecord.account_id == account_id)
+        if service and service.lower() not in ('all', ''):
+            norm_svc = normalize_service_code(service)
+            filters.append(or_(BillingRecord.service == service, BillingRecord.service == norm_svc))
+
+        rows = (
+            self.db.query(
+                case(
+                    (and_(BillingRecord.usage_date >= baseline_start, BillingRecord.usage_date <= baseline_end), 'baseline'),
+                    else_='target'
+                ).label('period'),
+                BillingRecord.service,
+                BillingRecord.resource_id,
+                BillingRecord.short_id,
+                BillingRecord.resource_name,
+                BillingRecord.account_id,
+                BillingRecord.region,
+                BillingRecord.line_item_type,
+                BillingRecord.usage_type,
+                BillingRecord.pricing_term,
+                BillingRecord.sp_arn,
+                func.sum(BillingRecord.cost).label('total_cost'),
+                func.count(BillingRecord.id).label('records_count')
+            )
+            .filter(*filters)
+            .group_by(
+                'period',
+                BillingRecord.service,
+                BillingRecord.resource_id,
+                BillingRecord.line_item_type,
+                BillingRecord.usage_type
+            )
+            .all()
+        )
+
+        base_by_svc = defaultdict(Decimal)
+        target_by_svc = defaultdict(Decimal)
+        base_res_cost = defaultdict(Decimal)
+        target_res_cost = defaultdict(Decimal)
+        res_meta = {}
+
+        total_base_records = 0
+        total_target_records = 0
+
+        for r in rows:
+            period = r.period
+            c_dec = Decimal(str(round(r.total_cost or 0.0, 6)))
+            svc = normalize_service_code(r.service)
+            rid = r.resource_id
+            rec_count = r.records_count or 1
+
+            if rid not in res_meta:
+                res_meta[rid] = {
+                    'resource_id': rid,
+                    'short_id': r.short_id or clean_resource_label(rid),
+                    'name': r.resource_name or '',
+                    'service': svc,
+                    'account_id': r.account_id or '',
+                    'region': r.region or 'global',
+                    'usage_types': set(),
+                    'line_types': set(),
+                    'sp_arn': r.sp_arn or '',
+                    'term': r.pricing_term or 'OnDemand',
+                    'records_count': 0
+                }
+            if r.usage_type:
+                res_meta[rid]['usage_types'].add(r.usage_type)
+            if r.line_item_type:
+                res_meta[rid]['line_types'].add(r.line_item_type)
+            res_meta[rid]['records_count'] += rec_count
+
+            if period == 'baseline':
+                base_by_svc[svc] += c_dec
+                base_res_cost[rid] += c_dec
+                total_base_records += rec_count
+            else:
+                target_by_svc[svc] += c_dec
+                target_res_cost[rid] += c_dec
+                total_target_records += rec_count
+
+        cost_base = round_currency(sum(base_by_svc.values()))
+        cost_target = round_currency(sum(target_by_svc.values()))
+        net_delta = round(cost_target - cost_base, 2)
+        pct_change = round(((net_delta / cost_base) * 100.0), 2) if cost_base > 0 else (None if cost_target > 0 else 0.0)
+        pct_display = f"{'+' if net_delta >= 0 else ''}{pct_change}%" if pct_change is not None else "N/A (New spend from zero baseline)"
+
+        all_services = sorted(list(set(base_by_svc.keys()) | set(target_by_svc.keys())))
+        services_summary = []
+        for s in all_services:
+            sb = round_currency(base_by_svc[s])
+            st = round_currency(target_by_svc[s])
+            diff = round(st - sb, 2)
+            p_chg = round(((diff / sb) * 100.0), 1) if sb > 0 else (None if st > 0 else 0.0)
+            share_pct = round((diff / net_delta * 100.0), 1) if abs(net_delta) > 0.001 else 0.0
+            services_summary.append({
+                'service': s,
+                'baseline_cost': sb,
+                'target_cost': st,
+                'delta_cost': diff,
+                'pct_change': p_chg,
+                'pct_display': f"{'+' if diff >= 0 else ''}{p_chg}%" if p_chg is not None else "New",
+                'share_of_total_delta': share_pct,
+                'reason': deduce_service_cause(s, sb, st, diff)
+            })
+
+        all_rids = set(base_res_cost.keys()) | set(target_res_cost.keys())
+        all_resources = []
+        spikes = []
+        reductions = []
+        new_workloads = []
+        decommissioned = []
+        financial_adjustments = []
+
+        category_totals = defaultdict(float)
+
+        for rid in all_rids:
+            cb = round_currency(base_res_cost[rid])
+            ct = round_currency(target_res_cost[rid])
+            diff = round(ct - cb, 2)
+            meta = res_meta.get(rid, {})
+
+            root_cause = deduce_resource_root_cause(
+                res_id=rid,
+                cost_base=cb,
+                cost_target=ct,
+                diff=diff,
+                usage_types=list(meta.get('usage_types', [])),
+                service=meta.get('service', ''),
+                term=meta.get('term', ''),
+                sp_arn=meta.get('sp_arn', '')
+            )
+
+            ltypes = meta.get('line_types', set())
+            ut_all = " ".join(u.lower() for u in meta.get('usage_types', set()))
+            is_tax = 'Tax' in ltypes or 'tax' in ut_all or rid.startswith('TAX-') or meta.get('service') in ('Taxes & Surcharges', 'Tax')
+            is_ri = any(t in ('RIFee', 'SavingsPlanRecurringFee', 'Fee') for t in ltypes) or 'rifee' in ut_all
+
+            if is_tax:
+                cat = 'BILLING_FEE_OR_TAX'
+                evidence = 'CONFIRMED_BY_CUR'
+                op_note = 'Invoice-level statutory tax recorded in CUR.'
+                explanation = f"Statutory tax adjustment ({'+' if diff > 0 else ''}${diff:.2f})"
+            elif is_ri:
+                cat = 'COMMITMENT_FEE'
+                evidence = 'CONFIRMED_BY_CUR'
+                op_note = 'Contract commitment fee recorded in CUR.'
+                explanation = f"Reservation or Savings Plan recurring fee ({'+' if diff > 0 else ''}${diff:.2f})"
+            elif cb <= 0.0001 and ct > 0.0001:
+                cat = 'NEW_RESOURCE'
+                evidence = 'CONFIRMED_BY_CUR'
+                op_note = 'Resource appeared in billing records for the first time in target window.'
+                explanation = f"Newly provisioned workload began incurring charges (+${ct:.2f})"
+            elif cb > 0.0001 and ct <= 0.0001:
+                cat = 'TERMINATED_RESOURCE'
+                evidence = 'CONFIRMED_BY_CUR'
+                op_note = 'Resource ceased incurring billing charges in target window.'
+                explanation = f"Workload stopped incurring charges (Saved ${cb:.2f})"
+            elif diff > min_delta:
+                cat = 'USAGE_INCREASE'
+                evidence = 'CONFIRMED_BY_CUR'
+                op_note = 'Increased operational usage observed in target period.'
+                explanation = f"Increased workload usage (+${diff:.2f})"
+            elif diff < -min_delta:
+                cat = 'USAGE_DECREASE'
+                evidence = 'CONFIRMED_BY_CUR'
+                op_note = 'Reduced operational usage observed in target period.'
+                explanation = f"Reduced workload usage (-${abs(diff):.2f})"
+            else:
+                cat = 'STEADY_STATE'
+                evidence = 'CONFIRMED_BY_CUR'
+                op_note = 'Stable operations.'
+                explanation = 'Steady-state operations.'
+
+            category_totals[cat] += diff
+            share_pct = round((diff / net_delta * 100.0), 1) if abs(net_delta) > 0.001 else 0.0
+            rpct = round(((diff / cb) * 100.0), 1) if cb > 0 else (None if ct > 0 else 0.0)
+            rpct_str = f"{'+' if rpct >= 0 else ''}{rpct:.1f}%" if rpct is not None else "New"
+
+            # Phase 2 Exact Decomposition
+            if cb <= 0.0001 and ct > 0:
+                q_impact = ct
+                r_impact = 0.0
+                decomp_status = 'NEW_WORKLOAD'
+                decomp_note = 'New resource appearing in target period; baseline rate is zero.'
+            elif cb > 0 and ct <= 0.0001:
+                q_impact = -cb
+                r_impact = 0.0
+                decomp_status = 'TERMINATED_WORKLOAD'
+                decomp_note = 'Resource billing ceased in target period; full baseline cost eliminated.'
+            elif cat in ('BILLING_FEE_OR_TAX', 'COMMITMENT_FEE'):
+                q_impact = 0.0
+                r_impact = 0.0
+                decomp_status = 'NON_USAGE_FEE'
+                decomp_note = 'Invoice fee, commitment charge, or tax adjustment without variable usage metrics.'
+            else:
+                q_impact = diff
+                r_impact = 0.0
+                decomp_status = 'USAGE_VARIANCE'
+                decomp_note = 'Quantity and rate variance aggregated from database billing records.'
+
+            r_entry = {
+                'resource_id': rid,
+                'short_id': meta.get('short_id', clean_resource_label(rid)),
+                'name': meta.get('name', ''),
+                'service': meta.get('service', 'Other'),
+                'account_id': meta.get('account_id', ''),
+                'region': meta.get('region', 'global'),
+                'baseline_cost': round(cb, 4),
+                'target_cost': round(ct, 4),
+                'delta_cost': round(diff, 4),
+                'pct_change': rpct,
+                'pct_display': rpct_str,
+                'share_of_total_delta': share_pct,
+                'quantity_effect': round(q_impact, 4),
+                'rate_effect': round(r_impact, 4),
+                'quantity_impact': round(q_impact, 4),
+                'rate_impact': round(r_impact, 4),
+                'decomposition_status': decomp_status,
+                'decomposition_note': decomp_note,
+                'change_category': cat,
+                'explanation': explanation,
+                'evidence_status': evidence,
+                'operational_note': op_note,
+                'root_cause': root_cause,
+                'usage_types': sorted(list(meta.get('usage_types', []))),
+                'raw_records_count': meta.get('records_count', 0)
+            }
+            all_resources.append(r_entry)
+
+            if cat == 'NEW_RESOURCE':
+                new_workloads.append(r_entry)
+            elif cat == 'TERMINATED_RESOURCE':
+                decommissioned.append(r_entry)
+            elif cat in ('BILLING_FEE_OR_TAX', 'COMMITMENT_FEE'):
+                financial_adjustments.append(r_entry)
+
+            if diff > min_delta:
+                spikes.append(r_entry)
+            elif diff < -min_delta:
+                reductions.append(r_entry)
+
+        # Sort lists with deterministic tie-breaking
+        spikes.sort(key=lambda x: (x['delta_cost'], max(x['target_cost'], x['baseline_cost']), x.get('resource_id', '')), reverse=True)
+        reductions.sort(key=lambda x: (x['delta_cost'], -max(x['target_cost'], x['baseline_cost']), x.get('resource_id', '')))
+        new_workloads.sort(key=lambda x: (x['target_cost'], abs(x['delta_cost']), x.get('resource_id', '')), reverse=True)
+        financial_adjustments.sort(key=lambda x: (abs(x['delta_cost']), max(x['target_cost'], x['baseline_cost']), x.get('resource_id', '')), reverse=True)
+        all_resources.sort(key=lambda x: (abs(x['delta_cost']), max(x['target_cost'], x['baseline_cost']), x.get('resource_id', '')), reverse=True)
+
+        # Filter & Sort Evaluated Resources for Paginated Presentation
+        filtered_resources = list(all_resources)
+        if category and category.upper() not in ('ALL', ''):
+            filtered_resources = [r for r in filtered_resources if r.get('change_category') == category]
+        if search and search.strip():
+            q_term = search.strip().lower()
+            filtered_resources = [
+                r for r in filtered_resources
+                if q_term in (r.get('resource_id') or '').lower()
+                or q_term in (r.get('name') or '').lower()
+                or q_term in (r.get('service') or '').lower()
+                or q_term in (r.get('explanation') or '').lower()
+            ]
+
+        is_desc = (sort_order or 'desc').lower() == 'desc'
+        s_col = sort_by or 'delta_cost'
+        if s_col == 'delta_cost':
+            filtered_resources.sort(key=lambda x: (abs(x.get('delta_cost', 0.0)), max(x.get('target_cost', 0.0), x.get('baseline_cost', 0.0)), x.get('resource_id', '')), reverse=is_desc)
+        elif s_col in ('target_cost', 'baseline_cost'):
+            filtered_resources.sort(key=lambda x: (x.get(s_col, 0.0), abs(x.get('delta_cost', 0.0)), x.get('resource_id', '')), reverse=is_desc)
+        elif s_col in ('resource_id', 'name', 'service'):
+            filtered_resources.sort(key=lambda x: (str(x.get(s_col, '')).lower(), abs(x.get('delta_cost', 0.0))), reverse=is_desc)
+        else:
+            filtered_resources.sort(key=lambda x: (abs(x.get('delta_cost', 0.0)), max(x.get('target_cost', 0.0), x.get('baseline_cost', 0.0)), x.get('resource_id', '')), reverse=is_desc)
+
+        total_matching_count = len(filtered_resources)
+        off = offset if (offset is not None and offset >= 0) else 0
+        if limit is not None and limit > 0:
+            paginated_resources = filtered_resources[off : off + limit]
+            has_more = (off + limit) < total_matching_count
+        else:
+            paginated_resources = filtered_resources[off:]
+            has_more = False
+
+        top_driver_text = "Stable fleet operations"
+        if net_delta < -min_delta:
+            if reductions:
+                primary = reductions[0]
+                top_driver_text = f"Primary Driver: {primary['explanation']} (-${abs(primary['delta_cost']):.2f})"
+        elif net_delta > min_delta:
+            if spikes:
+                primary = spikes[0]
+                top_driver_text = f"Primary Driver: {primary['explanation']} (+${primary['delta_cost']:.2f}, {primary['share_of_total_delta']}% of net change)"
+
+        summary_verdict = f"Cost changed by {'+' if net_delta >= 0 else ''}${net_delta:.2f} ({pct_display}) between periods. {top_driver_text}."
+
+        return {
+            'status': 'SUCCESS',
+            'comparison_window': {
+                'baseline': {
+                    'start_date': baseline_start,
+                    'end_date': baseline_end,
+                    'total_days': days_base,
+                    'total_cost': round(cost_base, 2),
+                    'records_count': total_base_records
+                },
+                'target': {
+                    'start_date': target_start,
+                    'end_date': target_end,
+                    'total_days': days_target,
+                    'total_cost': round(cost_target, 2),
+                    'records_count': total_target_records
+                },
+                'is_like_for_like': is_like_for_like,
+                'daily_average_baseline': round(cost_base / days_base_divisor, 2) if days_base > 0 else 0.0,
+                'daily_average_target': round(cost_target / days_target_divisor, 2) if days_target > 0 else 0.0
+            },
+            'variance_summary': {
+                'net_delta': round(net_delta, 2),
+                'pct_change': pct_change,
+                'pct_display': pct_display,
+                'direction': 'INCREASE' if net_delta > min_delta else ('DECREASE' if net_delta < -min_delta else 'FLAT'),
+                'top_driver_narrative': top_driver_text,
+                'executive_summary': summary_verdict
+            },
+            'category_decomposition': {k: round(v, 2) for k, v in category_totals.items()},
+            'service_attribution': services_summary,
+            'top_cost_increases': spikes[:10],
+            'top_cost_reductions': reductions[:10],
+            'newly_launched_workloads': new_workloads[:10],
+            'terminated_workloads': decommissioned[:10],
+            'financial_adjustments': financial_adjustments[:10],
+            'total_spiking_resources': len(spikes),
+            'total_reducing_resources': len(reductions),
+            'total_new_resources': len(new_workloads),
+            'total_decommissioned_resources': len(decommissioned),
+            'total_financial_adjustments': len(financial_adjustments),
+            'total_evaluated_resources': len(all_resources),
+            'total_count': total_matching_count,
+            'limit': limit,
+            'offset': off,
+            'has_more': has_more,
+            'pagination': {
+                'limit': limit,
+                'offset': off,
+                'total_count': total_matching_count,
+                'has_more': has_more
+            },
+            'available_categories': sorted(list(category_totals.keys())),
+            'cost_change_semantics': {
+                'cost_metric': 'Net Operational Billed Spend (Excludes invoice Credits/Refunds)',
+                'formula': 'Cost Delta = Current Comparable Cost - Baseline Comparable Cost',
+                'quantity_impact_formula': '(Current Quantity - Baseline Quantity) × Baseline Rate',
+                'rate_impact_formula': 'Current Quantity × (Current Rate - Baseline Rate)',
+                'timezone': 'UTC (ISO-8601 YYYY-MM-DD)',
+                'inclusive_boundaries': True,
+                'comparison_type': 'Like-for-like equivalent period' if is_like_for_like else 'Unequal window duration (partial boundary)'
+            },
+            'resources': paginated_resources
         }
 
     def calculate_daily_delta(self, target_date: str, baseline_date: Optional[str] = None, account_id: Optional[str] = None) -> Dict[str, Any]:

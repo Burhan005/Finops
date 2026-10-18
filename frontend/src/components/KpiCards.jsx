@@ -16,13 +16,18 @@ export default function KpiCards({ overview, forexData }) {
   // Real-time dynamic Forex rate from live open exchange API
   const usdToInr = forexData?.rate || 95.32;
   const monthlySavingsInr = savings * usdToInr;
-  const standardSubFeeInr = 35000;
-  const roiMultiplier = (monthlySavingsInr / standardSubFeeInr).toFixed(1);
+  const annualSavingsUsd = savings * 12;
+  const annualSavingsInr = monthlySavingsInr * 12;
+  
+  // Dynamic Optimization Health Score (90-98 based on waste-to-spend ratio)
+  const wasteRatio = totalCost > 0 ? (savings / (totalCost * 2)) : 0;
+  const healthScore = Math.max(82, Math.min(98, Math.round(100 - (wasteRatio * 100))));
+  const healthGrade = healthScore >= 90 ? 'Grade A' : 'Grade B';
 
   return (
     <div className="space-y-4">
       
-      {/* Executive Command Center SaaS Value Realization Bar */}
+      {/* Executive Command Center Cloud Efficiency & Optimization Bar */}
       <div className="clay-card p-4 sm:p-5 bg-gradient-to-r from-zorvex-forest-soft/60 via-zorvex-surface to-zorvex-surface-secondary/50 border border-zorvex-forest/25 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-zorvex-forest-soft dark:bg-zorvex-dark-forest-soft border border-zorvex-forest/20 text-zorvex-forest dark:text-zorvex-dark-forest flex items-center justify-center flex-shrink-0">
@@ -31,7 +36,7 @@ export default function KpiCards({ overview, forexData }) {
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-xs font-black uppercase tracking-wider text-zorvex-forest dark:text-zorvex-dark-forest">
-                Executive Value Realization
+                Cloud Efficiency & Value Realization
               </span>
               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-zorvex-forest-soft text-zorvex-forest dark:bg-zorvex-dark-forest-soft dark:text-zorvex-dark-forest border border-zorvex-forest/20">
                 <ShieldCheck className="w-3 h-3" />
@@ -49,23 +54,33 @@ export default function KpiCards({ overview, forexData }) {
           </div>
         </div>
 
-        <div className="flex items-center gap-4 bg-zorvex-surface/80 dark:bg-zorvex-dark-surface/80 px-4 py-2 rounded-xl border border-zorvex-border dark:border-zorvex-dark-border">
+        {/* Combined Executive Metrics: Annual Run-Rate ROI & FinOps Health Score */}
+        <div className="flex items-center gap-4 bg-zorvex-surface/80 dark:bg-zorvex-dark-surface/80 px-4 py-2.5 rounded-xl border border-zorvex-border dark:border-zorvex-dark-border shadow-sm">
+          {/* Projected Annual Savings */}
           <div className="text-right">
             <span className="text-[10px] font-bold uppercase tracking-wider text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">
-              Potential Subscription ROI
+              Projected Annual Savings
             </span>
-            <div className="text-lg font-black text-zorvex-forest dark:text-zorvex-dark-forest font-mono flex items-center justify-end gap-1">
-              <span>{roiMultiplier}x Potential</span>
-              <ArrowUpRight className="w-4 h-4" />
+            <div className="text-base sm:text-lg font-black text-zorvex-forest dark:text-zorvex-dark-forest font-mono flex items-center justify-end gap-1">
+              <span>${Math.round(annualSavingsUsd).toLocaleString('en-US')}/yr</span>
+              <span className="text-xs text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary font-normal font-sans">
+                (₹{Math.round(annualSavingsInr).toLocaleString('en-IN')})
+              </span>
             </div>
           </div>
+
           <div className="h-8 w-px bg-zorvex-border dark:bg-zorvex-dark-border" />
+
+          {/* Account FinOps Health Score */}
           <div className="text-left">
             <span className="text-[10px] font-bold uppercase tracking-wider text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">
-              Monthly Platform Fee
+              FinOps Health Score
             </span>
-            <div className="text-sm font-extrabold text-zorvex-text dark:text-zorvex-dark-text font-mono">
-              ₹35,000 <span className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary font-normal">($400/mo)</span>
+            <div className="text-sm font-extrabold text-zorvex-text dark:text-zorvex-dark-text font-mono flex items-center gap-1.5">
+              <span className="text-zorvex-forest dark:text-zorvex-dark-forest font-black">{healthScore}/100</span>
+              <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                {healthGrade}
+              </span>
             </div>
           </div>
         </div>

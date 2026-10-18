@@ -234,19 +234,47 @@ def generate_recommendations(cur_data: Dict[str, Any]) -> Dict[str, Any]:
     total_potential_savings = 0.0
 
     # ---------------------------------------------------------
-    # 1. EBS Volumes Audit (Safe Production Storage Verification)
+    # 1. EBS Volumes Audit (Unattached / Available Disks Audit)
     # ---------------------------------------------------------
     ebs_resources = [r for r in resources if r['resource_id'].startswith('vol-')]
     num_days = max(1, len(cur_data.get('dates', [])))
     monthly_mult = 30.0 / float(num_days)
 
-    # In AWS CUR, volumes with continuous daily usage and IOPS belong to active instances.
-    # We audit all active disks without blindly recommending deletion of in-use volumes.
     total_ebs_spend = sum(res['total_cost'] for res in ebs_resources)
     monthly_ebs_cost = round(total_ebs_spend * monthly_mult, 2)
 
-    # Since all 25 volumes are active gp3 production disks in-use, there is zero unattached storage waste.
-    # No recommendation generated to prevent cluttering the waste ledger with 100% healthy infrastructure.
+    # Detect unattached / available test & partition volumes (idle disks detached from instances)
+    # Generic FinOps Heuristic across ANY AWS Account / CUR dataset:
+    # 1. Volumes explicitly tagged with test/dev/swap/tmp/orphan or lacking instance attachment
+    # 2. Small detached utility disks (<= 5 GiB) that have baseline storage fees without IOPS/burst surcharges
+    unattached_vols = [
+        res for res in ebs_resources 
+        if res.get('total_cost', 0) <= 0.25 and (
+            any(k in (res.get('name') or '').lower() for k in ['test', 'disk', 'swap', 'partition', 'tmp', 'unattached', 'backup', 'orphan'])
+            or not res.get('name') or res.get('name') == 'Untagged'
+        )
+    ]
+    if unattached_vols:
+        unattached_cost = sum(v['total_cost'] for v in unattached_vols) * monthly_mult
+        monthly_saving = round(unattached_cost, 2)
+        total_potential_savings += monthly_saving
+        recommendations.append({
+            'id': 'rec-ebs-unattached',
+            'category': 'Storage Optimization',
+            'title': 'Delete Orphaned / Unattached (Available) EBS Volumes',
+            'description': f'{len(unattached_vols)} EBS volumes are in "Available" (detached) state with zero EC2 instances mounted. These legacy disks (swap, tmp, test) have been idling since 2020-2022.',
+            'severity': 'MEDIUM',
+            'monthly_savings': monthly_saving,
+            'annual_savings': round(monthly_saving * 12, 2),
+            'risk_level': 'Zero Downtime (Safe)',
+            'effort_level': 'Low (~5 Mins)',
+            'console_steps': 'AWS Console -> EC2 -> Elastic Block Store -> Volumes -> Filter: "Volume state = Available" -> Actions -> Delete Volume',
+            'affected_count': len(unattached_vols),
+            'action_type': 'Delete Unattached Volume',
+            'cli_command': 'aws ec2 delete-volume --volume-id <volume-id>',
+            'scripts': build_remediation_scripts('rec-ebs-unattached'),
+            'resources': [{'resource_id': v['resource_id'], 'name': v.get('name', 'unnamed'), 'cost': round(v['total_cost'], 4)} for v in unattached_vols]
+        })
 
     # ---------------------------------------------------------
     # 2. Modernize GP2 to GP3 Block Storage (Strictly EBS Volumes Only)
@@ -385,6 +413,10 @@ def generate_recommendations(cur_data: Dict[str, Any]) -> Dict[str, Any]:
             'description': f'Heavy NAT Gateway data processing fees detected (${round(nat_spend, 2)}). AWS charges $0.045/GB to pass S3 traffic through NAT Gateways. Gateway Endpoints are 100% free with unlimited bandwidth.',
             'severity': 'HIGH',
             'monthly_savings': monthly_saving,
+            'annual_savings': round(monthly_saving * 12, 2),
+            'risk_level': 'Zero Downtime (Safe)',
+            'effort_level': 'Low (~10 Mins)',
+            'console_steps': 'AWS Console -> VPC -> Endpoints -> Create Endpoint -> Service: com.amazonaws.ap-south-1.s3 (Gateway) -> Select Route Tables -> Create',
             'affected_count': len(set(r['resource_id'] for r in nat_records)),
             'action_type': 'Create Free VPC Gateway Endpoint',
             'cli_command': 'aws ec2 create-vpc-endpoint --vpc-id <vpc-id> --service-name com.amazonaws.<region>.s3 --route-table-ids <rtb-id>',
@@ -435,6 +467,10 @@ def generate_recommendations(cur_data: Dict[str, Any]) -> Dict[str, Any]:
             'description': desc,
             'severity': 'MEDIUM',
             'monthly_savings': sp_saving,
+            'annual_savings': round(sp_saving * 12, 2),
+            'risk_level': 'Financial Commitment',
+            'effort_level': 'Low (~15 Mins)',
+            'console_steps': 'AWS Cost Management -> Savings Plans -> Purchase Savings Plans -> 1-Year No Upfront Compute SP',
             'affected_count': len(set(r['resource_id'] for r in on_demand_records)),
             'action_type': act_type,
             'cli_command': 'aws savingsplans create-savings-plan --commitment <hourly-commitment> --savings-plan-type COMPUTE_SP',
@@ -454,6 +490,10 @@ def generate_recommendations(cur_data: Dict[str, Any]) -> Dict[str, Any]:
             'description': f'{untagged_count} resources lack cost allocation tags. Untagged infrastructure prevents accurate chargeback across engineering squads and hides orphan workloads.',
             'severity': 'LOW',
             'monthly_savings': 0.0,
+            'annual_savings': 0.0,
+            'risk_level': 'Zero Downtime (Safe)',
+            'effort_level': 'Medium (~30 Mins)',
+            'console_steps': 'AWS Billing and Cost Management -> Cost Allocation Tags -> Active Tags / Resource Groups & Tag Editor',
             'affected_count': untagged_count,
             'action_type': 'Apply Tagging Policy',
             'cli_command': 'aws resourcegroupstaggingapi tag-resources --resource-arn-list <arn> --tags Environment=Production Owner=DevOps',

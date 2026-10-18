@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
 from ....core.state import get_cached_recommendations
-from ....cache import global_cache
+from ....cache import global_cache, get_dataset_cache_key
 from ....database import get_db
 from ....models import User, Organization, AnomalyAlert, BudgetConfig
 from ....recommendations import generate_recommendations
@@ -153,12 +153,12 @@ def get_forecast(
 ):
     user, org = auth
     dataset = get_active_dataset_for_org(org, db)
+    repo = get_billing_repository(org, dataset, db)
 
     org_id = org.id if org else 0
-    ds_key = dataset.get('filename', 'default')
+    ds_key = get_dataset_cache_key(dataset, repo)
     cache_key = global_cache.build_key(org_id, ds_key, "forecast")
 
-    repo = get_billing_repository(org, dataset, db)
     if repo.has_records():
         response.headers['X-Zorvex-Data-Source'] = 'database'
         return global_cache.get_or_compute(
@@ -202,7 +202,14 @@ def get_budgets(
     repo = get_billing_repository(org, dataset, db)
     if repo.has_records():
         response.headers['X-Zorvex-Data-Source'] = 'database'
-        return repo.evaluate_budgets()
+        ds_key = get_dataset_cache_key(dataset, repo)
+        org_id = org.id if org else 1
+        cache_key = global_cache.build_key(org_id, ds_key, "budgets")
+        return global_cache.get_or_compute(
+            cache_key,
+            lambda: repo.evaluate_budgets(),
+            ttl=300
+        )
 
     if getattr(repo, 'd_rec', None) and (repo.d_rec.total_rows or 0) > 0:
         raise HTTPException(
@@ -241,7 +248,11 @@ def create_budget(
     db.add(new_b)
     db.commit()
     db.refresh(new_b)
+    global_cache.invalidate_endpoint(org.id, "budgets")
     dataset = get_active_dataset_for_org(org, db)
+    repo = get_billing_repository(org, dataset, db)
+    if repo.has_records():
+        return repo.evaluate_budgets()
     if dataset.get('data'):
         return evaluate_budgets(db, dataset['data'], org_id=org.id)
     return [{"id": new_b.id, "name": new_b.name, "status": "HEALTHY"}]
@@ -266,6 +277,7 @@ def delete_budget(
 
     db.delete(b)
     db.commit()
+    global_cache.invalidate_endpoint(org.id, "budgets")
     return {"success": True, "deleted_id": budget_id}
 
 

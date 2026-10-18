@@ -194,19 +194,41 @@ export const api = {
     return res.json();
   },
 
-  async getRootCause({ baseline_start, baseline_end, target_start, target_end, service = null, account_id = null, min_delta = 0.001 }) {
+  async getRootCause({
+    baseline_start,
+    baseline_end,
+    target_start,
+    target_end,
+    service = null,
+    account_id = null,
+    min_delta = 0.001,
+    limit = 50,
+    offset = 0,
+    category = null,
+    search = null,
+    sort_by = 'delta_cost',
+    sort_order = 'desc'
+  }) {
+    const payload = {
+      baseline_start,
+      baseline_end,
+      target_start,
+      target_end,
+      service: service && service !== 'All' ? service : null,
+      account_id: account_id && account_id !== 'all' ? account_id : null,
+      min_delta
+    };
+    if (limit !== undefined && limit !== null) payload.limit = limit;
+    if (offset !== undefined && offset !== null) payload.offset = offset;
+    if (category && category !== 'ALL') payload.category = category;
+    if (search && search.trim()) payload.search = search.trim();
+    if (sort_by) payload.sort_by = sort_by;
+    if (sort_order) payload.sort_order = sort_order;
+
     const res = await fetch(`${API_BASE}/analytics/root-cause`, {
       method: 'POST',
       headers: authHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({
-        baseline_start,
-        baseline_end,
-        target_start,
-        target_end,
-        service: service && service !== 'All' ? service : null,
-        account_id: account_id && account_id !== 'all' ? account_id : null,
-        min_delta
-      })
+      body: JSON.stringify(payload)
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));

@@ -333,3 +333,30 @@ class S3SyncExecutionHistory(Base):
     bytes_downloaded = Column(Integer, default=0)
     error_message = Column(Text, nullable=True)
     manifest_key = Column(String(512), nullable=True)
+
+
+class ResourceLifecycleEvent(Base):
+    __tablename__ = "resource_lifecycle_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), index=True, nullable=False)
+    event_id = Column(String(128), index=True, nullable=False)
+    resource_id = Column(String(255), index=True, nullable=False)
+    service = Column(String(64), index=True, nullable=False)
+    event_name = Column(String(128), index=True, nullable=False)
+    event_time = Column(String(32), index=True, nullable=False)  # ISO-8601 UTC string
+    event_date = Column(String(16), index=True, nullable=False)  # YYYY-MM-DD
+    region = Column(String(64), index=True, default="ap-south-1")
+    account_id = Column(String(64), index=True, default="")
+    actor = Column(String(128), default="")
+    status = Column(String(32), default="SUCCESS")
+    event_source = Column(String(64), default="aws.cloudtrail")
+    details_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=utc_now)
+
+    __table_args__ = (
+        UniqueConstraint("organization_id", "event_id", name="uix_lifecycle_events_org_event"),
+        Index("ix_lifecycle_org_res_date", "organization_id", "resource_id", "event_date"),
+        Index("ix_lifecycle_org_date", "organization_id", "event_date"),
+    )
+

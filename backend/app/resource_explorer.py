@@ -1468,6 +1468,231 @@ def query_resource_explorer(
             'total_cost': round_currency(lcu_spend + hourly_spend + transfer_spend)
         }
 
+    # ==================== S3 STORAGE & API TELEMETRY ====================
+    s3_summary = None
+    if service in ('Amazon S3', 'S3', 'amazons3') or service_norm in ('Amazon S3', 'S3', 'amazons3'):
+        storage_spend = Decimal('0')
+        tier1_spend = Decimal('0')
+        tier2_spend = Decimal('0')
+        egress_spend = Decimal('0')
+        tier1_reqs = 0.0
+        tier2_reqs = 0.0
+        storage_gb_months = 0.0
+        egress_gb = 0.0
+        bucket_names = []
+
+        for r in filtered:
+            r_name = r.get('name') or r.get('short_id')
+            if r_name and not r_name.startswith('No-Resource-ID') and r_name not in bucket_names:
+                bucket_names.append(r_name)
+
+        for rec in cur_data.get('records', []):
+            prod = (rec.get('prod') or rec.get('service') or '').lower()
+            if 's3' in prod or 'amazons3' in prod:
+                ut = (rec.get('usage') or rec.get('usage_type') or '').lower()
+                cost_val = Decimal(str(rec.get('cost') or 0.0))
+                amt = float(rec.get('usage_amount') or rec.get('amount') or 0.0)
+
+                if 'timedstorage' in ut or 'storage' in ut:
+                    storage_spend += cost_val
+                    storage_gb_months += amt
+                elif 'tier1' in ut:
+                    tier1_spend += cost_val
+                    tier1_reqs += amt
+                elif 'tier2' in ut:
+                    tier2_spend += cost_val
+                    tier2_reqs += amt
+                elif 'datatransfer' in ut or 'out-bytes' in ut:
+                    egress_spend += cost_val
+                    egress_gb += amt / (1024.0 ** 3) if amt > 1000000 else amt
+
+        primary_bucket = bucket_names[0] if bucket_names else 'Enterprise-Fleet'
+        s3_summary = {
+            'bucket_count': len(bucket_names),
+            'primary_bucket': primary_bucket,
+            'storage_cost': round_currency(storage_spend),
+            'tier1_cost': round_currency(tier1_spend),
+            'tier2_cost': round_currency(tier2_spend),
+            'egress_cost': round_currency(egress_spend),
+            'tier1_requests': round(tier1_reqs),
+            'tier2_requests': round(tier2_reqs),
+            'storage_gb_months': round(storage_gb_months, 2),
+            'egress_gb': round(egress_gb, 2),
+            'total_cost': round_currency(storage_spend + tier1_spend + tier2_spend + egress_spend)
+        }
+
+    # ==================== VPC / NETWORKING & NAT TELEMETRY ====================
+    vpc_summary = None
+    if service in ('VPC / Networking', 'Amazon VPC', 'VPC', 'amazonvpc', 'AmazonVPC') or service_norm in ('VPC / Networking', 'Amazon VPC', 'VPC', 'amazonvpc', 'AmazonVPC'):
+        ipv4_spend = Decimal('0')
+        vpce_spend = Decimal('0')
+        nat_spend = Decimal('0')
+        xaz_spend = Decimal('0')
+        ipv4_hours = 0.0
+        vpce_hours = 0.0
+        nat_data_gb = 0.0
+        xaz_data_gb = 0.0
+
+        for rec in cur_data.get('records', []):
+            prod = (rec.get('prod') or rec.get('service') or '').lower()
+            if 'vpc' in prod or 'networking' in prod:
+                ut = (rec.get('usage') or rec.get('usage_type') or '').lower()
+                cost_val = Decimal(str(rec.get('cost') or 0.0))
+                amt = float(rec.get('usage_amount') or rec.get('amount') or 0.0)
+
+                if 'publicipv4' in ut:
+                    ipv4_spend += cost_val
+                    ipv4_hours += amt
+                elif 'vpce' in ut or 'vpcendpoint' in ut:
+                    vpce_spend += cost_val
+                    vpce_hours += amt
+                elif 'natgateway' in ut or 'nat-bytes' in ut:
+                    nat_spend += cost_val
+                    nat_data_gb += amt
+                elif 'xaz' in ut or 'datatransfer-xaz' in ut:
+                    xaz_spend += cost_val
+                    xaz_data_gb += amt / (1024.0 ** 3) if amt > 1000000 else amt
+
+        vpc_summary = {
+            'ipv4_cost': round_currency(ipv4_spend),
+            'ipv4_hours': round(ipv4_hours, 1),
+            'vpce_cost': round_currency(vpce_spend),
+            'vpce_hours': round(vpce_hours, 1),
+            'nat_cost': round_currency(nat_spend),
+            'nat_data_gb': round(nat_data_gb, 1),
+            'xaz_cost': round_currency(xaz_spend),
+            'xaz_data_gb': round(xaz_data_gb, 1),
+            'total_cost': round_currency(ipv4_spend + vpce_spend + nat_spend + xaz_spend)
+        }
+
+    # ==================== AWS LAMBDA COMPUTE TELEMETRY ====================
+    lambda_summary = None
+    if service in ('AWS Lambda', 'Lambda', 'awslambda') or service_norm in ('AWS Lambda', 'Lambda', 'awslambda'):
+        inv_spend = Decimal('0')
+        duration_spend = Decimal('0')
+        xaz_spend = Decimal('0')
+        total_invocations = 0.0
+        total_gb_seconds = 0.0
+        func_names = []
+
+        for r in filtered:
+            r_name = r.get('name') or r.get('short_id')
+            if r_name and not r_name.startswith('No-Resource-ID') and r_name not in func_names:
+                func_names.append(r_name)
+
+        for rec in cur_data.get('records', []):
+            prod = (rec.get('prod') or rec.get('service') or '').lower()
+            if 'lambda' in prod:
+                ut = (rec.get('usage') or rec.get('usage_type') or '').lower()
+                cost_val = Decimal(str(rec.get('cost') or 0.0))
+                amt = float(rec.get('usage_amount') or rec.get('amount') or 0.0)
+
+                if 'request' in ut:
+                    inv_spend += cost_val
+                    total_invocations += amt
+                elif 'gb-second' in ut:
+                    duration_spend += cost_val
+                    total_gb_seconds += amt
+                elif 'xaz' in ut:
+                    xaz_spend += cost_val
+
+        primary_func = func_names[0] if func_names else 'Serverless-Fleet'
+        lambda_summary = {
+            'function_count': len(func_names),
+            'primary_function': primary_func,
+            'invocations': round(total_invocations),
+            'invocations_cost': round_currency(inv_spend),
+            'gb_seconds': round(total_gb_seconds, 1),
+            'duration_cost': round_currency(duration_spend),
+            'network_cost': round_currency(xaz_spend),
+            'total_cost': round_currency(inv_spend + duration_spend + xaz_spend)
+        }
+
+    # ==================== CLOUDFRONT CDN TELEMETRY ====================
+    cloudfront_summary = None
+    if service in ('Amazon CloudFront', 'CloudFront', 'amazoncloudfront') or service_norm in ('Amazon CloudFront', 'CloudFront', 'amazoncloudfront'):
+        egress_spend = Decimal('0')
+        reqs_spend = Decimal('0')
+        total_egress_bytes = 0.0
+        total_edge_requests = 0.0
+        dist_names = []
+
+        for r in filtered:
+            r_name = r.get('name') or r.get('short_id')
+            if r_name and not r_name.startswith('No-Resource-ID') and r_name not in dist_names:
+                dist_names.append(r_name)
+
+        for rec in cur_data.get('records', []):
+            prod = (rec.get('prod') or rec.get('service') or '').lower()
+            if 'cloudfront' in prod:
+                ut = (rec.get('usage') or rec.get('usage_type') or '').lower()
+                cost_val = Decimal(str(rec.get('cost') or 0.0))
+                amt = float(rec.get('usage_amount') or rec.get('amount') or 0.0)
+
+                if 'datatransfer-out' in ut or 'out-bytes' in ut:
+                    egress_spend += cost_val
+                    total_egress_bytes += amt
+                elif 'request' in ut:
+                    reqs_spend += cost_val
+                    total_edge_requests += amt
+
+        primary_dist = dist_names[0] if dist_names else 'Global-Distribution-Fleet'
+        egress_val_gb = total_egress_bytes if total_egress_bytes < 1000000 else (total_egress_bytes / (1024.0 ** 3))
+        cloudfront_summary = {
+            'distribution_count': len(dist_names),
+            'primary_distribution': primary_dist,
+            'edge_requests': round(total_edge_requests),
+            'requests_cost': round_currency(reqs_spend),
+            'egress_gb': round(egress_val_gb, 2),
+            'egress_cost': round_currency(egress_spend),
+            'total_cost': round_currency(reqs_spend + egress_spend)
+        }
+
+    # ==================== UNIVERSAL SMART TELEMETRY (FALLBACK FOR ANY SERVICE) ====================
+    universal_summary = None
+    if service and service not in ('All', 'ALL'):
+        usage_type_totals = defaultdict(lambda: {'cost': Decimal('0'), 'amount': 0.0, 'unit': ''})
+        region_totals = defaultdict(Decimal)
+
+        svc_clean = service.lower().replace('amazon', '').replace('aws', '').replace(' ', '').replace('/', '').replace('_', '')
+
+        for rec in cur_data.get('records', []):
+            prod = (rec.get('prod') or rec.get('service') or '')
+            prod_clean = prod.lower().replace('amazon', '').replace('aws', '').replace(' ', '').replace('/', '').replace('_', '')
+            if prod_clean == svc_clean or normalize_service_code(prod) == service or prod == service:
+                ut = rec.get('usage') or rec.get('usage_type') or 'General Usage'
+                cost_val = Decimal(str(rec.get('cost') or 0.0))
+                amt = float(rec.get('usage_amount') or rec.get('amount') or 0.0)
+                u = rec.get('unit') or ''
+                reg = rec.get('region') or 'global'
+
+                usage_type_totals[ut]['cost'] += cost_val
+                usage_type_totals[ut]['amount'] += amt
+                if u and not usage_type_totals[ut]['unit']:
+                    usage_type_totals[ut]['unit'] = u
+                region_totals[reg] += cost_val
+
+        sorted_uts = sorted(usage_type_totals.items(), key=lambda x: x[1]['cost'], reverse=True)
+        top_dimensions = []
+        for ut_name, d in sorted_uts[:4]:
+            top_dimensions.append({
+                'name': ut_name,
+                'cost': round_currency(d['cost']),
+                'amount': round(d['amount'], 2),
+                'unit': d['unit']
+            })
+
+        sorted_regions = sorted(region_totals.items(), key=lambda x: x[1], reverse=True)
+        primary_reg = sorted_regions[0][0] if sorted_regions else 'global'
+
+        universal_summary = {
+            'service_name': service,
+            'primary_region': primary_reg,
+            'top_dimensions': top_dimensions,
+            'unique_resources': unique_count,
+            'total_cost': total_spend
+        }
+
     return {
         'status': 'SUCCESS',
         'total_matches': total_records,
@@ -1479,6 +1704,11 @@ def query_resource_explorer(
             'inventory_reconciliation': inventory_reconciliation,
             'waf_traffic_summary': waf_traffic_summary,
             'elb_summary': elb_summary,
+            's3_summary': s3_summary,
+            'vpc_summary': vpc_summary,
+            'lambda_summary': lambda_summary,
+            'cloudfront_summary': cloudfront_summary,
+            'universal_summary': universal_summary,
             'classified_cost': classified_cost,
             'unallocated_cost': unallocated_spend,
             'unallocated_records_count': sum(1 for r in filtered if r['resource_id'].startswith('No-Resource-ID') or r['classification_status'] == 'USAGE_LEVEL_COST'),

@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
 from ....core.state import get_cached_recommendations
-from ....cache import global_cache
+from ....cache import global_cache, get_dataset_cache_key
 from ....database import get_db
 from ....models import User, Organization
 from ....parser import round_currency
@@ -50,33 +50,32 @@ def get_overview(
 
     repo = get_billing_repository(org, dataset, db)
 
-    ds_key = dataset.get('filepath') or dataset.get('filename') or f'active_{repo.dataset_id or "default"}'
+    ds_key = get_dataset_cache_key(dataset, repo)
     org_id = org.id if org else 1
     cache_key = global_cache.build_key(
         org_id, ds_key, "overview",
         s=start_date, e=end_date, svc=svc_filter, acc=acc_filter
     )
-    cached_res = global_cache.get(cache_key)
-    if cached_res is not None:
-        response.headers['X-Zorvex-Data-Source'] = cached_res.get('data_source', 'database')
-        return cached_res
     if repo.has_records():
-        db_res = repo.get_overview(
-            start_date=start_date,
-            end_date=end_date,
-            account_id=acc_filter,
-            service=svc_filter
-        )
-        db_res['data_source'] = 'database'
-        response.headers['X-Zorvex-Data-Source'] = 'database'
-        data = dataset.get('data') or {}
-        recs = get_cached_recommendations(ds_key, data) if data else {}
-        db_res['potential_savings'] = recs.get('total_potential_savings', 0.0) if isinstance(recs, dict) else 0.0
-        db_res['total_resources'] = db_res.get('matching_resources_count') or len(data.get('resources', []))
-        if dataset.get('filename'):
-            db_res['filename'] = dataset.get('filename')
-        global_cache.set(cache_key, db_res, ttl=1800)
-        return db_res
+        def _compute_overview():
+            db_res = repo.get_overview(
+                start_date=start_date,
+                end_date=end_date,
+                account_id=acc_filter,
+                service=svc_filter
+            )
+            db_res['data_source'] = 'database'
+            data = dataset.get('data') or {}
+            recs = get_cached_recommendations(ds_key, data) if data else {}
+            db_res['potential_savings'] = recs.get('total_potential_savings', 0.0) if isinstance(recs, dict) else 0.0
+            db_res['total_resources'] = db_res.get('matching_resources_count') or len(data.get('resources', []))
+            if dataset.get('filename'):
+                db_res['filename'] = dataset.get('filename')
+            return db_res
+
+        result = global_cache.get_or_compute(cache_key, _compute_overview, ttl=1800)
+        response.headers['X-Zorvex-Data-Source'] = result.get('data_source', 'database')
+        return result
 
     # Deterministic source-selection policy:
     if getattr(repo, 'd_rec', None) and (repo.d_rec.total_rows or 0) > 0:
@@ -327,7 +326,17 @@ def get_trends(
     repo = get_billing_repository(org, dataset, db)
     if repo.has_records():
         response.headers['X-Zorvex-Data-Source'] = 'database'
-        return repo.get_trend_data(start_date=start_date, end_date=end_date)
+        ds_key = get_dataset_cache_key(dataset, repo)
+        org_id = org.id if org else 1
+        cache_key = global_cache.build_key(
+            org_id, ds_key, "trends",
+            s=start_date, e=end_date
+        )
+        return global_cache.get_or_compute(
+            cache_key,
+            lambda: repo.get_trend_data(start_date=start_date, end_date=end_date),
+            ttl=1800
+        )
 
     if getattr(repo, 'd_rec', None) and (repo.d_rec.total_rows or 0) > 0:
         raise HTTPException(
@@ -382,19 +391,31 @@ def search_resources(
     repo = get_billing_repository(org, dataset, db)
     if repo.has_records():
         response.headers['X-Zorvex-Data-Source'] = 'database'
-        return repo.query_resources(
-            query=query,
-            service=service,
-            category=category,
-            account_id=account_id,
-            region=region,
-            min_cost=min_cost,
-            start_date=start_date,
-            end_date=end_date,
-            sort_by=sort_by,
-            sort_order=sort_order,
-            page=page,
-            page_size=eff_page_size
+        ds_key = get_dataset_cache_key(dataset, repo)
+        org_id = org.id if org else 1
+        cache_key = global_cache.build_key(
+            org_id, ds_key, "resources",
+            q=query, svc=service, cat=category, acc=account_id, reg=region,
+            min_c=min_cost, s=start_date, e=end_date, sb=sort_by, so=sort_order,
+            p=page, ps=eff_page_size
+        )
+        return global_cache.get_or_compute(
+            cache_key,
+            lambda: repo.query_resources(
+                query=query,
+                service=service,
+                category=category,
+                account_id=account_id,
+                region=region,
+                min_cost=min_cost,
+                start_date=start_date,
+                end_date=end_date,
+                sort_by=sort_by,
+                sort_order=sort_order,
+                page=page,
+                page_size=eff_page_size
+            ),
+            ttl=600
         )
 
     if getattr(repo, 'd_rec', None) and (repo.d_rec.total_rows or 0) > 0:
@@ -455,7 +476,14 @@ def get_resource_hierarchies(
     repo = get_billing_repository(org, dataset, db)
     if repo.has_records():
         response.headers['X-Zorvex-Data-Source'] = 'database'
-        return repo.get_resource_hierarchies()
+        ds_key = get_dataset_cache_key(dataset, repo)
+        org_id = org.id if org else 1
+        cache_key = global_cache.build_key(org_id, ds_key, "hierarchies")
+        return global_cache.get_or_compute(
+            cache_key,
+            lambda: repo.get_resource_hierarchies(),
+            ttl=3600
+        )
 
     if getattr(repo, 'd_rec', None) and (repo.d_rec.total_rows or 0) > 0:
         raise HTTPException(
@@ -489,9 +517,16 @@ def get_resource_detail_endpoint(
     repo = get_billing_repository(org, dataset, db)
     if repo.has_records():
         response.headers['X-Zorvex-Data-Source'] = 'database'
+        ds_key = get_dataset_cache_key(dataset, repo)
+        org_id = org.id if org else 1
+        cache_key = global_cache.build_key(org_id, ds_key, "resource_detail", rid=resource_id)
+        cached_detail = global_cache.get(cache_key)
+        if cached_detail is not None:
+            return cached_detail
         detail = repo.get_resource_detail(resource_id)
         if not detail:
             raise HTTPException(status_code=404, detail=f"Resource '{resource_id}' not found in active dataset")
+        global_cache.set(cache_key, detail, ttl=1800)
         return detail
 
     if getattr(repo, 'd_rec', None) and (repo.d_rec.total_rows or 0) > 0:

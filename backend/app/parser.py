@@ -278,7 +278,9 @@ def parse_cur_files(filepaths: List[str]) -> Dict[str, Any]:
         'short_id': '',
         'last_seen': '',
         'usage_types': set(),
-        'line_types': set()
+        'line_types': set(),
+        'unit': '',
+        'region': ''
     })
     
     unique_dates = set()
@@ -295,6 +297,7 @@ def parse_cur_files(filepaths: List[str]) -> Dict[str, Any]:
     detected_bp_end = None
     detected_payer_id = None
     detected_usage_account_id = None
+    missing_name_refs: List[Tuple[int, str]] = []
 
     for filepath in filepaths:
         with open_file_any(filepath) as f:
@@ -364,13 +367,18 @@ def parse_cur_files(filepaths: List[str]) -> Dict[str, Any]:
                     except (AttributeError, OSError):
                         pass
 
-                try:
-                    c_str = row[cost_idx].strip() if (cost_idx is not None and row_len > cost_idx and row[cost_idx]) else '0.0'
-                    c_dec = Decimal(c_str)
-                    c_val = float(c_dec)
-                except (ValueError, IndexError, ArithmeticError):
-                    c_dec = Decimal('0')
-                    c_val = 0.0
+                c_dec = Decimal('0')
+                c_val = 0.0
+                if cost_idx is not None and row_len > cost_idx:
+                    raw_c = row[cost_idx]
+                    if raw_c and raw_c not in ('0', '0.0', '0.00', '0.000000', '0.00000000'):
+                        try:
+                            c_str = raw_c.strip()
+                            c_dec = Decimal(c_str)
+                            c_val = float(c_dec)
+                        except (ValueError, IndexError, ArithmeticError):
+                            c_dec = Decimal('0')
+                            c_val = 0.0
 
                 raw_unblended = c_val
                 ltype = row[ltype_idx].strip() if (ltype_idx is not None and row_len > ltype_idx) else 'Usage'
@@ -496,19 +504,15 @@ def parse_cur_files(filepaths: List[str]) -> Dict[str, Any]:
 
                     res_entry = resource_index[res_id]
                     res_entry['total_cost'] += c_dec
-                    if 'effective_cost' not in res_entry:
-                        res_entry['effective_cost'] = 0.0
                     res_entry['effective_cost'] += effective_cost
                     res_entry['dates'][day] += c_dec
                     res_entry['short_id'] = short_id
                     res_entry['account_id'] = account_id
                     res_entry['last_seen'] = full_ts
-                    if 'usage_amount' not in res_entry:
-                        res_entry['usage_amount'] = 0.0
                     res_entry['usage_amount'] += usage_amount
-                    if not res_entry.get('unit') and unit_val:
+                    if not res_entry['unit'] and unit_val:
                         res_entry['unit'] = unit_val
-                    if not res_entry.get('region') and region_val:
+                    if not res_entry['region'] and region_val:
                         res_entry['region'] = region_val
                     if not res_entry['service'] or res_entry['service'] == 'Unknown-Service':
                         res_entry['service'] = prod_code
@@ -519,6 +523,9 @@ def parse_cur_files(filepaths: List[str]) -> Dict[str, Any]:
 
                 unique_dates.add(day)
                 unique_months.add(month)
+
+                if not name_tag:
+                    missing_name_refs.append((len(records), res_id))
 
                 records.append({
                     'cost': c_val,
@@ -551,10 +558,11 @@ def parse_cur_files(filepaths: List[str]) -> Dict[str, Any]:
                     'line_item_id': line_item_id
                 })
 
-    # Single-pass post-fill of names from resource_index
-    for r in records:
-        if not r['name']:
-            r['name'] = resource_index[r['resource_id']]['name']
+    # Surgical post-fill of names only for records that lacked a name
+    for rec_idx, rid in missing_name_refs:
+        discovered_name = resource_index[rid]['name']
+        if discovered_name:
+            records[rec_idx]['name'] = discovered_name
 
     clean_resources = []
     for rid, data in resource_index.items():

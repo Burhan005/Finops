@@ -33,7 +33,9 @@ import {
   FileSpreadsheet,
   FileText,
   CheckCircle2,
-  Tag
+  Tag,
+  Activity,
+  Zap
 } from 'lucide-react';
 import { api } from '../services/api';
 import ClayDropdown from './common/ClayDropdown';
@@ -586,7 +588,7 @@ export default function ResourceExplorer({
               ) : selectedService === 'Amazon RDS' ? (
                 <><span className="font-bold text-amber-700 dark:text-amber-400 font-mono">{scopeSnapshotCount}</span> Automated RDS Backups</>
               ) : (
-                <><span className="font-bold text-amber-700 dark:text-amber-400 font-mono">{scopeSnapshotCount}</span> Assets (EBS: {snapshotsSummary?.ebs_snapshot_count || 0}, RDS: {snapshotsSummary?.rds_backup_count || 0})</>
+                <><span className="font-bold text-amber-700 dark:text-amber-400 font-mono">{scopeSnapshotCount}</span> Billed Assets (EBS: {snapshotsSummary?.ebs_snapshot_count || 0} Snapshots, RDS: {snapshotsSummary?.rds_backup_count || 0} DB Pools)</>
               )}
             </div>
           </div>
@@ -1464,6 +1466,666 @@ export default function ResourceExplorer({
                   <span className="font-mono text-emerald-600 dark:text-emerald-400 font-bold">Active Ingress</span>
                 </div>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* Amazon S3 Storage & API Request Telemetry */}
+        {(selectedService === 'Amazon S3' || selectedService === 'S3' || selectedService === 'amazons3') && summary?.s3_summary && (
+          <div className="clay-card p-5 bg-zorvex-surface dark:bg-zorvex-dark-surface border border-zorvex-border dark:border-zorvex-dark-border shadow-sm space-y-4">
+            {/* Header Row */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-zorvex-border/60 dark:border-zorvex-dark-border/60">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-xl bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary border border-zorvex-border dark:border-zorvex-dark-border text-zorvex-forest dark:text-zorvex-forest-highlight flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <HardDrive className="w-5 h-5 stroke-[2.2]" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2.5 flex-wrap">
+                    <span className="font-extrabold text-sm sm:text-base text-zorvex-text dark:text-zorvex-dark-text tracking-tight">
+                      Amazon S3 Storage & API Request Telemetry
+                    </span>
+                    <span className="font-mono text-xs font-bold text-zorvex-forest dark:text-zorvex-forest-highlight bg-zorvex-forest/10 dark:bg-zorvex-forest-highlight/10 px-2.5 py-0.5 rounded-md border border-zorvex-forest/20 dark:border-zorvex-forest-highlight/20">
+                      {summary.s3_summary.primary_bucket}
+                    </span>
+                    <span className="px-2.5 py-0.5 rounded-full text-[11px] font-mono font-bold bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text dark:text-zorvex-dark-text border border-zorvex-border dark:border-zorvex-dark-border">
+                      {summary.s3_summary.bucket_count} Buckets
+                    </span>
+                  </div>
+                  <p className="text-xs text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary mt-1 leading-relaxed">
+                    Simple Storage Service breakdown across Standard timed storage, Tier-1 (PUT/POST/COPY) requests, Tier-2 (GET/SELECT) access patterns, and public/regional data egress.
+                  </p>
+                </div>
+              </div>
+              <div className="flex sm:flex-col items-center sm:items-end justify-between sm:justify-center font-mono flex-shrink-0 pl-13 sm:pl-0">
+                <span className="text-[10px] uppercase font-bold tracking-wider text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">Storage Capacity</span>
+                <span className="text-base font-black text-zorvex-text dark:text-zorvex-dark-text">
+                  {summary.s3_summary.storage_gb_months?.toLocaleString()} GB-Mo
+                </span>
+              </div>
+            </div>
+
+            {/* Modular Executive Cards Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              {/* Tile 1: Timed Storage Volume */}
+              <div className="p-3.5 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary/50 border border-zorvex-border/70 dark:border-zorvex-dark-border/70 space-y-2 flex flex-col justify-between">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-1.5">
+                    <span className="font-extrabold text-zorvex-text dark:text-zorvex-dark-text text-xs flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-full bg-zorvex-forest animate-pulse"></span>
+                      Timed Storage
+                    </span>
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-black bg-zorvex-surface dark:bg-zorvex-dark-surface text-zorvex-forest dark:text-zorvex-forest-highlight border border-zorvex-border dark:border-zorvex-dark-border">
+                      $0.023 / GB-Mo
+                    </span>
+                  </div>
+                  <div className="text-lg font-mono font-black text-zorvex-text dark:text-zorvex-dark-text tracking-tight">
+                    {summary.s3_summary.storage_gb_months?.toLocaleString()} <span className="text-xs font-normal text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">GB-Mo</span>
+                  </div>
+                  <div className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary leading-tight">
+                    Active byte-hours across Standard object storage
+                  </div>
+                </div>
+                <div className="pt-2 border-t border-zorvex-border/40 dark:border-zorvex-dark-border/40 flex items-center justify-between text-[10px]">
+                  <span className="text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary font-semibold">Storage Cost</span>
+                  <span className="font-mono font-bold text-zorvex-text dark:text-zorvex-dark-text">${summary.s3_summary.storage_cost?.toFixed(2)}</span>
+                </div>
+              </div>
+
+              {/* Tile 2: Tier-1 Requests (PUT/POST) */}
+              <div className="p-3.5 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary/50 border border-zorvex-border/70 dark:border-zorvex-dark-border/70 space-y-2 flex flex-col justify-between">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-1.5">
+                    <span className="font-extrabold text-zorvex-text dark:text-zorvex-dark-text text-xs flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-full bg-zorvex-forest"></span>
+                      Tier-1 Requests
+                    </span>
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-black bg-zorvex-surface dark:bg-zorvex-dark-surface text-zorvex-forest dark:text-zorvex-forest-highlight border border-zorvex-border dark:border-zorvex-dark-border">
+                      PUT / POST
+                    </span>
+                  </div>
+                  <div className="text-lg font-mono font-black text-zorvex-text dark:text-zorvex-dark-text tracking-tight">
+                    {(summary.s3_summary.tier1_requests / 1e6).toFixed(2)}M <span className="text-xs font-normal text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">Reqs</span>
+                  </div>
+                  <div className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary leading-tight">
+                    Uploads, multipart commits and lifecycle actions
+                  </div>
+                </div>
+                <div className="pt-2 border-t border-zorvex-border/40 dark:border-zorvex-dark-border/40 flex items-center justify-between text-[10px]">
+                  <span className="text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary font-semibold">Tier-1 Cost</span>
+                  <span className="font-mono font-bold text-zorvex-text dark:text-zorvex-dark-text">${summary.s3_summary.tier1_cost?.toFixed(2)}</span>
+                </div>
+              </div>
+
+              {/* Tile 3: Tier-2 Requests (GET/LIST) */}
+              <div className="p-3.5 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary/50 border border-zorvex-border/70 dark:border-zorvex-dark-border/70 space-y-2 flex flex-col justify-between">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-1.5">
+                    <span className="font-extrabold text-zorvex-text dark:text-zorvex-dark-text text-xs flex items-center gap-1.5">
+                      <Globe className="w-3.5 h-3.5 text-teal-600 dark:text-teal-400" />
+                      Tier-2 Requests
+                    </span>
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-black bg-zorvex-surface dark:bg-zorvex-dark-surface text-teal-700 dark:text-teal-300 border border-zorvex-border dark:border-zorvex-dark-border">
+                      GET / LIST
+                    </span>
+                  </div>
+                  <div className="text-lg font-mono font-black text-zorvex-text dark:text-zorvex-dark-text tracking-tight">
+                    {(summary.s3_summary.tier2_requests / 1e6).toFixed(2)}M <span className="text-xs font-normal text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">Reqs</span>
+                  </div>
+                  <div className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary leading-tight">
+                    High-volume asset downloads and bucket listings
+                  </div>
+                </div>
+                <div className="pt-2 border-t border-zorvex-border/40 dark:border-zorvex-dark-border/40 flex items-center justify-between text-[10px]">
+                  <span className="text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary font-semibold">Tier-2 Cost</span>
+                  <span className="font-mono font-bold text-zorvex-text dark:text-zorvex-dark-text">${summary.s3_summary.tier2_cost?.toFixed(2)}</span>
+                </div>
+              </div>
+
+              {/* Tile 4: Total S3 Spend */}
+              <div className="p-3.5 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary/50 border border-zorvex-border/70 dark:border-zorvex-dark-border/70 space-y-2 flex flex-col justify-between">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-1.5">
+                    <span className="font-extrabold text-zorvex-text dark:text-zorvex-dark-text text-xs flex items-center gap-1.5">
+                      <DollarSign className="w-3.5 h-3.5 text-zorvex-forest dark:text-zorvex-forest-highlight" />
+                      Total S3 Spend
+                    </span>
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-black bg-zorvex-surface dark:bg-zorvex-dark-surface text-zorvex-forest dark:text-zorvex-forest-highlight border border-zorvex-border dark:border-zorvex-dark-border">
+                      ap-south-1
+                    </span>
+                  </div>
+                  <div className="text-xl font-mono font-black text-zorvex-text dark:text-zorvex-dark-text tracking-tight">
+                    ${summary.s3_summary.total_cost?.toFixed(2)}
+                  </div>
+                  <div className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary leading-tight">
+                    Storage capacity, requests & {summary.s3_summary.egress_gb?.toLocaleString()} GB egress
+                  </div>
+                </div>
+                <div className="pt-2 border-t border-zorvex-border/40 dark:border-zorvex-dark-border/40 flex items-center justify-between text-[10px]">
+                  <span className="text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary font-semibold">Egress Cost</span>
+                  <span className="font-mono font-bold text-zorvex-text dark:text-zorvex-dark-text">${summary.s3_summary.egress_cost?.toFixed(2)}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* VPC / Networking Gateway & Address Telemetry */}
+        {(selectedService === 'VPC / Networking' || selectedService === 'Amazon VPC' || selectedService === 'VPC' || selectedService === 'amazonvpc') && summary?.vpc_summary && (
+          <div className="clay-card p-5 bg-zorvex-surface dark:bg-zorvex-dark-surface border border-zorvex-border dark:border-zorvex-dark-border shadow-sm space-y-4">
+            {/* Header Row */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-zorvex-border/60 dark:border-zorvex-dark-border/60">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-xl bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary border border-zorvex-border dark:border-zorvex-dark-border text-zorvex-forest dark:text-zorvex-forest-highlight flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <Network className="w-5 h-5 stroke-[2.2]" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2.5 flex-wrap">
+                    <span className="font-extrabold text-sm sm:text-base text-zorvex-text dark:text-zorvex-dark-text tracking-tight">
+                      Amazon VPC Networking & Address Telemetry
+                    </span>
+                    <span className="font-mono text-xs font-bold text-zorvex-forest dark:text-zorvex-forest-highlight bg-zorvex-forest/10 dark:bg-zorvex-forest-highlight/10 px-2.5 py-0.5 rounded-md border border-zorvex-forest/20 dark:border-zorvex-forest-highlight/20">
+                      Dual-Stack VPC
+                    </span>
+                    <span className="px-2.5 py-0.5 rounded-full text-[11px] font-mono font-bold bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text dark:text-zorvex-dark-text border border-zorvex-border dark:border-zorvex-dark-border">
+                      Network Mesh
+                    </span>
+                  </div>
+                  <p className="text-xs text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary mt-1 leading-relaxed">
+                    Virtual Private Cloud networking telemetry decomposing public IPv4 address reservations, private VPC Endpoints (PrivateLink), NAT Gateway traffic, and cross-AZ data routing.
+                  </p>
+                </div>
+              </div>
+              <div className="flex sm:flex-col items-center sm:items-end justify-between sm:justify-center font-mono flex-shrink-0 pl-13 sm:pl-0">
+                <span className="text-[10px] uppercase font-bold tracking-wider text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">Public IPv4 Hours</span>
+                <span className="text-base font-black text-zorvex-text dark:text-zorvex-dark-text">
+                  {summary.vpc_summary.ipv4_hours?.toLocaleString()} Hrs
+                </span>
+              </div>
+            </div>
+
+            {/* Modular Executive Cards Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              {/* Tile 1: Public IPv4 Addresses */}
+              <div className="p-3.5 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary/50 border border-zorvex-border/70 dark:border-zorvex-dark-border/70 space-y-2 flex flex-col justify-between">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-1.5">
+                    <span className="font-extrabold text-zorvex-text dark:text-zorvex-dark-text text-xs flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-full bg-zorvex-forest animate-pulse"></span>
+                      Public IPv4 Addresses
+                    </span>
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-black bg-zorvex-surface dark:bg-zorvex-dark-surface text-zorvex-forest dark:text-zorvex-forest-highlight border border-zorvex-border dark:border-zorvex-dark-border">
+                      $0.005 / Hr
+                    </span>
+                  </div>
+                  <div className="text-lg font-mono font-black text-zorvex-text dark:text-zorvex-dark-text tracking-tight">
+                    {summary.vpc_summary.ipv4_hours?.toLocaleString()} <span className="text-xs font-normal text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">Hrs</span>
+                  </div>
+                  <div className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary leading-tight">
+                    In-use and idle public IPv4 address allocation
+                  </div>
+                </div>
+                <div className="pt-2 border-t border-zorvex-border/40 dark:border-zorvex-dark-border/40 flex items-center justify-between text-[10px]">
+                  <span className="text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary font-semibold">IPv4 Cost</span>
+                  <span className="font-mono font-bold text-zorvex-text dark:text-zorvex-dark-text">${summary.vpc_summary.ipv4_cost?.toFixed(2)}</span>
+                </div>
+              </div>
+
+              {/* Tile 2: VPC Endpoints (PrivateLink) */}
+              <div className="p-3.5 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary/50 border border-zorvex-border/70 dark:border-zorvex-dark-border/70 space-y-2 flex flex-col justify-between">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-1.5">
+                    <span className="font-extrabold text-zorvex-text dark:text-zorvex-dark-text text-xs flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-full bg-zorvex-forest"></span>
+                      VPC Endpoints
+                    </span>
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-black bg-zorvex-surface dark:bg-zorvex-dark-surface text-zorvex-forest dark:text-zorvex-forest-highlight border border-zorvex-border dark:border-zorvex-dark-border">
+                      PrivateLink
+                    </span>
+                  </div>
+                  <div className="text-lg font-mono font-black text-zorvex-text dark:text-zorvex-dark-text tracking-tight">
+                    {summary.vpc_summary.vpce_hours?.toLocaleString()} <span className="text-xs font-normal text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">Hrs</span>
+                  </div>
+                  <div className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary leading-tight">
+                    Secure private AWS service access without internet egress
+                  </div>
+                </div>
+                <div className="pt-2 border-t border-zorvex-border/40 dark:border-zorvex-dark-border/40 flex items-center justify-between text-[10px]">
+                  <span className="text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary font-semibold">VPCE Cost</span>
+                  <span className="font-mono font-bold text-zorvex-text dark:text-zorvex-dark-text">${summary.vpc_summary.vpce_cost?.toFixed(2)}</span>
+                </div>
+              </div>
+
+              {/* Tile 3: Cross-AZ Routing */}
+              <div className="p-3.5 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary/50 border border-zorvex-border/70 dark:border-zorvex-dark-border/70 space-y-2 flex flex-col justify-between">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-1.5">
+                    <span className="font-extrabold text-zorvex-text dark:text-zorvex-dark-text text-xs flex items-center gap-1.5">
+                      <Globe className="w-3.5 h-3.5 text-teal-600 dark:text-teal-400" />
+                      Inter-AZ Transfer
+                    </span>
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-black bg-zorvex-surface dark:bg-zorvex-dark-surface text-teal-700 dark:text-teal-300 border border-zorvex-border dark:border-zorvex-dark-border">
+                      xAZ Routing
+                    </span>
+                  </div>
+                  <div className="text-lg font-mono font-black text-zorvex-text dark:text-zorvex-dark-text tracking-tight">
+                    {summary.vpc_summary.xaz_data_gb?.toLocaleString()} <span className="text-xs font-normal text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">GB</span>
+                  </div>
+                  <div className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary leading-tight">
+                    High-availability replication across availability zones
+                  </div>
+                </div>
+                <div className="pt-2 border-t border-zorvex-border/40 dark:border-zorvex-dark-border/40 flex items-center justify-between text-[10px]">
+                  <span className="text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary font-semibold">xAZ Cost</span>
+                  <span className="font-mono font-bold text-zorvex-text dark:text-zorvex-dark-text">${summary.vpc_summary.xaz_cost?.toFixed(2)}</span>
+                </div>
+              </div>
+
+              {/* Tile 4: Total VPC Spend */}
+              <div className="p-3.5 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary/50 border border-zorvex-border/70 dark:border-zorvex-dark-border/70 space-y-2 flex flex-col justify-between">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-1.5">
+                    <span className="font-extrabold text-zorvex-text dark:text-zorvex-dark-text text-xs flex items-center gap-1.5">
+                      <DollarSign className="w-3.5 h-3.5 text-zorvex-forest dark:text-zorvex-forest-highlight" />
+                      Total VPC Spend
+                    </span>
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-black bg-zorvex-surface dark:bg-zorvex-dark-surface text-zorvex-forest dark:text-zorvex-forest-highlight border border-zorvex-border dark:border-zorvex-dark-border">
+                      ap-south-1
+                    </span>
+                  </div>
+                  <div className="text-xl font-mono font-black text-zorvex-text dark:text-zorvex-dark-text tracking-tight">
+                    ${summary.vpc_summary.total_cost?.toFixed(2)}
+                  </div>
+                  <div className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary leading-tight">
+                    Net networking infrastructure charges for current billing period
+                  </div>
+                </div>
+                <div className="pt-2 border-t border-zorvex-border/40 dark:border-zorvex-dark-border/40 flex items-center justify-between text-[10px]">
+                  <span className="text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary font-semibold">Status</span>
+                  <span className="font-mono text-emerald-600 dark:text-emerald-400 font-bold">Active Ingress</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* AWS Lambda Serverless Compute Telemetry */}
+        {(selectedService === 'AWS Lambda' || selectedService === 'Lambda' || selectedService === 'awslambda') && summary?.lambda_summary && (
+          <div className="clay-card p-5 bg-zorvex-surface dark:bg-zorvex-dark-surface border border-zorvex-border dark:border-zorvex-dark-border shadow-sm space-y-4">
+            {/* Header Row */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-zorvex-border/60 dark:border-zorvex-dark-border/60">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-xl bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary border border-zorvex-border dark:border-zorvex-dark-border text-zorvex-forest dark:text-zorvex-forest-highlight flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <Zap className="w-5 h-5 stroke-[2.2]" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2.5 flex-wrap">
+                    <span className="font-extrabold text-sm sm:text-base text-zorvex-text dark:text-zorvex-dark-text tracking-tight">
+                      AWS Lambda Serverless Execution Telemetry
+                    </span>
+                    <span className="font-mono text-xs font-bold text-zorvex-forest dark:text-zorvex-forest-highlight bg-zorvex-forest/10 dark:bg-zorvex-forest-highlight/10 px-2.5 py-0.5 rounded-md border border-zorvex-forest/20 dark:border-zorvex-forest-highlight/20">
+                      {summary.lambda_summary.primary_function}
+                    </span>
+                    <span className="px-2.5 py-0.5 rounded-full text-[11px] font-mono font-bold bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text dark:text-zorvex-dark-text border border-zorvex-border dark:border-zorvex-dark-border">
+                      {summary.lambda_summary.function_count} Functions
+                    </span>
+                  </div>
+                  <p className="text-xs text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary mt-1 leading-relaxed">
+                    Serverless execution intelligence tracking invocation request counts, provisioned memory duration (GB-Seconds), and event-driven handler scale.
+                  </p>
+                </div>
+              </div>
+              <div className="flex sm:flex-col items-center sm:items-end justify-between sm:justify-center font-mono flex-shrink-0 pl-13 sm:pl-0">
+                <span className="text-[10px] uppercase font-bold tracking-wider text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">Total Invocations</span>
+                <span className="text-base font-black text-zorvex-text dark:text-zorvex-dark-text">
+                  {(summary.lambda_summary.invocations / 1e6).toFixed(2)}M Reqs
+                </span>
+              </div>
+            </div>
+
+            {/* Modular Executive Cards Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              {/* Tile 1: Invocation Traffic */}
+              <div className="p-3.5 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary/50 border border-zorvex-border/70 dark:border-zorvex-dark-border/70 space-y-2 flex flex-col justify-between">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-1.5">
+                    <span className="font-extrabold text-zorvex-text dark:text-zorvex-dark-text text-xs flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-full bg-zorvex-forest animate-pulse"></span>
+                      Invocations
+                    </span>
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-black bg-zorvex-surface dark:bg-zorvex-dark-surface text-zorvex-forest dark:text-zorvex-forest-highlight border border-zorvex-border dark:border-zorvex-dark-border">
+                      $0.20 / 1M
+                    </span>
+                  </div>
+                  <div className="text-lg font-mono font-black text-zorvex-text dark:text-zorvex-dark-text tracking-tight">
+                    {(summary.lambda_summary.invocations / 1e6).toFixed(2)}M <span className="text-xs font-normal text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">Reqs</span>
+                  </div>
+                  <div className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary leading-tight">
+                    Event-driven function triggers & API handlers
+                  </div>
+                </div>
+                <div className="pt-2 border-t border-zorvex-border/40 dark:border-zorvex-dark-border/40 flex items-center justify-between text-[10px]">
+                  <span className="text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary font-semibold">Invocation Cost</span>
+                  <span className="font-mono font-bold text-zorvex-text dark:text-zorvex-dark-text">${summary.lambda_summary.invocations_cost?.toFixed(2)}</span>
+                </div>
+              </div>
+
+              {/* Tile 2: Compute Duration (GB-Seconds) */}
+              <div className="p-3.5 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary/50 border border-zorvex-border/70 dark:border-zorvex-dark-border/70 space-y-2 flex flex-col justify-between">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-1.5">
+                    <span className="font-extrabold text-zorvex-text dark:text-zorvex-dark-text text-xs flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-full bg-zorvex-forest"></span>
+                      Compute Duration
+                    </span>
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-black bg-zorvex-surface dark:bg-zorvex-dark-surface text-zorvex-forest dark:text-zorvex-forest-highlight border border-zorvex-border dark:border-zorvex-dark-border">
+                      GB-Seconds
+                    </span>
+                  </div>
+                  <div className="text-lg font-mono font-black text-zorvex-text dark:text-zorvex-dark-text tracking-tight">
+                    {summary.lambda_summary.gb_seconds?.toLocaleString()} <span className="text-xs font-normal text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">s</span>
+                  </div>
+                  <div className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary leading-tight">
+                    RAM tier multiplied by execution execution time
+                  </div>
+                </div>
+                <div className="pt-2 border-t border-zorvex-border/40 dark:border-zorvex-dark-border/40 flex items-center justify-between text-[10px]">
+                  <span className="text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary font-semibold">Duration Cost</span>
+                  <span className="font-mono font-bold text-zorvex-text dark:text-zorvex-dark-text">${summary.lambda_summary.duration_cost?.toFixed(2)}</span>
+                </div>
+              </div>
+
+              {/* Tile 3: Primary Function */}
+              <div className="p-3.5 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary/50 border border-zorvex-border/70 dark:border-zorvex-dark-border/70 space-y-2 flex flex-col justify-between">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-1.5">
+                    <span className="font-extrabold text-zorvex-text dark:text-zorvex-dark-text text-xs flex items-center gap-1.5">
+                      <Globe className="w-3.5 h-3.5 text-teal-600 dark:text-teal-400" />
+                      Primary Function
+                    </span>
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-black bg-zorvex-surface dark:bg-zorvex-dark-surface text-teal-700 dark:text-teal-300 border border-zorvex-border dark:border-zorvex-dark-border">
+                      Active
+                    </span>
+                  </div>
+                  <div className="text-base font-mono font-black text-zorvex-text dark:text-zorvex-dark-text tracking-tight truncate" title={summary.lambda_summary.primary_function}>
+                    {summary.lambda_summary.primary_function}
+                  </div>
+                  <div className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary leading-tight">
+                    Top microservice handler by invocation volume
+                  </div>
+                </div>
+                <div className="pt-2 border-t border-zorvex-border/40 dark:border-zorvex-dark-border/40 flex items-center justify-between text-[10px]">
+                  <span className="text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary font-semibold">Active Fleet</span>
+                  <span className="font-mono font-bold text-zorvex-text dark:text-zorvex-dark-text">{summary.lambda_summary.function_count} Functions</span>
+                </div>
+              </div>
+
+              {/* Tile 4: Total Lambda Spend */}
+              <div className="p-3.5 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary/50 border border-zorvex-border/70 dark:border-zorvex-dark-border/70 space-y-2 flex flex-col justify-between">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-1.5">
+                    <span className="font-extrabold text-zorvex-text dark:text-zorvex-dark-text text-xs flex items-center gap-1.5">
+                      <DollarSign className="w-3.5 h-3.5 text-zorvex-forest dark:text-zorvex-forest-highlight" />
+                      Total Lambda Spend
+                    </span>
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-black bg-zorvex-surface dark:bg-zorvex-dark-surface text-zorvex-forest dark:text-zorvex-forest-highlight border border-zorvex-border dark:border-zorvex-dark-border">
+                      ap-south-1
+                    </span>
+                  </div>
+                  <div className="text-xl font-mono font-black text-zorvex-text dark:text-zorvex-dark-text tracking-tight">
+                    ${summary.lambda_summary.total_cost?.toFixed(2)}
+                  </div>
+                  <div className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary leading-tight">
+                    Net serverless execution charges for billing cycle
+                  </div>
+                </div>
+                <div className="pt-2 border-t border-zorvex-border/40 dark:border-zorvex-dark-border/40 flex items-center justify-between text-[10px]">
+                  <span className="text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary font-semibold">Status</span>
+                  <span className="font-mono text-emerald-600 dark:text-emerald-400 font-bold">Optimal Scale</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Amazon CloudFront Edge CDN Telemetry */}
+        {(selectedService === 'Amazon CloudFront' || selectedService === 'CloudFront' || selectedService === 'amazoncloudfront') && summary?.cloudfront_summary && (
+          <div className="clay-card p-5 bg-zorvex-surface dark:bg-zorvex-dark-surface border border-zorvex-border dark:border-zorvex-dark-border shadow-sm space-y-4">
+            {/* Header Row */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-zorvex-border/60 dark:border-zorvex-dark-border/60">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-xl bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary border border-zorvex-border dark:border-zorvex-dark-border text-zorvex-forest dark:text-zorvex-forest-highlight flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <Globe className="w-5 h-5 stroke-[2.2]" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2.5 flex-wrap">
+                    <span className="font-extrabold text-sm sm:text-base text-zorvex-text dark:text-zorvex-dark-text tracking-tight">
+                      Amazon CloudFront Edge CDN Telemetry
+                    </span>
+                    <span className="font-mono text-xs font-bold text-zorvex-forest dark:text-zorvex-forest-highlight bg-zorvex-forest/10 dark:bg-zorvex-forest-highlight/10 px-2.5 py-0.5 rounded-md border border-zorvex-forest/20 dark:border-zorvex-forest-highlight/20">
+                      {summary.cloudfront_summary.primary_distribution}
+                    </span>
+                    <span className="px-2.5 py-0.5 rounded-full text-[11px] font-mono font-bold bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text dark:text-zorvex-dark-text border border-zorvex-border dark:border-zorvex-dark-border">
+                      {summary.cloudfront_summary.distribution_count} Distributions
+                    </span>
+                  </div>
+                  <p className="text-xs text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary mt-1 leading-relaxed">
+                    Global content delivery network telemetry detailing edge request caching, regional data transfer out to internet, and distribution fleet performance.
+                  </p>
+                </div>
+              </div>
+              <div className="flex sm:flex-col items-center sm:items-end justify-between sm:justify-center font-mono flex-shrink-0 pl-13 sm:pl-0">
+                <span className="text-[10px] uppercase font-bold tracking-wider text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">Edge Requests</span>
+                <span className="text-base font-black text-zorvex-text dark:text-zorvex-dark-text">
+                  {(summary.cloudfront_summary.edge_requests / 1e6).toFixed(1)}M Reqs
+                </span>
+              </div>
+            </div>
+
+            {/* Modular Executive Cards Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              {/* Tile 1: Edge Requests */}
+              <div className="p-3.5 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary/50 border border-zorvex-border/70 dark:border-zorvex-dark-border/70 space-y-2 flex flex-col justify-between">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-1.5">
+                    <span className="font-extrabold text-zorvex-text dark:text-zorvex-dark-text text-xs flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-full bg-zorvex-forest animate-pulse"></span>
+                      Edge Requests
+                    </span>
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-black bg-zorvex-surface dark:bg-zorvex-dark-surface text-zorvex-forest dark:text-zorvex-forest-highlight border border-zorvex-border dark:border-zorvex-dark-border">
+                      Global POPs
+                    </span>
+                  </div>
+                  <div className="text-lg font-mono font-black text-zorvex-text dark:text-zorvex-dark-text tracking-tight">
+                    {(summary.cloudfront_summary.edge_requests / 1e6).toFixed(1)}M <span className="text-xs font-normal text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">Reqs</span>
+                  </div>
+                  <div className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary leading-tight">
+                    HTTPS & HTTP client requests served by CloudFront
+                  </div>
+                </div>
+                <div className="pt-2 border-t border-zorvex-border/40 dark:border-zorvex-dark-border/40 flex items-center justify-between text-[10px]">
+                  <span className="text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary font-semibold">Request Cost</span>
+                  <span className="font-mono font-bold text-zorvex-text dark:text-zorvex-dark-text">${summary.cloudfront_summary.requests_cost?.toFixed(2)}</span>
+                </div>
+              </div>
+
+              {/* Tile 2: Regional Data Transfer Out */}
+              <div className="p-3.5 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary/50 border border-zorvex-border/70 dark:border-zorvex-dark-border/70 space-y-2 flex flex-col justify-between">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-1.5">
+                    <span className="font-extrabold text-zorvex-text dark:text-zorvex-dark-text text-xs flex items-center gap-1.5">
+                      <Globe className="w-3.5 h-3.5 text-teal-600 dark:text-teal-400" />
+                      Data Transfer Out
+                    </span>
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-black bg-zorvex-surface dark:bg-zorvex-dark-surface text-teal-700 dark:text-teal-300 border border-zorvex-border dark:border-zorvex-dark-border">
+                      Bandwidth
+                    </span>
+                  </div>
+                  <div className="text-lg font-mono font-black text-zorvex-text dark:text-zorvex-dark-text tracking-tight">
+                    {summary.cloudfront_summary.egress_gb?.toLocaleString()} <span className="text-xs font-normal text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">GB</span>
+                  </div>
+                  <div className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary leading-tight">
+                    Edge egress to viewers across India and global POPs
+                  </div>
+                </div>
+                <div className="pt-2 border-t border-zorvex-border/40 dark:border-zorvex-dark-border/40 flex items-center justify-between text-[10px]">
+                  <span className="text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary font-semibold">Egress Cost</span>
+                  <span className="font-mono font-bold text-zorvex-text dark:text-zorvex-dark-text">${summary.cloudfront_summary.egress_cost?.toFixed(2)}</span>
+                </div>
+              </div>
+
+              {/* Tile 3: Primary Distribution */}
+              <div className="p-3.5 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary/50 border border-zorvex-border/70 dark:border-zorvex-dark-border/70 space-y-2 flex flex-col justify-between">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-1.5">
+                    <span className="font-extrabold text-zorvex-text dark:text-zorvex-dark-text text-xs flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-full bg-zorvex-forest"></span>
+                      Primary Distribution
+                    </span>
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-black bg-zorvex-surface dark:bg-zorvex-dark-surface text-zorvex-forest dark:text-zorvex-forest-highlight border border-zorvex-border dark:border-zorvex-dark-border">
+                      Active
+                    </span>
+                  </div>
+                  <div className="text-base font-mono font-black text-zorvex-text dark:text-zorvex-dark-text tracking-tight truncate" title={summary.cloudfront_summary.primary_distribution}>
+                    {summary.cloudfront_summary.primary_distribution}
+                  </div>
+                  <div className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary leading-tight">
+                    Top edge distribution by request traffic volume
+                  </div>
+                </div>
+                <div className="pt-2 border-t border-zorvex-border/40 dark:border-zorvex-dark-border/40 flex items-center justify-between text-[10px]">
+                  <span className="text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary font-semibold">Fleet</span>
+                  <span className="font-mono font-bold text-zorvex-text dark:text-zorvex-dark-text">{summary.cloudfront_summary.distribution_count} Distributions</span>
+                </div>
+              </div>
+
+              {/* Tile 4: Total CloudFront Spend */}
+              <div className="p-3.5 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary/50 border border-zorvex-border/70 dark:border-zorvex-dark-border/70 space-y-2 flex flex-col justify-between">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-1.5">
+                    <span className="font-extrabold text-zorvex-text dark:text-zorvex-dark-text text-xs flex items-center gap-1.5">
+                      <DollarSign className="w-3.5 h-3.5 text-zorvex-forest dark:text-zorvex-forest-highlight" />
+                      Total CDN Spend
+                    </span>
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-black bg-zorvex-surface dark:bg-zorvex-dark-surface text-zorvex-forest dark:text-zorvex-forest-highlight border border-zorvex-border dark:border-zorvex-dark-border">
+                      Global Edge
+                    </span>
+                  </div>
+                  <div className="text-xl font-mono font-black text-zorvex-text dark:text-zorvex-dark-text tracking-tight">
+                    ${summary.cloudfront_summary.total_cost?.toFixed(2)}
+                  </div>
+                  <div className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary leading-tight">
+                    Total edge request charges and regional egress
+                  </div>
+                </div>
+                <div className="pt-2 border-t border-zorvex-border/40 dark:border-zorvex-dark-border/40 flex items-center justify-between text-[10px]">
+                  <span className="text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary font-semibold">Status</span>
+                  <span className="font-mono text-emerald-600 dark:text-emerald-400 font-bold">Global Edge</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Universal Smart Telemetry Banner (Automatically covers CloudWatch, Route 53, KMS, and ANY other service) */}
+        {selectedService && selectedService !== 'All' && !['Amazon EC2', 'Amazon RDS', 'AWS WAF', 'Elastic Load Balancing', 'ELB', 'AWSELB', 'Amazon S3', 'S3', 'amazons3', 'VPC / Networking', 'Amazon VPC', 'VPC', 'amazonvpc', 'AWS Lambda', 'Lambda', 'awslambda', 'Amazon CloudFront', 'CloudFront', 'amazoncloudfront'].includes(selectedService) && summary?.universal_summary && (
+          <div className="clay-card p-5 bg-zorvex-surface dark:bg-zorvex-dark-surface border border-zorvex-border dark:border-zorvex-dark-border shadow-sm space-y-4">
+            {/* Header Row */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-zorvex-border/60 dark:border-zorvex-dark-border/60">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-xl bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary border border-zorvex-border dark:border-zorvex-dark-border text-zorvex-forest dark:text-zorvex-forest-highlight flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <Activity className="w-5 h-5 stroke-[2.2]" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2.5 flex-wrap">
+                    <span className="font-extrabold text-sm sm:text-base text-zorvex-text dark:text-zorvex-dark-text tracking-tight">
+                      {selectedService} Dimensional Spend & Telemetry
+                    </span>
+                    <span className="font-mono text-xs font-bold text-zorvex-forest dark:text-zorvex-forest-highlight bg-zorvex-forest/10 dark:bg-zorvex-forest-highlight/10 px-2.5 py-0.5 rounded-md border border-zorvex-forest/20 dark:border-zorvex-forest-highlight/20">
+                      {summary.universal_summary.primary_region}
+                    </span>
+                    <span className="px-2.5 py-0.5 rounded-full text-[11px] font-mono font-bold bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text dark:text-zorvex-dark-text border border-zorvex-border dark:border-zorvex-dark-border">
+                      {summary.universal_summary.unique_resources} Resources
+                    </span>
+                  </div>
+                  <p className="text-xs text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary mt-1 leading-relaxed">
+                    Dynamic billing and usage telemetry for {selectedService}. Decomposed directly from AWS CUR line items across top consumption dimensions, usage metrics, and regional allocation.
+                  </p>
+                </div>
+              </div>
+              <div className="flex sm:flex-col items-center sm:items-end justify-between sm:justify-center font-mono flex-shrink-0 pl-13 sm:pl-0">
+                <span className="text-[10px] uppercase font-bold tracking-wider text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">Invoiced Spend</span>
+                <span className="text-base font-black text-zorvex-text dark:text-zorvex-dark-text">
+                  ${summary.universal_summary.total_cost?.toFixed(2)}
+                </span>
+              </div>
+            </div>
+
+            {/* Modular Executive Cards Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              {summary.universal_summary.top_dimensions && summary.universal_summary.top_dimensions.length > 0 ? (
+                <>
+                  {summary.universal_summary.top_dimensions.slice(0, 3).map((dim, idx) => (
+                    <div key={idx} className="p-3.5 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary/50 border border-zorvex-border/70 dark:border-zorvex-dark-border/70 space-y-2 flex flex-col justify-between">
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between gap-1.5">
+                          <span className="font-extrabold text-zorvex-text dark:text-zorvex-dark-text text-xs flex items-center gap-1.5 truncate max-w-[150px]" title={dim.name}>
+                            <span className="w-2.5 h-2.5 rounded-full bg-zorvex-forest animate-pulse flex-shrink-0"></span>
+                            {dim.name.split(':').pop()?.split('-').slice(-2).join(' ') || dim.name}
+                          </span>
+                          <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-black bg-zorvex-surface dark:bg-zorvex-dark-surface text-zorvex-forest dark:text-zorvex-forest-highlight border border-zorvex-border dark:border-zorvex-dark-border flex-shrink-0">
+                            {dim.unit || 'Dimension'}
+                          </span>
+                        </div>
+                        <div className="text-lg font-mono font-black text-zorvex-text dark:text-zorvex-dark-text tracking-tight truncate">
+                          {dim.amount >= 1e6 ? `${(dim.amount / 1e6).toFixed(2)}M` : dim.amount?.toLocaleString()}{' '}
+                          <span className="text-xs font-normal text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">{dim.unit}</span>
+                        </div>
+                        <div className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary leading-tight truncate" title={dim.name}>
+                          {dim.name}
+                        </div>
+                      </div>
+                      <div className="pt-2 border-t border-zorvex-border/40 dark:border-zorvex-dark-border/40 flex items-center justify-between text-[10px]">
+                        <span className="text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary font-semibold">Incurred Cost</span>
+                        <span className="font-mono font-bold text-zorvex-text dark:text-zorvex-dark-text">${dim.cost?.toFixed(2)}</span>
+                      </div>
+                    </div>
+                  ))}
+
+                  {/* Tile 4: Total Service Invoice Spend */}
+                  <div className="p-3.5 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary/50 border border-zorvex-border/70 dark:border-zorvex-dark-border/70 space-y-2 flex flex-col justify-between">
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between gap-1.5">
+                        <span className="font-extrabold text-zorvex-text dark:text-zorvex-dark-text text-xs flex items-center gap-1.5">
+                          <DollarSign className="w-3.5 h-3.5 text-zorvex-forest dark:text-zorvex-forest-highlight" />
+                          Total {selectedService.replace('Amazon ', '').replace('AWS ', '')} Spend
+                        </span>
+                        <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-black bg-zorvex-surface dark:bg-zorvex-dark-surface text-zorvex-forest dark:text-zorvex-forest-highlight border border-zorvex-border dark:border-zorvex-dark-border">
+                          {summary.universal_summary.primary_region}
+                        </span>
+                      </div>
+                      <div className="text-xl font-mono font-black text-zorvex-text dark:text-zorvex-dark-text tracking-tight">
+                        ${summary.universal_summary.total_cost?.toFixed(2)}
+                      </div>
+                      <div className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary leading-tight">
+                        {summary.universal_summary.unique_resources} billed resources in current billing cycle
+                      </div>
+                    </div>
+                    <div className="pt-2 border-t border-zorvex-border/40 dark:border-zorvex-dark-border/40 flex items-center justify-between text-[10px]">
+                      <span className="text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary font-semibold">Status</span>
+                      <span className="font-mono text-emerald-600 dark:text-emerald-400 font-bold">Telemetry Live</span>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <div className="col-span-full p-4 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary/50 border border-zorvex-border/70 dark:border-zorvex-dark-border/70 flex items-center justify-between">
+                  <span className="text-xs text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">
+                    Total billed cost for {selectedService}: <strong className="font-mono text-zorvex-text dark:text-zorvex-dark-text">${summary.universal_summary.total_cost?.toFixed(2)}</strong> across {summary.universal_summary.unique_resources} resources.
+                  </span>
+                  <span className="px-2.5 py-0.5 rounded-md text-[10px] font-mono font-bold bg-zorvex-surface dark:bg-zorvex-dark-surface text-zorvex-forest dark:text-zorvex-forest-highlight border border-zorvex-border dark:border-zorvex-dark-border">
+                    {summary.universal_summary.primary_region}
+                  </span>
+                </div>
+              )}
             </div>
           </div>
         )}

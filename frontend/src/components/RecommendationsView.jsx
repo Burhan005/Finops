@@ -1,39 +1,31 @@
 import React, { useState, lazy, Suspense } from 'react';
 import { 
   Coins, 
-  Terminal, 
   HardDrive, 
   Server, 
   Database, 
   Network, 
   Tag, 
-  Check, 
-  Copy, 
   ChevronRight, 
   ChevronDown,
-  Sparkles,
-  Calculator
+  Calculator,
+  TrendingUp,
+  ShieldCheck,
+  Clock,
+  Layers,
+  Compass
 } from 'lucide-react';
-import FixScriptModal from './common/FixScriptModal';
 
 const SavingsPlanSimulator = lazy(() => import('./SavingsPlanSimulator'));
 
 export default function RecommendationsView({ recommendations }) {
-  const [copiedCmd, setCopiedCmd] = useState('');
   const [expandedId, setExpandedId] = useState('');
   const [activeTab, setActiveTab] = useState('waste'); // 'waste' | 'simulator'
-  const [selectedRecForScript, setSelectedRecForScript] = useState(null);
 
   if (!recommendations) return null;
 
   const recList = recommendations.recommendations || [];
   const totalSavings = recommendations.total_potential_savings || 0;
-
-  const copyCommand = (cmd, id) => {
-    navigator.clipboard.writeText(cmd);
-    setCopiedCmd(id);
-    setTimeout(() => setCopiedCmd(''), 2000);
-  };
 
   const getCategoryIcon = (category) => {
     switch (category) {
@@ -171,54 +163,57 @@ export default function RecommendationsView({ recommendations }) {
                   </div>
                 </div>
 
-                {/* Action & CLI Remediation Box (Developer-Grade High-Contrast Terminal) */}
-                <div className="mt-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-                  <div className="w-full md:flex-1 bg-[#121914] dark:bg-[#0E1510] rounded-xl p-3 border border-[#2D382D] flex items-center justify-between gap-3 shadow-inner">
-                    <div className="flex items-center gap-2 overflow-hidden">
-                      <Terminal className="w-4 h-4 text-zorvex-forest-highlight flex-shrink-0" />
-                      <code className="text-[11px] font-mono text-zorvex-forest-highlight font-semibold truncate select-all">
-                        {rec.cli_command}
-                      </code>
-                    </div>
-                    <div className="flex items-center gap-2 flex-shrink-0">
-                      <button
-                        type="button"
-                        onClick={() => copyCommand(rec.cli_command, rec.id)}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#1C261E] hover:bg-[#253328] border border-[#2D3D30] text-[11px] font-bold text-zorvex-dark-text transition-all cursor-pointer flex-shrink-0"
-                      >
-                        {copiedCmd === rec.id ? (
-                          <>
-                            <Check className="w-3.5 h-3.5 text-zorvex-forest-highlight" />
-                            <span>Copied!</span>
-                          </>
-                        ) : (
-                          <>
-                            <Copy className="w-3.5 h-3.5" />
-                            <span>Copy CLI</span>
-                          </>
-                        )}
-                      </button>
+                {/* Executive Remediation & AWS Console Action Bar */}
+                <div className="mt-4 p-3.5 rounded-xl bg-zorvex-secondary/70 dark:bg-zorvex-dark-secondary/70 border border-zorvex-border dark:border-zorvex-dark-border flex flex-col gap-3">
+                  {/* Top Badges & Target Resource Toggle */}
+                  <div className="flex flex-wrap items-center justify-between gap-2.5">
+                    <div className="flex flex-wrap items-center gap-2">
+                      {/* ROI Annual Savings Badge */}
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-[11px] font-black text-emerald-600 dark:text-emerald-400">
+                        <TrendingUp className="w-3.5 h-3.5" />
+                        <span>Annual ROI: ${(rec.annual_savings ?? (rec.monthly_savings * 12)).toFixed(2)}/yr</span>
+                      </span>
 
+                      {/* Risk Level Badge */}
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-zorvex-forest-soft dark:bg-zorvex-forest-dark-soft border border-zorvex-forest/20 text-[11px] font-bold text-zorvex-forest dark:text-zorvex-forest-highlight">
+                        <ShieldCheck className="w-3.5 h-3.5" />
+                        <span>{rec.risk_level || 'Zero Downtime (Safe)'}</span>
+                      </span>
+
+                      {/* Effort Level Badge */}
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/10 border border-amber-500/30 text-[11px] font-bold text-amber-600 dark:text-amber-400">
+                        <Clock className="w-3.5 h-3.5" />
+                        <span>{rec.effort_level || 'Low (~5 Mins)'}</span>
+                      </span>
+                    </div>
+
+                    {/* Target Resources Toggle Button */}
+                    {rec.resources?.length > 0 && (
                       <button
                         type="button"
-                        onClick={() => setSelectedRecForScript(rec)}
-                        className="clay-button-primary flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-[11px] font-black flex-shrink-0 cursor-pointer"
+                        onClick={() => setExpandedId(isExpanded ? '' : rec.id)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zorvex-card dark:bg-zorvex-dark-card hover:bg-zorvex-recessed dark:hover:bg-zorvex-dark-recessed border border-zorvex-border dark:border-zorvex-dark-border text-xs font-bold text-zorvex-text dark:text-zorvex-dark-text transition-all cursor-pointer shadow-sm"
                       >
-                        <Sparkles className="w-3.5 h-3.5" />
-                        <span>1-Click Fix Script</span>
+                        <Layers className="w-3.5 h-3.5 text-zorvex-forest dark:text-zorvex-forest-highlight" />
+                        <span>{isExpanded ? 'Hide Target Resources' : `View Target Resources (${rec.affected_count || rec.resources.length})`}</span>
+                        {isExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
                       </button>
-                    </div>
+                    )}
                   </div>
 
-                  {rec.resources?.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => setExpandedId(isExpanded ? '' : rec.id)}
-                      className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-zorvex-secondary dark:bg-zorvex-dark-secondary hover:bg-zorvex-recessed dark:hover:bg-zorvex-dark-recessed border border-zorvex-border dark:border-zorvex-dark-border text-xs font-bold text-zorvex-text dark:text-zorvex-dark-text flex-shrink-0 transition-all cursor-pointer"
-                    >
-                      <span>{isExpanded ? 'Hide Resources' : 'View Target Resources'}</span>
-                      {isExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
-                    </button>
+                  {/* Step-by-Step AWS Console Walkthrough Pill */}
+                  {rec.console_steps && (
+                    <div className="flex items-start gap-2.5 px-3 py-2 rounded-lg bg-zorvex-card/90 dark:bg-[#121914] border border-zorvex-border/80 dark:border-[#2D382D] text-xs">
+                      <Compass className="w-4 h-4 text-zorvex-forest dark:text-zorvex-forest-highlight flex-shrink-0 mt-0.5" />
+                      <div className="flex-1">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-zorvex-text-muted dark:text-zorvex-dark-text-muted block mb-0.5">
+                          AWS Management Console Guided Path:
+                        </span>
+                        <div className="font-medium text-zorvex-text dark:text-zinc-200 text-[11px] leading-relaxed">
+                          {rec.console_steps}
+                        </div>
+                      </div>
+                    </div>
                   )}
                 </div>
 
@@ -261,13 +256,6 @@ export default function RecommendationsView({ recommendations }) {
           <SavingsPlanSimulator />
         </Suspense>
       )}
-
-      {/* 1-Click DevOps Remediation Script Modal */}
-      <FixScriptModal
-        isOpen={!!selectedRecForScript}
-        onClose={() => setSelectedRecForScript(null)}
-        recommendation={selectedRecForScript}
-      />
 
     </div>
   );

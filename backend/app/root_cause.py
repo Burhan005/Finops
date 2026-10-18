@@ -357,7 +357,15 @@ def analyze_cost_root_cause(
     target_end: str,
     service: Optional[str] = None,
     account_id: Optional[str] = None,
-    min_delta: float = 0.001
+    min_delta: float = 0.001,
+    limit: Optional[int] = 50,
+    offset: Optional[int] = 0,
+    category: Optional[str] = None,
+    search: Optional[str] = None,
+    sort_by: Optional[str] = "delta_cost",
+    sort_order: Optional[str] = "desc",
+    db: Optional[Any] = None,
+    org_id: Optional[int] = None
 ) -> Dict[str, Any]:
     """
     Primary FinOps Investigation Algorithm.
@@ -625,8 +633,11 @@ def analyze_cost_root_cause(
         qt = t.get('usage_qty', 0.0)
         qdiff = qt - qb
 
+        unit_b = b.get('unit', '')
+        unit_t = t.get('unit', '')
+        units_match = bool((unit_b == unit_t) or not unit_b or not unit_t)
+        unit = unit_t or unit_b or ''
         svc = t.get('service') or b.get('service') or 'Other'
-        unit = t.get('unit') or b.get('unit') or ''
         name = t.get('name') or b.get('name') or ''
         acc = t.get('account_id') or b.get('account_id') or ''
         reg = t.get('region') or b.get('region') or 'global'
@@ -677,6 +688,41 @@ def analyze_cost_root_cause(
             qty_effect = -cb
             rate_effect = 0.0
 
+        # Phase 2 Exact Decomposition:
+        # Quantity Impact = (Current Quantity - Baseline Quantity) × Baseline Rate
+        # Rate Impact = Current Quantity × (Current Rate - Baseline Rate)
+        # Identity: Quantity Impact + Rate Impact = diff (Current Cost - Baseline Cost)
+        if qb > 0 and qt > 0 and units_match:
+            quantity_impact = (qt - qb) * rate_b
+            rate_impact = qt * (rate_t - rate_b)
+            decomposition_status = 'RECONCILED'
+            decomposition_note = 'Quantity impact and rate impact reconcile exactly to net cost change.'
+        elif qb <= 0.0001 and qt > 0:
+            quantity_impact = ct
+            rate_impact = 0.0
+            decomposition_status = 'NEW_WORKLOAD'
+            decomposition_note = 'New resource appearing in target period; baseline rate is zero.'
+        elif qb > 0 and qt <= 0.0001:
+            quantity_impact = -cb
+            rate_impact = 0.0
+            decomposition_status = 'TERMINATED_WORKLOAD'
+            decomposition_note = 'Resource billing ceased in target period; full baseline cost eliminated.'
+        elif not units_match:
+            quantity_impact = 0.0
+            rate_impact = 0.0
+            decomposition_status = 'UNIT_MISMATCH'
+            decomposition_note = f'Attribution limited: Baseline unit ({unit_b}) differs from target unit ({unit_t}).'
+        elif cat in ('BILLING_FEE_OR_TAX', 'COMMITMENT_FEE', 'PERIODIC_FEE'):
+            quantity_impact = 0.0
+            rate_impact = 0.0
+            decomposition_status = 'NON_USAGE_FEE'
+            decomposition_note = 'Invoice fee, commitment charge, or tax adjustment without variable usage metrics.'
+        else:
+            quantity_impact = diff
+            rate_impact = 0.0
+            decomposition_status = 'INSUFFICIENT_EVIDENCE'
+            decomposition_note = 'Insufficient CUR evidence to attribute variance between quantity and rate.'
+
         resource_entry = {
             'resource_id': rid,
             'short_id': clean_resource_label(rid),
@@ -694,11 +740,18 @@ def analyze_cost_root_cause(
             'target_usage_qty': round(qt, 2),
             'delta_usage_qty': round(qdiff, 2),
             'usage_unit': unit,
+            'unit_baseline': unit_b,
+            'unit_target': unit_t,
+            'units_comparable': units_match,
             'effective_rate_base': round(rate_b, 6) if (0 < rate_b < 0.001) else round(rate_b, 4),
             'effective_rate_target': round(rate_t, 6) if (0 < rate_t < 0.001) else round(rate_t, 4),
             'rate_unit': f"$/{unit}" if unit else "$/unit",
             'quantity_effect': round(qty_effect, 4),
             'rate_effect': round(rate_effect, 4),
+            'quantity_impact': round(quantity_impact, 4),
+            'rate_impact': round(rate_impact, 4),
+            'decomposition_status': decomposition_status,
+            'decomposition_note': decomposition_note,
             'change_category': cat,
             'explanation': explanation,
             'evidence_status': evidence,
@@ -707,6 +760,42 @@ def analyze_cost_root_cause(
             'operations': sorted(operations),
             'raw_records_count': (b.get('record_count', 0) + t.get('record_count', 0)),
             'line_items_sample': sorted(res_line_items[rid], key=lambda x: abs(x.get('cost', 0.0)), reverse=True)[:5] if abs(diff) >= min_delta else []
+        }
+
+        # Phase 5 AWS Resource Lifecycle Correlation
+        lifecycle_corr = None
+        if db is not None and org_id is not None and rid not in ('Unassigned', 'Unknown', 'No-Resource-ID') and not rid.startswith('TAX-'):
+            try:
+                from .lifecycle_service import correlate_resource_lifecycle
+                lifecycle_corr = correlate_resource_lifecycle(
+                    db=db,
+                    org_id=org_id,
+                    resource_id=rid,
+                    baseline_start=baseline_start,
+                    baseline_end=baseline_end,
+                    target_start=target_start,
+                    target_end=target_end,
+                    baseline_cost=cb,
+                    target_cost=ct,
+                    delta_cost=diff,
+                    service=svc,
+                    usage_types=(uts_b | uts_t)
+                )
+                if lifecycle_corr.get("has_lifecycle_events"):
+                    resource_entry['evidence_status'] = lifecycle_corr['classification']
+                    resource_entry['operational_note'] = lifecycle_corr['operational_boundaries']
+                    if lifecycle_corr.get("primary_event") and abs(diff) >= min_delta:
+                        resource_entry['lifecycle_summary'] = lifecycle_corr['explanation']
+            except Exception as e:
+                logger.debug("Resource lifecycle correlation notice: %s", e)
+
+        resource_entry['lifecycle_correlation'] = lifecycle_corr or {
+            'classification': resource_entry.get('evidence_status', 'CONFIRMED_BY_CUR'),
+            'has_lifecycle_events': False,
+            'matched_events_count': 0,
+            'events': [],
+            'operational_boundaries': resource_entry.get('operational_note', ''),
+            'explanation': resource_entry.get('explanation', '')
         }
 
         all_resources.append(resource_entry)
@@ -725,14 +814,48 @@ def analyze_cost_root_cause(
         elif diff < -min_delta:
             reductions.append(resource_entry)
 
-    # Sort lists by financial magnitude
-    spikes.sort(key=lambda x: x['delta_cost'], reverse=True)
-    reductions.sort(key=lambda x: x['delta_cost'])
-    new_workloads.sort(key=lambda x: x['target_cost'], reverse=True)
-    decommissioned.sort(key=lambda x: x['baseline_cost'], reverse=True)
-    financial_adjustments.sort(key=lambda x: abs(x['delta_cost']), reverse=True)
-    storage_lifecycle.sort(key=lambda x: abs(x['delta_cost']), reverse=True)
-    all_resources.sort(key=lambda x: abs(x['delta_cost']), reverse=True)
+    # Sort lists by financial magnitude with deterministic tie-breaking
+    spikes.sort(key=lambda x: (x['delta_cost'], max(x['target_cost'], x['baseline_cost']), x.get('resource_id', '')), reverse=True)
+    reductions.sort(key=lambda x: (x['delta_cost'], -max(x['target_cost'], x['baseline_cost']), x.get('resource_id', '')))
+    new_workloads.sort(key=lambda x: (x['target_cost'], abs(x['delta_cost']), x.get('resource_id', '')), reverse=True)
+    decommissioned.sort(key=lambda x: (x['baseline_cost'], abs(x['delta_cost']), x.get('resource_id', '')), reverse=True)
+    financial_adjustments.sort(key=lambda x: (abs(x['delta_cost']), max(x['target_cost'], x['baseline_cost']), x.get('resource_id', '')), reverse=True)
+    storage_lifecycle.sort(key=lambda x: (abs(x['delta_cost']), max(x['target_cost'], x['baseline_cost']), x.get('resource_id', '')), reverse=True)
+    all_resources.sort(key=lambda x: (abs(x['delta_cost']), max(x['target_cost'], x['baseline_cost']), x.get('resource_id', '')), reverse=True)
+
+    # Filter & Sort Evaluated Resources for Paginated Presentation
+    filtered_resources = list(all_resources)
+    if category and category.upper() not in ('ALL', ''):
+        filtered_resources = [r for r in filtered_resources if r.get('change_category') == category]
+    if search and search.strip():
+        q_term = search.strip().lower()
+        filtered_resources = [
+            r for r in filtered_resources
+            if q_term in (r.get('resource_id') or '').lower()
+            or q_term in (r.get('name') or '').lower()
+            or q_term in (r.get('service') or '').lower()
+            or q_term in (r.get('explanation') or '').lower()
+        ]
+
+    is_desc = (sort_order or 'desc').lower() == 'desc'
+    s_col = sort_by or 'delta_cost'
+    if s_col == 'delta_cost':
+        filtered_resources.sort(key=lambda x: (abs(x.get('delta_cost', 0.0)), max(x.get('target_cost', 0.0), x.get('baseline_cost', 0.0)), x.get('resource_id', '')), reverse=is_desc)
+    elif s_col in ('target_cost', 'baseline_cost'):
+        filtered_resources.sort(key=lambda x: (x.get(s_col, 0.0), abs(x.get('delta_cost', 0.0)), x.get('resource_id', '')), reverse=is_desc)
+    elif s_col in ('resource_id', 'name', 'service'):
+        filtered_resources.sort(key=lambda x: (str(x.get(s_col, '')).lower(), abs(x.get('delta_cost', 0.0))), reverse=is_desc)
+    else:
+        filtered_resources.sort(key=lambda x: (abs(x.get('delta_cost', 0.0)), max(x.get('target_cost', 0.0), x.get('baseline_cost', 0.0)), x.get('resource_id', '')), reverse=is_desc)
+
+    total_matching_count = len(filtered_resources)
+    off = offset if (offset is not None and offset >= 0) else 0
+    if limit is not None and limit > 0:
+        paginated_resources = filtered_resources[off : off + limit]
+        has_more = (off + limit) < total_matching_count
+    else:
+        paginated_resources = filtered_resources[off:]
+        has_more = False
 
     # -------------------------------------------------------------
     # 3. Daily Cost Timeline & Spike Decomposition
@@ -914,6 +1037,17 @@ def analyze_cost_root_cause(
         'total_financial_adjustments': len(financial_adjustments),
         'total_storage_lifecycle': len(storage_lifecycle),
         'total_evaluated_resources': len(all_resources),
+        'total_count': total_matching_count,
+        'limit': limit,
+        'offset': off,
+        'has_more': has_more,
+        'pagination': {
+            'limit': limit,
+            'offset': off,
+            'total_count': total_matching_count,
+            'has_more': has_more
+        },
+        'available_categories': sorted(list(category_totals.keys())),
         'daily_timeline': daily_timeline,
         'daily_spikes': daily_spikes,
         'daily_drops': daily_drops,
@@ -921,5 +1055,14 @@ def analyze_cost_root_cause(
         'trough_spend_day': {'date': min_day, 'cost': min_cost} if min_day else None,
         'financial_reconciliation': reconciliation,
         'data_completeness': data_completeness,
-        'resources': all_resources  # Complete evaluated resources
+        'cost_change_semantics': {
+            'cost_metric': 'Net Operational Billed Spend (Excludes invoice Credits/Refunds)',
+            'formula': 'Cost Delta = Current Comparable Cost - Baseline Comparable Cost',
+            'quantity_impact_formula': '(Current Quantity - Baseline Quantity) × Baseline Rate',
+            'rate_impact_formula': 'Current Quantity × (Current Rate - Baseline Rate)',
+            'timezone': 'UTC (ISO-8601 YYYY-MM-DD)',
+            'inclusive_boundaries': True,
+            'comparison_type': 'Like-for-like equivalent period' if is_like_for_like else 'Unequal window duration (partial boundary)'
+        },
+        'resources': paginated_resources
     }

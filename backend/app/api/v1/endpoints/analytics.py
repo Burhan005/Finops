@@ -13,7 +13,7 @@ from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
 from ....core.state import get_cached_recommendations
-from ....cache import global_cache
+from ....cache import global_cache, get_dataset_cache_key
 from ....database import get_db
 from ....models import (
     User,
@@ -23,7 +23,8 @@ from ....models import (
     UnitEconomicsConfig,
     S3SyncConfig,
     S3SyncExecutionHistory,
-    AiAnalystQuery
+    AiAnalystQuery,
+    ResourceLifecycleEvent
 )
 from ....analytics import compare_dates, calculate_daily_delta, compare_months
 from ....root_cause import analyze_cost_root_cause
@@ -63,7 +64,7 @@ def compare_spending(
     if repo.has_records():
         response.headers['X-Zorvex-Data-Source'] = 'database'
         org_id = org.id if org else 0
-        ds_key = dataset.get('filename', 'default')
+        ds_key = get_dataset_cache_key(dataset, repo)
         cache_key = global_cache.build_key(org_id, ds_key, "compare_spending", b=req.baseline_date, t=req.target_date, acc=req.account_id)
         return global_cache.get_or_compute(
             cache_key,
@@ -100,7 +101,7 @@ def compare_spending(
         raise HTTPException(status_code=400, detail=f"Target date {req.target_date} not in dataset dates")
 
     org_id = org.id if org else 0
-    ds_key = dataset.get('filename', 'default')
+    ds_key = get_dataset_cache_key(dataset, repo)
     cache_key = global_cache.build_key(org_id, ds_key, "compare_spending", b=req.baseline_date, t=req.target_date, acc=req.account_id)
 
     response.headers['X-Zorvex-Data-Source'] = 'in-memory-fixture'
@@ -125,7 +126,7 @@ def get_daily_delta(
     if repo.has_records():
         response.headers['X-Zorvex-Data-Source'] = 'database'
         org_id = org.id if org else 0
-        ds_key = dataset.get('filename', 'default')
+        ds_key = get_dataset_cache_key(dataset, repo)
         cache_key = global_cache.build_key(org_id, ds_key, "daily_delta", t=req.target_date, b=req.baseline_date, acc=req.account_id)
         return global_cache.get_or_compute(
             cache_key,
@@ -155,7 +156,7 @@ def get_daily_delta(
         }
 
     org_id = org.id if org else 0
-    ds_key = dataset.get('filename', 'default')
+    ds_key = get_dataset_cache_key(dataset, repo)
     cache_key = global_cache.build_key(org_id, ds_key, "daily_delta", t=req.target_date, b=req.baseline_date, acc=req.account_id)
 
     response.headers['X-Zorvex-Data-Source'] = 'in-memory-fixture'
@@ -180,7 +181,7 @@ def get_monthly_comparison(
     if repo.has_records():
         response.headers['X-Zorvex-Data-Source'] = 'database'
         org_id = org.id if org else 0
-        ds_key = dataset.get('filename', 'default')
+        ds_key = get_dataset_cache_key(dataset, repo)
         cache_key = global_cache.build_key(org_id, ds_key, "monthly_comparison", b=req.baseline_month, t=req.target_month, acc=req.account_id)
         return global_cache.get_or_compute(
             cache_key,
@@ -208,7 +209,7 @@ def get_monthly_comparison(
         }
 
     org_id = org.id if org else 0
-    ds_key = dataset.get('filename', 'default')
+    ds_key = get_dataset_cache_key(dataset, repo)
     cache_key = global_cache.build_key(org_id, ds_key, "monthly_comparison", b=req.baseline_month, t=req.target_month, acc=req.account_id)
 
     response.headers['X-Zorvex-Data-Source'] = 'in-memory-fixture'
@@ -226,25 +227,76 @@ def get_cost_root_cause(
     auth: Tuple[Optional[User], Optional[Organization]] = Depends(get_current_user_and_org),
     db: Session = Depends(get_db)
 ):
+    if req.limit is not None and (req.limit < 1 or req.limit > 1000):
+        raise HTTPException(status_code=400, detail="Invalid limit: must be between 1 and 1000")
+    if req.offset is not None and req.offset < 0:
+        raise HTTPException(status_code=400, detail="Invalid offset: cannot be negative")
+
     user, org = auth
     dataset = get_active_dataset_for_org(org, db)
+
+    repo = get_billing_repository(org, dataset, db)
     if not dataset.get('data'):
+        if repo.has_records():
+            response.headers['X-Zorvex-Data-Source'] = 'database'
+            org_id = org.id if org else 0
+            ds_key = get_dataset_cache_key(dataset, repo)
+            cache_key = global_cache.build_key(
+                org_id, ds_key, "root_cause_db",
+                b_start=req.baseline_start, b_end=req.baseline_end,
+                t_start=req.target_start, t_end=req.target_end,
+                svc=req.service, acc=req.account_id, min_delta=req.min_delta,
+                limit=req.limit, offset=req.offset,
+                cat=req.category, q=req.search,
+                sort_by=req.sort_by, sort_order=req.sort_order
+            )
+            return global_cache.get_or_compute(
+                cache_key,
+                lambda: repo.compare_periods(
+                    baseline_start=req.baseline_start,
+                    baseline_end=req.baseline_end,
+                    target_start=req.target_start,
+                    target_end=req.target_end,
+                    service=req.service,
+                    account_id=req.account_id,
+                    min_delta=req.min_delta or 0.001,
+                    limit=req.limit,
+                    offset=req.offset,
+                    category=req.category,
+                    search=req.search,
+                    sort_by=req.sort_by,
+                    sort_order=req.sort_order
+                ),
+                ttl=1800
+            )
+
         response.headers['X-Zorvex-Data-Source'] = 'empty-workspace'
         return {
             'status': 'EMPTY',
             'variance_usd': 0.0,
-            'drivers': []
+            'drivers': [],
+            'resources': [],
+            'total_count': 0,
+            'pagination': {
+                'limit': req.limit,
+                'offset': req.offset or 0,
+                'total_count': 0,
+                'has_more': False
+            }
         }
 
     response.headers['X-Zorvex-Data-Source'] = 'in-memory-quantity-rate-engine'
 
     org_id = org.id if org else 0
-    ds_key = dataset.get('filename', 'default')
+    ds_key = get_dataset_cache_key(dataset, repo)
     cache_key = global_cache.build_key(
         org_id, ds_key, "root_cause",
         b_start=req.baseline_start, b_end=req.baseline_end,
         t_start=req.target_start, t_end=req.target_end,
-        svc=req.service, acc=req.account_id, min_delta=req.min_delta
+        svc=req.service, acc=req.account_id, min_delta=req.min_delta,
+        limit=req.limit, offset=req.offset,
+        cat=req.category, q=req.search,
+        sort_by=req.sort_by, sort_order=req.sort_order
     )
 
     return global_cache.get_or_compute(
@@ -257,7 +309,15 @@ def get_cost_root_cause(
             target_end=req.target_end,
             service=req.service,
             account_id=req.account_id,
-            min_delta=req.min_delta or 0.001
+            min_delta=req.min_delta or 0.001,
+            limit=req.limit,
+            offset=req.offset,
+            category=req.category,
+            search=req.search,
+            sort_by=req.sort_by,
+            sort_order=req.sort_order,
+            db=db,
+            org_id=org_id
         ),
         ttl=1800
     )
@@ -681,6 +741,10 @@ def trigger_s3_sync(
     auth: Tuple[User, Organization] = Depends(require_auth),
     db: Session = Depends(get_db)
 ):
+    """
+    Executes end-to-end direct S3 CUR sync:
+    Discovers reports, validates gzip streams, downloads, parses, and ingests into ZORVEX.
+    """
     user, org = auth
     cfg = db.query(S3SyncConfig).filter(
         S3SyncConfig.organization_id == org.id
@@ -689,88 +753,251 @@ def trigger_s3_sync(
     if not cfg:
         raise HTTPException(status_code=400, detail="Please configure S3 Bucket details first for your organization.")
 
-    now_utc = datetime.now(timezone.utc)
+    from ....s3_service import download_and_ingest_cur_from_s3
+    result = download_and_ingest_cur_from_s3(
+        db=db,
+        org_id=org.id,
+        user_id=user.id,
+        s3_config=cfg
+    )
+    return result
 
-    has_env_credentials = bool(
-        (os.environ.get("AWS_ACCESS_KEY_ID") and os.environ.get("AWS_SECRET_ACCESS_KEY")) or
-        os.environ.get("AWS_PROFILE") or
-        os.environ.get("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI") or
-        os.environ.get("AWS_WEB_IDENTITY_TOKEN_FILE")
+
+@router.get("/s3/status")
+def get_s3_sync_status(
+    auth: Tuple[User, Organization] = Depends(require_auth),
+    db: Session = Depends(get_db)
+):
+    """Returns current S3 Sync configuration, status, and recent execution history."""
+    user, org = auth
+    cfg = db.query(S3SyncConfig).filter(
+        S3SyncConfig.organization_id == org.id
+    ).order_by(S3SyncConfig.id.desc()).first()
+
+    history = db.query(S3SyncExecutionHistory).filter(
+        S3SyncExecutionHistory.organization_id == org.id
+    ).order_by(S3SyncExecutionHistory.id.desc()).limit(10).all()
+
+    from ....s3_service import generate_least_privilege_iam_policy
+
+    return {
+        "configured": cfg is not None,
+        "config": {
+            "bucket_name": cfg.bucket_name if cfg else None,
+            "region": cfg.region if cfg else None,
+            "prefix": cfg.prefix if cfg else None,
+            "role_arn": cfg.role_arn if cfg else None,
+            "is_enabled": cfg.is_enabled if cfg else 0,
+            "last_synced_at": cfg.last_synced_at.isoformat() if (cfg and cfg.last_synced_at) else None,
+            "last_status": cfg.last_status if cfg else "NOT_CONFIGURED",
+            "last_message": cfg.last_message if cfg else "No S3 configuration detected."
+        } if cfg else None,
+        "recommended_iam_policy": generate_least_privilege_iam_policy(
+            cfg.bucket_name if cfg else "my-cur-bucket",
+            cfg.prefix if cfg else ""
+        ),
+        "history": [
+            {
+                "id": h.id,
+                "started_at": h.started_at.isoformat() if h.started_at else None,
+                "completed_at": h.completed_at.isoformat() if h.completed_at else None,
+                "status": h.status,
+                "records_ingested": h.records_ingested,
+                "bytes_downloaded": h.bytes_downloaded,
+                "manifest_key": h.manifest_key,
+                "error_message": h.error_message
+            }
+            for h in history
+        ]
+    }
+
+
+@router.get("/s3/policy")
+def get_s3_least_privilege_policy(
+    auth: Tuple[User, Organization] = Depends(require_auth),
+    db: Session = Depends(get_db)
+):
+    """Returns the recommended least-privilege IAM policy document for the configured S3 bucket."""
+    user, org = auth
+    cfg = db.query(S3SyncConfig).filter(
+        S3SyncConfig.organization_id == org.id
+    ).order_by(S3SyncConfig.id.desc()).first()
+
+    from ....s3_service import generate_least_privilege_iam_policy
+    bucket = cfg.bucket_name if cfg else "my-cur-bucket"
+    prefix = cfg.prefix if cfg else ""
+
+    return {
+        "bucket_name": bucket,
+        "prefix": prefix,
+        "policy": generate_least_privilege_iam_policy(bucket, prefix)
+    }
+
+
+@router.get("/analytics/lifecycle-events")
+def get_lifecycle_events(
+    resource_id: Optional[str] = Query(None, description="Optional resource ID or short identifier filter"),
+    service: Optional[str] = Query(None, description="Optional AWS service name filter"),
+    start_date: Optional[str] = Query(None, description="Start date YYYY-MM-DD"),
+    end_date: Optional[str] = Query(None, description="End date YYYY-MM-DD"),
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    auth: Tuple[User, Organization] = Depends(require_auth),
+    db: Session = Depends(get_db)
+):
+    """Lists AWS CloudTrail resource lifecycle events for the current organization."""
+    user, org = auth
+
+    q = db.query(ResourceLifecycleEvent).filter(
+        ResourceLifecycleEvent.organization_id == org.id
     )
 
-    if not has_env_credentials:
-        cfg.last_synced_at = now_utc
-        cfg.last_status = "CREDENTIALS_REQUIRED"
-        cfg.last_message = f"AWS IAM credentials not configured. Unable to connect to S3 bucket '{cfg.bucket_name}'."
-        history = S3SyncExecutionHistory(
-            organization_id=org.id,
-            s3_config_id=cfg.id,
-            started_at=now_utc,
-            completed_at=now_utc,
-            status="CREDENTIALS_REQUIRED",
-            records_ingested=0,
-            error_message="AWS IAM credentials not found in server environment"
+    if resource_id:
+        rid_clean = resource_id.strip()
+        q = q.filter(
+            or_(
+                ResourceLifecycleEvent.resource_id == rid_clean,
+                ResourceLifecycleEvent.resource_id.like(f"%{rid_clean}%")
+            )
         )
-        db.add(history)
-        db.commit()
+    if service and service.lower() != 'all':
+        q = q.filter(ResourceLifecycleEvent.service.ilike(f"%{service}%"))
+    if start_date:
+        q = q.filter(ResourceLifecycleEvent.event_date >= start_date)
+    if end_date:
+        q = q.filter(ResourceLifecycleEvent.event_date <= end_date)
+
+    total_count = q.count()
+    events = q.order_by(ResourceLifecycleEvent.event_time.desc()).offset(offset).limit(limit).all()
+
+    return {
+        "status": "SUCCESS",
+        "total_count": total_count,
+        "limit": limit,
+        "offset": offset,
+        "has_more": (offset + limit) < total_count,
+        "events": [
+            {
+                "id": ev.id,
+                "event_id": ev.event_id,
+                "resource_id": ev.resource_id,
+                "service": ev.service,
+                "event_name": ev.event_name,
+                "event_time": ev.event_time,
+                "event_date": ev.event_date,
+                "region": ev.region,
+                "account_id": ev.account_id,
+                "actor": ev.actor,
+                "status": ev.status,
+                "event_source": ev.event_source,
+                "details": json.loads(ev.details_json) if ev.details_json else None
+            }
+            for ev in events
+        ]
+    }
+
+
+@router.post("/analytics/lifecycle-events/ingest")
+def ingest_lifecycle_events_endpoint(
+    req: Dict[str, Any],
+    auth: Tuple[User, Organization] = Depends(require_auth),
+    db: Session = Depends(get_db)
+):
+    """
+    Idempotently ingests an array of normalized CloudTrail/AWS lifecycle event records
+    for the current authenticated tenant organization.
+    """
+    user, org = auth
+    events = req.get("events", [])
+    if not isinstance(events, list) or not events:
+        raise HTTPException(status_code=400, detail="Payload must contain a non-empty 'events' list.")
+
+    from ....lifecycle_service import ingest_lifecycle_events_batch
+    count = ingest_lifecycle_events_batch(db, org.id, events)
+
+    # Invalidate cached root cause and comparison endpoints for tenant
+    global_cache.invalidate_endpoint(org.id, "root_cause")
+    global_cache.invalidate_endpoint(org.id, "compare")
+
+    return {
+        "success": True,
+        "persisted_events_count": count,
+        "total_submitted": len(events),
+        "message": f"Successfully ingested {count} lifecycle events."
+    }
+
+
+@router.post("/analytics/lifecycle-events/sync")
+def sync_cloudtrail_lifecycle_events(
+    days_back: int = Query(7, ge=1, le=30),
+    region: str = Query("ap-south-1"),
+    auth: Tuple[User, Organization] = Depends(require_auth),
+    db: Session = Depends(get_db)
+):
+    """
+    Polls AWS CloudTrail lookup_events for EC2/RDS start/stop lifecycle events
+    using the organization's configured AWS credentials or IAM role.
+    """
+    user, org = auth
+    cfg = db.query(S3SyncConfig).filter(
+        S3SyncConfig.organization_id == org.id
+    ).order_by(S3SyncConfig.id.desc()).first()
+
+    role_arn = cfg.role_arn if cfg else None
+    target_region = cfg.region if (cfg and cfg.region) else region
+
+    from ....s3_service import resolve_aws_session
+    from ....lifecycle_service import poll_cloudtrail_lifecycle_events
+
+    session, auth_status, auth_err = resolve_aws_session(
+        region=target_region,
+        role_arn=role_arn
+    )
+
+    if auth_status != "AUTHENTICATED" or not session:
         return {
             "success": False,
-            "bucket": cfg.bucket_name,
-            "region": cfg.region,
-            "synced_at": now_utc.isoformat(),
-            "status": "CREDENTIALS_REQUIRED",
-            "message": f"AWS credentials not detected. Configure AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY or IAM Role to pull live CUR reports from '{cfg.bucket_name}'."
+            "status": auth_status,
+            "error": auth_err,
+            "message": f"Cannot poll CloudTrail: {auth_err}"
         }
 
     try:
-        import boto3
-        s3 = boto3.client('s3', region_name=cfg.region or 'us-east-1')
-        s3.head_bucket(Bucket=cfg.bucket_name)
-        cfg.last_synced_at = now_utc
-        cfg.last_status = "SYNCED"
-        cfg.last_message = f"Connected to S3 bucket '{cfg.bucket_name}' ({cfg.region}). Bucket access verified."
-        history = S3SyncExecutionHistory(
-            organization_id=org.id,
-            s3_config_id=cfg.id,
-            started_at=now_utc,
-            completed_at=now_utc,
-            status="SYNCED",
-            records_ingested=0,
-            manifest_key=cfg.prefix
+        ct_client = session.client("cloudtrail", region_name=target_region)
+        now = datetime.now(timezone.utc)
+        start_time = now - timedelta(days=days_back)
+
+        poll_result = poll_cloudtrail_lifecycle_events(
+            cloudtrail_client=ct_client,
+            db=db,
+            org_id=org.id,
+            start_time=start_time,
+            end_time=now,
+            region=target_region
         )
-        db.add(history)
-        db.commit()
+
+        # Invalidate cached root cause and comparison endpoints
+        global_cache.invalidate_endpoint(org.id, "root_cause")
+        global_cache.invalidate_endpoint(org.id, "compare")
+
         return {
             "success": True,
-            "bucket": cfg.bucket_name,
-            "region": cfg.region,
-            "synced_at": now_utc.isoformat(),
-            "status": "SYNCED",
-            "message": f"Successfully verified S3 connection to '{cfg.bucket_name}'."
+            "status": "COMPLETED",
+            "region": target_region,
+            "days_polled": days_back,
+            "events_discovered": poll_result["total_found"],
+            "events_persisted": poll_result["total_persisted"],
+            "errors": poll_result["errors"],
+            "message": f"Polled CloudTrail: {poll_result['total_persisted']} new events saved."
         }
     except Exception as exc:
-        cfg.last_synced_at = now_utc
-        cfg.last_status = "FAILED"
-        cfg.last_message = f"AWS S3 error: {str(exc)}"
-        history = S3SyncExecutionHistory(
-            organization_id=org.id,
-            s3_config_id=cfg.id,
-            started_at=now_utc,
-            completed_at=now_utc,
-            status="FAILED",
-            records_ingested=0,
-            error_message=str(exc)
-        )
-        db.add(history)
-        db.commit()
         return {
             "success": False,
-            "bucket": cfg.bucket_name,
-            "region": cfg.region,
-            "synced_at": now_utc.isoformat(),
             "status": "FAILED",
-            "message": f"Failed to connect to S3: {str(exc)}"
+            "error": str(exc),
+            "message": f"CloudTrail API error: {str(exc)}"
         }
+
 
 
 @router.post("/ai/query")

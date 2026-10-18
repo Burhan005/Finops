@@ -26,6 +26,12 @@ class RootCauseRequest(BaseModel):
     service: Optional[str] = None
     account_id: Optional[str] = None
     min_delta: Optional[float] = 0.001
+    limit: Optional[int] = 50
+    offset: Optional[int] = 0
+    category: Optional[str] = None
+    search: Optional[str] = None
+    sort_by: Optional[str] = "delta_cost"
+    sort_order: Optional[str] = "desc"
 
 class S3SyncConfigRequest(BaseModel):
     bucket_name: str
