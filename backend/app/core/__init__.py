@@ -1,0 +1,14 @@
+"""Core application package."""
+from .config import (
+    BASE_DIR,
+    PROJECT_ROOT,
+    DATA_DIR,
+    SAMPLES_DIR,
+    UPLOADS_DIR,
+    SESSION_TTL_HOURS,
+    MAX_UPLOAD_BYTES,
+    MAX_PARSED_CACHE_ENTRIES,
+    MAX_ORG_DATASETS_ENTRIES,
+    DEFAULT_CORS_ORIGINS,
+    CORS_ALLOWED_ORIGINS
+)
