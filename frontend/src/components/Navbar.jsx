@@ -115,22 +115,43 @@ export default function Navbar({
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
 
-  // Dataset Options (Uploads strictly supersede any sample fixture with identical name)
-  const uploads = datasets?.uploads || [];
+  // Clean sample labels dictionary for professional display
+  const SAMPLE_LABELS = {
+    'aws_cur_production_exact.csv': 'AWS Production Telemetry (Demo)',
+    'aws_cur_ultimate_master.csv': 'AWS Multi-Service Master (Demo)',
+    'comprehensive_cur_4months.csv': 'AWS 4-Month Historical (Demo)',
+    'CUR-Report-Daily-00001.csv.gz': 'AWS Daily CUR — Part 1 (Demo)',
+    'CUR-Report-Daily-00002.csv.gz': 'AWS Daily CUR — Part 2 (Demo)',
+    'sample_cur_test.csv': 'AWS Baseline Test (Demo)'
+  };
+
+  const cleanDisplayName = (raw) => {
+    if (!raw) return '';
+    return raw.replace(/^cur_org_\d+_[a-f0-9]+_(?:merged_|part\d+_)?/, '');
+  };
+
+  // Dataset Options (Uploads strictly visible only to authenticated users)
+  const uploads = currentUser ? (datasets?.uploads || []) : [];
   const uploadedFilenames = new Set(uploads.map((u) => u.filename));
   const samples = (datasets?.samples || []).filter((s) => !uploadedFilenames.has(s.filename));
 
   const allFiles = [...uploads, ...samples];
 
   const datasetOptions = allFiles.map((file) => {
-    let displayLabel = file.filename;
-    const usageAcc = file.usage_account_id || file.payer_account_id;
-    if (file.account_name && usageAcc) {
-      displayLabel = `${file.account_name} (${usageAcc})`;
-    } else if (file.account_name) {
-      displayLabel = file.account_name;
-    } else if (usageAcc && !file.filename.includes(usageAcc)) {
-      displayLabel = `AWS ${usageAcc} • ${file.filename}`;
+    let displayLabel = cleanDisplayName(file.filename);
+    if (file.type === 'demo_fixture' || file.type === 'sample' || !file.type) {
+      if (SAMPLE_LABELS[file.filename]) {
+        displayLabel = SAMPLE_LABELS[file.filename];
+      }
+    } else {
+      const usageAcc = file.usage_account_id || file.payer_account_id;
+      if (file.account_name && usageAcc) {
+        displayLabel = `${file.account_name} (${usageAcc})`;
+      } else if (file.account_name) {
+        displayLabel = file.account_name;
+      } else if (usageAcc && !displayLabel.includes(usageAcc)) {
+        displayLabel = `AWS ${usageAcc} • ${displayLabel}`;
+      }
     }
 
     const billingPeriod = file.billing_period_start ? ` • ${file.billing_period_start.substring(0, 7)}` : '';
@@ -144,7 +165,14 @@ export default function Navbar({
   });
 
   const activeOption = datasetOptions.find((o) => o.value === activeDataset);
-  const activePlaceholder = activeOption ? activeOption.label : (activeDataset || "Select CUR");
+  let activePlaceholder = activeOption ? activeOption.label : '';
+  if (!activePlaceholder) {
+    if (!currentUser) {
+      activePlaceholder = SAMPLE_LABELS[activeDataset] || 'AWS Production Telemetry (Demo)';
+    } else {
+      activePlaceholder = cleanDisplayName(activeDataset) || 'Select CUR Dataset';
+    }
+  }
 
   // =========================================================================
   // EFFECT 3: ORBIT-INSPIRED ACTIVE NAVIGATION INDICATOR

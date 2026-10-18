@@ -255,3 +255,26 @@ class TestMultiTenantLeakPrevention(unittest.TestCase):
             self.assertEqual(data["resource_id"], "i-0ee0901f82ebc5d84")
             self.assertIn("line_items", data)
             self.assertIn("total_line_items", data)
+
+    def test_unauthenticated_public_access_never_leaks_tenant_uploads(self):
+        """Unauthenticated public requests must never leak tenant uploaded files or internal cur_org_ prefixes."""
+        # 1. Health check must not report tenant upload or cur_org_ storage path
+        res_health = self.client.get("/api/health")
+        self.assertEqual(res_health.status_code, 200)
+        h_data = res_health.json()
+        self.assertFalse(h_data["authenticated"])
+        self.assertNotIn("cur_org_", h_data["active_dataset"])
+
+        # 2. Datasets listing must return empty uploads for unauthenticated visitor
+        res_datasets = self.client.get("/api/datasets")
+        self.assertEqual(res_datasets.status_code, 200)
+        d_data = res_datasets.json()
+        self.assertEqual(d_data["uploads"], [])
+        self.assertNotIn("cur_org_", d_data["active_dataset"])
+
+        # 3. Overview must serve sample fixture and never expose tenant row counts or private cur_org_
+        res_overview = self.client.get("/api/overview")
+        self.assertEqual(res_overview.status_code, 200)
+        ov_data = res_overview.json()
+        self.assertNotIn("cur_org_", str(ov_data.get("filename", "")))
+        self.assertNotEqual(ov_data.get("total_rows"), 45112)

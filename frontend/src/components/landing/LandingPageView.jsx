@@ -38,6 +38,12 @@ export default function LandingPageView({ darkMode, onToggleDarkMode, currentUse
   const [liveTelemetry, setLiveTelemetry] = useState(null);
   const [telemetryLoading, setTelemetryLoading] = useState(true);
 
+  const formatLandingDatasetName = (name) => {
+    if (!name) return 'aws-production-demo.cur';
+    if (name.includes('cur_org_') || name.includes('merged')) return 'aws-production-demo.cur';
+    return name;
+  };
+
   useEffect(() => {
     document.title = 'ZORVEX — See Beyond Spend | Enterprise Cloud FinOps';
 
@@ -49,15 +55,15 @@ export default function LandingPageView({ darkMode, onToggleDarkMode, currentUse
       if (overview) {
         setLiveTelemetry({
           totalCost: overview.total_cost || 2499.17,
-          dataset: health?.active_dataset || 'aws_cur_production_exact.csv',
-          records: health?.records_loaded || 719,
-          serviceCount: Object.keys(overview.service_breakdown || {}).length || 5,
-          topService: Object.entries(overview.service_breakdown || {})[0]?.[0] || 'AmazonEC2'
+          dataset: formatLandingDatasetName(health?.active_dataset || 'aws-production-demo.cur'),
+          records: overview.total_rows || health?.records_loaded || 719,
+          serviceCount: Object.keys(overview.service_breakdown || overview.services || {}).length || 5,
+          topService: Object.entries(overview.service_breakdown || overview.services || {})[0]?.[0] || 'AmazonEC2'
         });
       } else if (health) {
         setLiveTelemetry({
           totalCost: 2499.17,
-          dataset: health.active_dataset || 'aws_cur_production_exact.csv',
+          dataset: formatLandingDatasetName(health.active_dataset || 'aws-production-demo.cur'),
           records: health.records_loaded || 719,
           serviceCount: 5,
           topService: 'AmazonEC2'

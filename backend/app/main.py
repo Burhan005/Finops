@@ -205,42 +205,35 @@ def get_upload_semaphore() -> asyncio.Semaphore:
     return _UPLOAD_SEMAPHORE
 
 def load_initial_dataset():
-    chosen = None
-    db = next(get_db())
-    try:
-        # Resolve active dataset record for default organization (org_id=1) first
-        active_rec = db.query(DatasetRecord).filter(
-            DatasetRecord.organization_id == 1,
-            DatasetRecord.is_active == 1
-        ).order_by(DatasetRecord.id.desc()).first()
-        if not active_rec:
-            active_rec = db.query(DatasetRecord).filter(DatasetRecord.is_active == 1).order_by(DatasetRecord.id.desc()).first()
-        if active_rec and active_rec.filepath and os.path.exists(active_rec.filepath):
-            chosen = active_rec.filepath
-    except Exception as e:
-        logger.warning("Active record lookup warning: %s", e)
-    finally:
-        db.close()
+    """
+    Initializes global public demo dataset exclusively from curated sample catalog.
+    Strict tenant boundary: Never loads private organization uploads from UPLOADS_DIR.
+    """
+    sample_path = os.path.join(SAMPLES_DIR, "aws_cur_production_exact.csv")
+    if not os.path.exists(sample_path):
+        candidates = glob.glob(os.path.join(SAMPLES_DIR, "*.csv"))
+        if candidates:
+            sample_path = candidates[0]
 
-    if chosen and os.path.exists(chosen):
+    if os.path.exists(sample_path):
         try:
-            parsed = parse_cur_file(chosen)
-            CURRENT_DATASET['filename'] = os.path.basename(chosen)
-            CURRENT_DATASET['filepath'] = chosen
+            parsed = parse_cur_file(sample_path)
+            CURRENT_DATASET['filename'] = os.path.basename(sample_path)
+            CURRENT_DATASET['filepath'] = sample_path
             CURRENT_DATASET['data'] = parsed
-            norm_path = os.path.abspath(chosen)
-            mtime = os.path.getmtime(chosen)
-            cache_put_parsed(chosen, parsed)
+            norm_path = os.path.abspath(sample_path)
+            mtime = os.path.getmtime(sample_path)
+            cache_put_parsed(sample_path, parsed)
             cache_put_parsed(norm_path, parsed)
             cache_put_parsed(f"{norm_path}_{mtime}", parsed)
-            logger.info("Loaded active dataset: %s ($%s)", os.path.basename(chosen), parsed.get('total_cost'))
+            logger.info("Loaded public demo dataset: %s ($%s)", os.path.basename(sample_path), parsed.get('total_cost'))
         except Exception as e:
-            logger.warning("Failed to load active dataset %s: %s", chosen, e)
+            logger.warning("Failed to load demo sample dataset %s: %s", sample_path, e)
     else:
         CURRENT_DATASET['filename'] = None
         CURRENT_DATASET['filepath'] = None
         CURRENT_DATASET['data'] = None
-        logger.info("No active dataset in database. Application initialized in clean empty state.")
+        logger.info("No sample dataset available in %s", SAMPLES_DIR)
 
 load_initial_dataset()
 
@@ -534,10 +527,18 @@ def get_active_dataset_for_org(org: Optional[Organization], db: Session) -> Dict
             'data': None
         }
 
+    # Public unauthenticated visitor: strictly return public demo sample dataset
+    sample_path = os.path.join(SAMPLES_DIR, "aws_cur_production_exact.csv")
+    if not CURRENT_DATASET.get('data') or not CURRENT_DATASET.get('filepath') or 'cur_org_' in str(CURRENT_DATASET.get('filepath', '')):
+        if os.path.exists(sample_path):
+            parsed = parse_cur_file(sample_path)
+            CURRENT_DATASET['filename'] = "aws_cur_production_exact.csv"
+            CURRENT_DATASET['filepath'] = sample_path
+            CURRENT_DATASET['data'] = parsed
     return CURRENT_DATASET or {
         'id': None,
-        'filename': None,
-        'filepath': None,
+        'filename': 'aws_cur_production_exact.csv',
+        'filepath': sample_path if os.path.exists(sample_path) else None,
         'data': None
     }
 
@@ -546,33 +547,43 @@ def get_billing_repository(org: Optional[Organization], dataset: Dict[str, Any],
     """
     Instantiates BillingRepository bound to the organization and active dataset record.
     Supports both uploaded datasets and active catalog demo fixtures.
+    Strict tenant boundary: Unauthenticated callers bind to in-memory fixture (never Org 1 or private uploads).
     """
-    org_id = org.id if org else 1
-    ds_id = dataset.get('id')
-    d_rec = None
-    if ds_id is None:
-        fname = dataset.get('filename')
-        if fname:
-            d_rec = db.query(DatasetRecord).filter(
-                DatasetRecord.organization_id == org_id,
-                DatasetRecord.filename == fname,
-                DatasetRecord.is_active == 1
-            ).order_by(DatasetRecord.id.desc()).first()
-            if not d_rec:
-                # Fallback to shared demo sample fixture scoped to org_id if exists
+    if org:
+        org_id = org.id
+        ds_id = dataset.get('id')
+        d_rec = None
+        if ds_id is None:
+            fname = dataset.get('filename')
+            if fname:
                 d_rec = db.query(DatasetRecord).filter(
                     DatasetRecord.organization_id == org_id,
-                    DatasetRecord.filename == fname
+                    DatasetRecord.filename == fname,
+                    DatasetRecord.is_active == 1
                 ).order_by(DatasetRecord.id.desc()).first()
-            if d_rec:
-                ds_id = d_rec.id
-    else:
-        d_rec = db.query(DatasetRecord).filter(DatasetRecord.id == ds_id).first()
+                if not d_rec:
+                    d_rec = db.query(DatasetRecord).filter(
+                        DatasetRecord.organization_id == org_id,
+                        DatasetRecord.filename == fname
+                    ).order_by(DatasetRecord.id.desc()).first()
+                if d_rec:
+                    ds_id = d_rec.id
+        else:
+            d_rec = db.query(DatasetRecord).filter(
+                DatasetRecord.id == ds_id,
+                DatasetRecord.organization_id == org_id
+            ).first()
 
-    repo = BillingRepository(db, org_id=org_id, dataset_id=ds_id)
-    repo.d_rec = d_rec
-    repo.parsed_data = dataset.get('data')
-    return repo
+        repo = BillingRepository(db, org_id=org_id, dataset_id=ds_id)
+        repo.d_rec = d_rec
+        repo.parsed_data = dataset.get('data')
+        return repo
+    else:
+        # Public unauthenticated visitor: strictly bound to demo in-memory fixture (never queries Org 1 or private uploads)
+        repo = BillingRepository(db, org_id=0, dataset_id=None)
+        repo.d_rec = None
+        repo.parsed_data = dataset.get('data')
+        return repo
 
 
 # ==================== HEALTH API ====================
@@ -1046,9 +1057,10 @@ def select_dataset(
             except Exception as e:
                 logger.warning("Dataset selection synchronization warning for org %s: %s", target_org.id, e)
 
-        CURRENT_DATASET['filename'] = fname
-        CURRENT_DATASET['filepath'] = target_path
-        CURRENT_DATASET['data'] = parsed
+        if is_sample:
+            CURRENT_DATASET['filename'] = fname
+            CURRENT_DATASET['filepath'] = target_path
+            CURRENT_DATASET['data'] = parsed
 
         return {
             "success": True,

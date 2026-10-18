@@ -392,6 +392,7 @@ export default function App() {
     localStorage.removeItem('finops_token');
     localStorage.removeItem('finops_user');
     setCurrentUser(null);
+    setActiveDataset('aws_cur_production_exact.csv');
     window.location.href = '/';
   };
 
@@ -449,9 +450,17 @@ export default function App() {
       if (needsDatasets && results[nextIdx]) {
         const dsets = results[nextIdx];
         setDatasets(dsets);
-        setActiveDataset(dsets.active_dataset || dsets.active || ov?.filename || '');
+        let rawActive = dsets.active_dataset || dsets.active || ov?.filename || '';
+        if (!currentUser && (rawActive.includes('cur_org_') || !rawActive)) {
+          rawActive = 'aws_cur_production_exact.csv';
+        }
+        setActiveDataset(rawActive);
       } else if (ov?.filename && !activeDataset) {
-        setActiveDataset(ov.filename);
+        let rawActive = ov.filename;
+        if (!currentUser && (rawActive.includes('cur_org_') || !rawActive)) {
+          rawActive = 'aws_cur_production_exact.csv';
+        }
+        setActiveDataset(rawActive);
       }
     } catch (err) {
       console.error(err);
