@@ -77,7 +77,11 @@ export const api = {
   },
 
   async getDatasets() {
-    return memoizedGet(`${API_BASE}/datasets`, authHeaders());
+    const res = await fetch(`${API_BASE}/datasets`, {
+      headers: authHeaders()
+    });
+    if (!res.ok) throw new Error('Failed to fetch datasets');
+    return res.json();
   },
 
   async selectDataset(filename) {

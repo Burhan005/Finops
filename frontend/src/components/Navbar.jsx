@@ -148,25 +148,24 @@ export default function Navbar({
   const allFiles = [...uploads, ...samples];
 
   const datasetOptions = allFiles.map((file) => {
-    let displayLabel = cleanDisplayName(file.filename);
+    let displayLabel = '';
     const usageAcc = file.usage_account_id || file.payer_account_id;
 
-    if (file.type === 'demo_fixture' || file.type === 'sample' || !file.type) {
-      if (SAMPLE_LABELS[file.filename]) {
-        displayLabel = SAMPLE_LABELS[file.filename];
-      }
+    // 1. Account Name has absolute top priority
+    if (file.account_name && file.account_name.trim()) {
+      displayLabel = file.account_name.trim();
+    } else if (file.type === 'demo_fixture' || file.type === 'sample') {
+      displayLabel = SAMPLE_LABELS[file.filename] || cleanDisplayName(file.filename);
+    } else if (usageAcc) {
+      displayLabel = `AWS Account ${usageAcc}`;
     } else {
-      // Prioritize user friendly account alias (e.g. "evital-prod")
-      if (file.account_name && file.account_name.trim()) {
-        displayLabel = file.account_name.trim();
-      } else {
-        displayLabel = cleanDisplayName(file.filename).replace(/\.csv(?:\.gz)?$/i, '');
-      }
+      displayLabel = cleanDisplayName(file.filename).replace(/\.csv(?:\.gz)?$/i, '');
     }
 
     const billingPeriod = file.billing_period_start ? ` • ${file.billing_period_start.substring(0, 7)}` : '';
-    const accPart = usageAcc ? `AWS ${usageAcc}` : (file.type === 'upload' ? 'Uploaded' : 'Sample');
-    const subtext = `${accPart} • ${file.size_kb} KB${billingPeriod}`;
+    const cleanFn = cleanDisplayName(file.filename).replace(/\.csv(?:\.gz)?$/i, '');
+    const accLabel = usageAcc ? `AWS ${usageAcc}` : '';
+    const subtext = [accLabel, cleanFn, `${file.size_kb} KB${billingPeriod}`].filter(Boolean).join(' • ');
 
     return {
       value: file.filename,
@@ -182,10 +181,15 @@ export default function Navbar({
   const activeOption = datasetOptions.find((o) => o.value === activeDataset);
   let activePlaceholder = activeOption ? activeOption.label : '';
   if (!activePlaceholder) {
-    if (!currentUser) {
+    const found = datasets?.uploads?.find((u) => u.filename === activeDataset);
+    if (found?.account_name && found.account_name.trim()) {
+      activePlaceholder = found.account_name.trim();
+    } else if (found?.usage_account_id) {
+      activePlaceholder = `AWS Account ${found.usage_account_id}`;
+    } else if (!currentUser) {
       activePlaceholder = SAMPLE_LABELS[activeDataset] || 'AWS Production Telemetry (Demo)';
     } else {
-      activePlaceholder = cleanDisplayName(activeDataset).replace(/\.csv(?:\.gz)?$/i, '') || 'Select CUR Dataset';
+      activePlaceholder = 'Select CUR Dataset';
     }
   }
 

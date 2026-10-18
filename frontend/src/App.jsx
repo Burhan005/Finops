@@ -416,41 +416,21 @@ export default function App() {
     try {
       const promises = [
         api.getOverview(start, end, account, service),
-        api.getTrends(start, end)
+        api.getTrends(start, end),
+        api.getDatasets()
       ];
       const needsRecs = reloadDatasets || !recommendations;
       if (needsRecs) {
         promises.push(api.getRecommendations());
       }
-      const needsDatasets = reloadDatasets || !datasets?.samples?.length;
-      if (needsDatasets) {
-        promises.push(api.getDatasets());
-      }
       const results = await Promise.all(promises);
       const ov = results[0];
       const tr = results[1];
+      const dsets = results[2];
       setOverview(ov);
       setTrends(tr);
 
-      let nextIdx = 2;
-      if (needsRecs) {
-        setRecommendations(results[nextIdx]);
-        nextIdx++;
-      }
-
-      if (ov?.services) {
-        const sKeys = Object.keys(ov.services);
-        if (sKeys.length > 1) {
-          setMasterServices(sKeys);
-          setMasterServiceCosts(ov.services);
-        } else {
-          setMasterServices((prev) => (prev.length === 0 ? sKeys : prev));
-          setMasterServiceCosts((prev) => (Object.keys(prev).length === 0 ? ov.services : prev));
-        }
-      }
-
-      if (needsDatasets && results[nextIdx]) {
-        const dsets = results[nextIdx];
+      if (dsets) {
         setDatasets(dsets);
         let rawActive = dsets.active_dataset || dsets.active || ov?.filename || '';
         if (!currentUser && (rawActive.includes('cur_org_') || !rawActive)) {
@@ -463,6 +443,21 @@ export default function App() {
           rawActive = 'aws_cur_production_exact.csv';
         }
         setActiveDataset(rawActive);
+      }
+
+      if (needsRecs && results[3]) {
+        setRecommendations(results[3]);
+      }
+
+      if (ov?.services) {
+        const sKeys = Object.keys(ov.services);
+        if (sKeys.length > 1) {
+          setMasterServices(sKeys);
+          setMasterServiceCosts(ov.services);
+        } else {
+          setMasterServices((prev) => (prev.length === 0 ? sKeys : prev));
+          setMasterServiceCosts((prev) => (Object.keys(prev).length === 0 ? ov.services : prev));
+        }
       }
     } catch (err) {
       console.error(err);
