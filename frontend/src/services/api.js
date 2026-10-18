@@ -91,7 +91,7 @@ export const api = {
     return res.json();
   },
 
-  async uploadFile(fileOrFiles) {
+  async uploadFile(fileOrFiles, accountName = null) {
     inFlightGets.clear();
     const formData = new FormData();
     if (Array.isArray(fileOrFiles)) {
@@ -99,6 +99,9 @@ export const api = {
     } else {
       formData.append('file', fileOrFiles);
       formData.append('files', fileOrFiles);
+    }
+    if (accountName && accountName.trim()) {
+      formData.append('account_name', accountName.trim());
     }
     const res = await fetch(`${API_BASE}/upload`, {
       method: 'POST',

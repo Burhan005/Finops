@@ -538,3 +538,49 @@ def test_bounded_memory_during_processing():
         for f in [p1, p2, merged]:
             if os.path.exists(f):
                 os.remove(f)
+
+
+# ====================================================================================
+# TEST 13: USAGE ACCOUNT & ALIAS PERSISTENCE RECONCILIATION
+# ====================================================================================
+def test_account_alias_and_usage_account_attribution():
+    """Verify that UsageAccountId is distinguished from PayerAccountId and account_name is persisted."""
+    rows = [
+        ["item-acc-1", "2026-10-01T00:00:00Z", "2026-11-01T00:00:00Z", "668789584005", "2026-10-01T01:00:00Z", "AmazonEC2", "i-01a2b3", "825799498078", "ap-south-1a", "15.50", "Usage", "BoxUsage", "OnDemand", "evital-api"],
+        ["item-acc-2", "2026-10-01T00:00:00Z", "2026-11-01T00:00:00Z", "668789584005", "2026-10-01T02:00:00Z", "AmazonS3", "bucket-evital", "825799498078", "ap-south-1", "4.20", "Usage", "TimedStorage", "OnDemand", "evital-storage"]
+    ]
+    p = create_cur_csv_gz(rows)
+    try:
+        parsed = parse_cur_file(p)
+        assert parsed["usage_account_id"] == "825799498078"
+        assert parsed["payer_account_id"] == "668789584005"
+
+        db = SessionLocal()
+        org = db.query(Organization).first()
+        org_id = org.id if org else 1
+        user = db.query(User).filter(User.organization_id == org_id).first()
+        user_id = user.id if user else 1
+
+        formatted_name = f"evital-prod ({parsed['usage_account_id']}) — cur_export.csv.gz"
+
+        ds_id = _ingest_dataset_sync(
+            org_id=org_id,
+            user_id=user_id,
+            final_filename=formatted_name,
+            final_filepath=p,
+            checksum_sha256="sha256-test-acc-alias-unique",
+            parsed=parsed,
+            account_name="evital-prod"
+        )
+
+        rec = db.query(DatasetRecord).filter(DatasetRecord.id == ds_id).first()
+        assert rec is not None
+        assert rec.account_name == "evital-prod"
+        assert rec.usage_account_id == "825799498078"
+        assert rec.payer_account_id == "668789584005"
+        assert "evital-prod (825799498078)" in rec.filename
+
+        db.close()
+    finally:
+        if os.path.exists(p):
+            os.remove(p)

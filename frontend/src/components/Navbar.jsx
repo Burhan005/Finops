@@ -122,11 +122,29 @@ export default function Navbar({
 
   const allFiles = [...uploads, ...samples];
 
-  const datasetOptions = allFiles.map((file) => ({
-    value: file.filename,
-    label: file.filename,
-    subtext: `${file.type === 'upload' ? 'Uploaded' : 'Sample dataset'} • ${file.size_kb} KB`
-  }));
+  const datasetOptions = allFiles.map((file) => {
+    let displayLabel = file.filename;
+    const usageAcc = file.usage_account_id || file.payer_account_id;
+    if (file.account_name && usageAcc) {
+      displayLabel = `${file.account_name} (${usageAcc})`;
+    } else if (file.account_name) {
+      displayLabel = file.account_name;
+    } else if (usageAcc && !file.filename.includes(usageAcc)) {
+      displayLabel = `AWS ${usageAcc} • ${file.filename}`;
+    }
+
+    const billingPeriod = file.billing_period_start ? ` • ${file.billing_period_start.substring(0, 7)}` : '';
+    const subtext = `${file.type === 'upload' ? 'Uploaded' : 'Sample'} • ${file.size_kb} KB${billingPeriod}`;
+
+    return {
+      value: file.filename,
+      label: displayLabel,
+      subtext: subtext
+    };
+  });
+
+  const activeOption = datasetOptions.find((o) => o.value === activeDataset);
+  const activePlaceholder = activeOption ? activeOption.label : (activeDataset || "Select CUR");
 
   // =========================================================================
   // EFFECT 3: ORBIT-INSPIRED ACTIVE NAVIGATION INDICATOR
@@ -249,10 +267,10 @@ export default function Navbar({
                   options={datasetOptions}
                   value={activeDataset}
                   onChange={onSelectDataset}
-                  placeholder={activeDataset || "Select CUR"}
+                  placeholder={activePlaceholder}
                   searchable={datasetOptions.length > 4}
                   icon={Database}
-                  width={isScrolled ? "w-36 lg:w-44" : "w-44 lg:w-48"}
+                  width={isScrolled ? "w-44 lg:w-56" : "w-52 lg:w-64"}
                 />
               </div>
 
@@ -472,7 +490,7 @@ export default function Navbar({
                   options={datasetOptions}
                   value={activeDataset}
                   onChange={onSelectDataset}
-                  placeholder={activeDataset || "Select CUR Dataset"}
+                  placeholder={activePlaceholder}
                   searchable={datasetOptions.length > 4}
                   icon={Database}
                   width="w-full"

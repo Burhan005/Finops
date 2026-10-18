@@ -122,6 +122,8 @@ def ensure_schema_compatibility(target_engine):
             ("billing_period_start", "VARCHAR(32)"),
             ("billing_period_end", "VARCHAR(32)"),
             ("payer_account_id", "VARCHAR(64)"),
+            ("usage_account_id", "VARCHAR(64)"),
+            ("account_name", "VARCHAR(128)"),
             ("assembly_id", "VARCHAR(128)"),
             ("manifest_metadata", "TEXT"),
             ("revision_version", "INTEGER DEFAULT 1"),
@@ -130,6 +132,21 @@ def ensure_schema_compatibility(target_engine):
         for col_name, col_def in phase1_ds_cols:
             if col_name not in ds_cols:
                 conn.exec_driver_sql(f"ALTER TABLE datasets ADD COLUMN {col_name} {col_def}")
+
+        # Safe backfill of usage_account_id for datasets where it is NULL
+        try:
+            conn.exec_driver_sql("""
+                UPDATE datasets
+                SET usage_account_id = (
+                    SELECT account_id FROM billing_records
+                    WHERE billing_records.dataset_id = datasets.id
+                      AND account_id IS NOT NULL AND account_id != 'Unknown'
+                    LIMIT 1
+                )
+                WHERE usage_account_id IS NULL
+            """)
+        except Exception:
+            pass
 
         br_cols = _get_cols("billing_records")
         if "line_item_id" not in br_cols:

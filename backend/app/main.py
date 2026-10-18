@@ -886,6 +886,11 @@ def list_datasets(
             uploads.append({
                 "id": rec.id,
                 "filename": rec.filename,
+                "account_name": getattr(rec, 'account_name', None),
+                "usage_account_id": getattr(rec, 'usage_account_id', None),
+                "payer_account_id": getattr(rec, 'payer_account_id', None),
+                "billing_period_start": getattr(rec, 'billing_period_start', None),
+                "billing_period_end": getattr(rec, 'billing_period_end', None),
                 "type": "upload",
                 "size_kb": size_kb,
                 "total_cost": rec.total_cost,
@@ -1067,7 +1072,8 @@ def _ingest_dataset_sync(
     final_filepath: str,
     checksum_sha256: str,
     parsed: Dict[str, Any],
-    manifest_metadata: Optional[Dict[str, Any]] = None
+    manifest_metadata: Optional[Dict[str, Any]] = None,
+    account_name: Optional[str] = None
 ) -> int:
     """
     Executes database persistence transaction in worker thread off the event loop.
@@ -1098,6 +1104,8 @@ def _ingest_dataset_sync(
                 ).update({DatasetRecord.is_active: 0})
 
                 existing_dataset.is_active = 1
+                if account_name:
+                    existing_dataset.account_name = account_name
                 sync_db.add(AuditEvent(
                     organization_id=org_id,
                     user_id=user_id,
@@ -1112,6 +1120,7 @@ def _ingest_dataset_sync(
         billing_period_start = parsed.get('billing_period_start')
         billing_period_end = parsed.get('billing_period_end')
         payer_account_id = parsed.get('payer_account_id')
+        usage_account_id = parsed.get('usage_account_id')
         assembly_id = parsed.get('assembly_id') or (manifest_metadata.get('assembly_id') if manifest_metadata else None)
 
         revision_version = 1
@@ -1142,6 +1151,8 @@ def _ingest_dataset_sync(
             billing_period_start=billing_period_start,
             billing_period_end=billing_period_end,
             payer_account_id=payer_account_id,
+            usage_account_id=usage_account_id,
+            account_name=account_name,
             assembly_id=assembly_id,
             manifest_metadata=json.dumps(manifest_metadata) if manifest_metadata else None,
             revision_version=revision_version,
@@ -1224,6 +1235,7 @@ def _ingest_dataset_sync(
 async def upload_cur_file(
     file: Optional[UploadFile] = File(None),
     files: Optional[List[UploadFile]] = File(None),
+    account_name: Optional[str] = Form(None),
     auth: Tuple[User, Organization] = Depends(require_auth),
     db: Session = Depends(get_db)
 ):
@@ -1346,7 +1358,7 @@ async def upload_cur_file(
     intermediate_parts_to_clean: List[str] = []
     if len(data_paths) == 1:
         final_filepath = data_paths[0]
-        final_filename = data_filenames[0]
+        base_filename = data_filenames[0]
     else:
         # Multiple part files: merge them into a single consolidated file on disk with streaming dedup
         first_base = data_filenames[0].replace('.csv.gz', '').replace('.csv', '').replace('.gz', '')
@@ -1363,7 +1375,7 @@ async def upload_cur_file(
                     os.remove(p)
             raise HTTPException(status_code=500, detail=f"Failed to merge CUR part files: {str(e)}")
 
-        final_filename = f"{clean_prefix} (Merged {len(data_paths)} parts).csv.gz"
+        base_filename = f"{clean_prefix} (Merged {len(data_paths)} parts).csv.gz"
 
     async with get_upload_semaphore():
         try:
@@ -1384,6 +1396,18 @@ async def upload_cur_file(
             except Exception:
                 pass
 
+    clean_acc_name = account_name.strip() if (account_name and account_name.strip()) else None
+    usage_acc = parsed.get('usage_account_id')
+
+    # Construct clean dataset name: If user provided friendly alias (e.g. "evital-prod"), format as "evital-prod (UsageAccountId) — <base_filename>"
+    if clean_acc_name:
+        if usage_acc and usage_acc != 'Unknown':
+            final_filename = f"{clean_acc_name} ({usage_acc}) — {base_filename}"
+        else:
+            final_filename = f"{clean_acc_name} — {base_filename}"
+    else:
+        final_filename = base_filename
+
     # Ingest line items into persistent SQLite BillingRecord in worker thread off event loop
     try:
         ds_id = await asyncio.to_thread(
@@ -1394,7 +1418,8 @@ async def upload_cur_file(
             final_filepath,
             checksum_sha256,
             parsed,
-            manifest_info
+            manifest_info,
+            clean_acc_name
         )
     except Exception as e:
         if os.path.exists(final_filepath):
@@ -1417,6 +1442,9 @@ async def upload_cur_file(
         "success": True,
         "dataset_id": ds_id,
         "filename": final_filename,
+        "account_name": clean_acc_name,
+        "usage_account_id": usage_acc,
+        "payer_account_id": parsed.get('payer_account_id'),
         "billing_period_start": parsed.get('billing_period_start'),
         "billing_period_end": parsed.get('billing_period_end'),
         "total_cost": parsed['total_cost'],

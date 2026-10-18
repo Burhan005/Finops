@@ -294,6 +294,7 @@ def parse_cur_files(filepaths: List[str]) -> Dict[str, Any]:
     detected_bp_start = None
     detected_bp_end = None
     detected_payer_id = None
+    detected_usage_account_id = None
 
     for filepath in filepaths:
         with open_file_any(filepath) as f:
@@ -350,6 +351,10 @@ def parse_cur_files(filepaths: List[str]) -> Dict[str, Any]:
                     raw_p = row[payer_acc_idx].strip()
                     if raw_p:
                         detected_payer_id = raw_p
+                if detected_usage_account_id is None and acc_idx is not None and row_len > acc_idx:
+                    raw_u = row[acc_idx].strip()
+                    if raw_u and raw_u != 'Primary-Account' and raw_u != 'Unknown':
+                        detected_usage_account_id = raw_u
 
                 total_rows += 1
                 if total_rows % 5000 == 0:
@@ -611,6 +616,7 @@ def parse_cur_files(filepaths: List[str]) -> Dict[str, Any]:
         'billing_period_start': detected_bp_start or (sorted_dates[0] if sorted_dates else 'Unknown'),
         'billing_period_end': detected_bp_end or (sorted_dates[-1] if sorted_dates else 'Unknown'),
         'payer_account_id': detected_payer_id or (list(account_totals.keys())[0] if account_totals else 'Unknown'),
+        'usage_account_id': detected_usage_account_id or (list(account_totals.keys())[0] if account_totals else (detected_payer_id or 'Unknown')),
         'assembly_id': '',
         'services': {k: round_currency(v) for k, v in sorted(service_totals.items(), key=lambda item: item[1], reverse=True)},
         'accounts': {k: round_currency(v) for k, v in sorted(account_totals.items(), key=lambda item: item[1], reverse=True)},
@@ -736,6 +742,7 @@ def inspect_cur_part_metadata(filepath: str) -> Dict[str, Any]:
         bp_start = None
         bp_end = None
         payer_acc = None
+        usage_acc = None
         sample_dates = []
 
         # Peek up to 25 data rows to capture metadata
@@ -761,6 +768,11 @@ def inspect_cur_part_metadata(filepath: str) -> Dict[str, Any]:
             elif payer_acc is None and acc_idx is not None and row_len > acc_idx and row[acc_idx]:
                 payer_acc = row[acc_idx].strip()
 
+            if usage_acc is None and acc_idx is not None and row_len > acc_idx and row[acc_idx]:
+                raw_u = row[acc_idx].strip()
+                if raw_u and raw_u != 'Primary-Account' and raw_u != 'Unknown':
+                    usage_acc = raw_u
+
             if date_idx is not None and row_len > date_idx and row[date_idx]:
                 raw_dt = row[date_idx].strip()[:10]
                 if raw_dt and raw_dt != 'Unknown':
@@ -782,6 +794,7 @@ def inspect_cur_part_metadata(filepath: str) -> Dict[str, Any]:
             'billing_period_start': bp_start or 'Unknown',
             'billing_period_end': bp_end or 'Unknown',
             'payer_account_id': payer_acc or '',
+            'usage_account_id': usage_acc or payer_acc or '',
             'has_line_item_id': lid_idx is not None
         }
 

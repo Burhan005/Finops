@@ -103,6 +103,8 @@ class DatasetRecord(Base):
     billing_period_start = Column(String(32), index=True, nullable=True)
     billing_period_end = Column(String(32), index=True, nullable=True)
     payer_account_id = Column(String(64), index=True, nullable=True)
+    usage_account_id = Column(String(64), index=True, nullable=True)
+    account_name = Column(String(128), index=True, nullable=True)
     assembly_id = Column(String(128), index=True, nullable=True)
     manifest_metadata = Column(Text, nullable=True)
     revision_version = Column(Integer, default=1)

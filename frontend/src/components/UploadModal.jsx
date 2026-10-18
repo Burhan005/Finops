@@ -1,13 +1,14 @@
 import React, { useState } from 'react';
 import { 
   Upload, X, FileText, CheckCircle2, AlertCircle, Loader2, 
-  Layers, FileCode, ShieldCheck, Plus, Trash2, Info 
+  Layers, FileCode, ShieldCheck, Plus, Trash2, Info, Tag 
 } from 'lucide-react';
 import { api } from '../services/api';
 
 export default function UploadModal({ isOpen, onClose, onUploadSuccess }) {
   const [dragActive, setDragActive] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState([]);
+  const [accountName, setAccountName] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
@@ -80,6 +81,7 @@ export default function UploadModal({ isOpen, onClose, onUploadSuccess }) {
 
   const clearAllFiles = () => {
     setSelectedFiles([]);
+    setAccountName('');
     setError('');
     setSuccessMsg('');
   };
@@ -101,7 +103,7 @@ export default function UploadModal({ isOpen, onClose, onUploadSuccess }) {
     setError('');
     setSuccessMsg('');
     try {
-      const res = await api.uploadFile(selectedFiles);
+      const res = await api.uploadFile(selectedFiles, accountName);
       const grossFormatted = (res.gross_cost || res.total_cost || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
       const revNote = res.revision_version && res.revision_version > 1 ? ` (Revision v${res.revision_version})` : '';
       setSuccessMsg(`Ingested ${res.filename}${revNote}! Loaded $${grossFormatted} across ${res.dates?.length || 0} dates.`);
@@ -176,6 +178,30 @@ export default function UploadModal({ isOpen, onClose, onUploadSuccess }) {
             <Layers className="w-3.5 h-3.5" />
             <span>Multi-Part Export (+ Manifest)</span>
           </button>
+        </div>
+
+        {/* Account Alias / Environment Tag (Optional) */}
+        <div className="mb-3.5">
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="text-xs font-black text-zorvex-text dark:text-zorvex-dark-text flex items-center gap-1.5">
+              <Tag className="w-3.5 h-3.5 text-zorvex-forest dark:text-zorvex-forest-highlight" />
+              <span>Account Name / Environment Alias</span>
+              <span className="text-[10px] font-normal text-zorvex-text-muted dark:text-zorvex-dark-text-muted">(Optional)</span>
+            </label>
+            <span className="text-[10px] font-mono text-zorvex-forest dark:text-zorvex-forest-highlight">
+              e.g. evital-prod
+            </span>
+          </div>
+          <input
+            type="text"
+            value={accountName}
+            onChange={(e) => setAccountName(e.target.value)}
+            placeholder="e.g. evital-prod, client-staging, core-infra"
+            className="w-full px-3.5 py-2 rounded-xl text-xs font-bold bg-zorvex-secondary/40 dark:bg-zorvex-dark-secondary/40 border border-zorvex-border dark:border-zorvex-dark-border focus:border-zorvex-forest dark:focus:border-zorvex-forest-highlight outline-none text-zorvex-text dark:text-zorvex-dark-text placeholder:text-zorvex-text-muted/50 transition-colors"
+          />
+          <p className="mt-1 text-[10px] text-zorvex-text-muted dark:text-zorvex-dark-text-muted">
+            Displayed alongside the detected CUR Usage Account ID for easy multi-account switching.
+          </p>
         </div>
 
         {/* Drop Zone */}
