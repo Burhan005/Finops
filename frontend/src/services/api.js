@@ -91,6 +91,24 @@ export const api = {
     return res.json();
   },
 
+  async renameDatasetAccount(datasetIdOrFilename, accountName, propagate = true) {
+    inFlightGets.clear();
+    const res = await fetch(`${API_BASE}/datasets/rename`, {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({
+        dataset_id_or_filename: String(datasetIdOrFilename),
+        account_name: accountName,
+        propagate_to_account: propagate
+      })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'Failed to rename account alias');
+    }
+    return res.json();
+  },
+
   async uploadFile(fileOrFiles, accountName = null) {
     inFlightGets.clear();
     const formData = new FormData();

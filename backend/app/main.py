@@ -242,6 +242,11 @@ load_initial_dataset()
 class SelectDatasetRequest(BaseModel):
     filename: str
 
+class RenameDatasetRequest(BaseModel):
+    dataset_id_or_filename: Optional[str] = None
+    account_name: str
+    propagate_to_account: bool = True
+
 class CompareRequest(BaseModel):
     baseline_date: str
     target_date: str
@@ -363,6 +368,23 @@ def seed_default_user():
             )
             db.add(demo_user)
             db.commit()
+
+        # Auto-propagate account_name across datasets for the same AWS account
+        try:
+            alias_rows = db.query(DatasetRecord.usage_account_id, DatasetRecord.account_name).filter(
+                DatasetRecord.usage_account_id.isnot(None),
+                DatasetRecord.account_name.isnot(None),
+                DatasetRecord.account_name != ''
+            ).all()
+            for usage_acc, acc_name in alias_rows:
+                db.query(DatasetRecord).filter(
+                    DatasetRecord.usage_account_id == usage_acc,
+                    (DatasetRecord.account_name.is_(None) | (DatasetRecord.account_name == ''))
+                ).update({DatasetRecord.account_name: acc_name}, synchronize_session=False)
+            db.commit()
+        except Exception as prop_err:
+            db.rollback()
+            logger.debug("Account alias propagation info: %s", prop_err)
     except Exception as e:
         print(f"Seed user warning: {e}")
     finally:
@@ -1077,6 +1099,61 @@ def select_dataset(
         raise HTTPException(status_code=500, detail=f"Error parsing file {fname}: {str(e)}")
 
 
+@app.post("/api/datasets/rename")
+def rename_dataset_account(
+    req: RenameDatasetRequest,
+    auth: Tuple[User, Organization] = Depends(require_auth),
+    db: Session = Depends(get_db)
+):
+    user, org = auth
+    clean_name = req.account_name.strip()
+    if not clean_name:
+        raise HTTPException(status_code=400, detail="Account friendly name cannot be blank.")
+
+    query = db.query(DatasetRecord).filter(DatasetRecord.organization_id == org.id)
+    rec = None
+    if req.dataset_id_or_filename:
+        raw_ident = req.dataset_id_or_filename.strip()
+        if raw_ident.isdigit():
+            rec = query.filter(DatasetRecord.id == int(raw_ident)).first()
+        if not rec:
+            rec = query.filter(DatasetRecord.filename == raw_ident).first()
+
+    if not rec:
+        rec = query.filter(DatasetRecord.is_active == 1).first()
+
+    if not rec:
+        raise HTTPException(status_code=404, detail="Dataset not found to rename.")
+
+    rec.account_name = clean_name
+    updated_count = 1
+    if req.propagate_to_account and rec.usage_account_id:
+        others = query.filter(
+            DatasetRecord.usage_account_id == rec.usage_account_id,
+            DatasetRecord.id != rec.id
+        ).all()
+        for o in others:
+            o.account_name = clean_name
+            updated_count += 1
+
+    db.add(AuditEvent(
+        organization_id=org.id,
+        user_id=user.id,
+        action="DATASET_RENAME",
+        details=f"Renamed dataset {rec.filename} account alias to '{clean_name}' (propagated to {updated_count} datasets)."
+    ))
+    db.commit()
+
+    return {
+        "status": "success",
+        "dataset_id": rec.id,
+        "filename": rec.filename,
+        "account_name": clean_name,
+        "usage_account_id": rec.usage_account_id,
+        "updated_count": updated_count
+    }
+
+
 def _ingest_dataset_sync(
     org_id: int,
     user_id: int,
@@ -1233,6 +1310,17 @@ def _ingest_dataset_sync(
             sync_recommendations_to_ledger(sync_db, recs_result.get('recommendations', []), org_id=org_id)
         except Exception as e:
             logger.warning("Ingestion anomaly/ledger synchronization warning for org %s: %s", org_id, e)
+
+        # Propagate account_name to sibling datasets for this AWS account if present
+        if account_name and usage_account_id:
+            try:
+                sync_db.query(DatasetRecord).filter(
+                    DatasetRecord.organization_id == org_id,
+                    DatasetRecord.usage_account_id == usage_account_id,
+                    (DatasetRecord.account_name.is_(None) | (DatasetRecord.account_name == ''))
+                ).update({DatasetRecord.account_name: account_name}, synchronize_session=False)
+            except Exception as e:
+                logger.debug("Sibling account alias propagation notice: %s", e)
 
         sync_db.commit()
         return dataset_rec.id
@@ -1411,14 +1499,18 @@ async def upload_cur_file(
     clean_acc_name = account_name.strip() if (account_name and account_name.strip()) else None
     usage_acc = parsed.get('usage_account_id')
 
-    # Construct clean dataset name: If user provided friendly alias (e.g. "evital-prod"), format as "evital-prod (UsageAccountId) — <base_filename>"
-    if clean_acc_name:
-        if usage_acc and usage_acc != 'Unknown':
-            final_filename = f"{clean_acc_name} ({usage_acc}) — {base_filename}"
-        else:
-            final_filename = f"{clean_acc_name} — {base_filename}"
-    else:
-        final_filename = base_filename
+    # If account_name was not provided, inherit existing alias for this AWS account if present
+    if not clean_acc_name and usage_acc and usage_acc != 'Unknown':
+        existing_alias = db.query(DatasetRecord.account_name).filter(
+            DatasetRecord.organization_id == org.id,
+            DatasetRecord.usage_account_id == usage_acc,
+            DatasetRecord.account_name.isnot(None),
+            DatasetRecord.account_name != ''
+        ).order_by(DatasetRecord.id.desc()).first()
+        if existing_alias and existing_alias[0]:
+            clean_acc_name = existing_alias[0]
+
+    final_filename = base_filename
 
     # Ingest line items into persistent SQLite BillingRecord in worker thread off event loop
     try:

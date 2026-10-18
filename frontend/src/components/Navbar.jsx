@@ -19,11 +19,13 @@ import {
   Layers,
   Bot,
   Cloud,
-  Sparkles
+  Sparkles,
+  Edit3
 } from 'lucide-react';
 import ClayDropdown from './common/ClayDropdown';
 import ZorvexLogo from './common/ZorvexLogo';
 import ThemeToggle from './common/ThemeToggle';
+import { api } from '../services/api';
 
 const NAV_ITEMS = [
   { to: '/app/overview', label: 'Overview', icon: LayoutDashboard },
@@ -41,6 +43,7 @@ export default function Navbar({
   datasets, 
   activeDataset, 
   onSelectDataset, 
+  onRefreshDatasets,
   onOpenUpload,
   darkMode,
   onToggleDarkMode,
@@ -130,6 +133,13 @@ export default function Navbar({
     return raw.replace(/^cur_org_\d+_[a-f0-9]+_(?:merged_|part\d+_)?/, '');
   };
 
+  // Account Rename Modal State
+  const [renameModalOpen, setRenameModalOpen] = useState(false);
+  const [renameAccountName, setRenameAccountName] = useState('');
+  const [renamePropagate, setRenamePropagate] = useState(true);
+  const [renaming, setRenaming] = useState(false);
+  const [renameError, setRenameError] = useState('');
+
   // Dataset Options (Uploads strictly visible only to authenticated users)
   const uploads = currentUser ? (datasets?.uploads || []) : [];
   const uploadedFilenames = new Set(uploads.map((u) => u.filename));
@@ -139,28 +149,33 @@ export default function Navbar({
 
   const datasetOptions = allFiles.map((file) => {
     let displayLabel = cleanDisplayName(file.filename);
+    const usageAcc = file.usage_account_id || file.payer_account_id;
+
     if (file.type === 'demo_fixture' || file.type === 'sample' || !file.type) {
       if (SAMPLE_LABELS[file.filename]) {
         displayLabel = SAMPLE_LABELS[file.filename];
       }
     } else {
-      const usageAcc = file.usage_account_id || file.payer_account_id;
-      if (file.account_name && usageAcc) {
-        displayLabel = `${file.account_name} (${usageAcc})`;
-      } else if (file.account_name) {
-        displayLabel = file.account_name;
-      } else if (usageAcc && !displayLabel.includes(usageAcc)) {
-        displayLabel = `AWS ${usageAcc} • ${displayLabel}`;
+      // Prioritize user friendly account alias (e.g. "evital-prod")
+      if (file.account_name && file.account_name.trim()) {
+        displayLabel = file.account_name.trim();
+      } else {
+        displayLabel = cleanDisplayName(file.filename).replace(/\.csv(?:\.gz)?$/i, '');
       }
     }
 
     const billingPeriod = file.billing_period_start ? ` • ${file.billing_period_start.substring(0, 7)}` : '';
-    const subtext = `${file.type === 'upload' ? 'Uploaded' : 'Sample'} • ${file.size_kb} KB${billingPeriod}`;
+    const accPart = usageAcc ? `AWS ${usageAcc}` : (file.type === 'upload' ? 'Uploaded' : 'Sample');
+    const subtext = `${accPart} • ${file.size_kb} KB${billingPeriod}`;
 
     return {
       value: file.filename,
       label: displayLabel,
-      subtext: subtext
+      subtext: subtext,
+      account_name: file.account_name || null,
+      usage_account_id: usageAcc || null,
+      type: file.type || 'upload',
+      id: file.id || null
     };
   });
 
@@ -170,9 +185,38 @@ export default function Navbar({
     if (!currentUser) {
       activePlaceholder = SAMPLE_LABELS[activeDataset] || 'AWS Production Telemetry (Demo)';
     } else {
-      activePlaceholder = cleanDisplayName(activeDataset) || 'Select CUR Dataset';
+      activePlaceholder = cleanDisplayName(activeDataset).replace(/\.csv(?:\.gz)?$/i, '') || 'Select CUR Dataset';
     }
   }
+
+  const handleOpenRename = () => {
+    const activeObj = datasetOptions.find(o => o.value === activeDataset);
+    setRenameAccountName(activeObj?.account_name || '');
+    setRenameError('');
+    setRenamePropagate(true);
+    setRenameModalOpen(true);
+  };
+
+  const handleSaveRename = async (e) => {
+    if (e) e.preventDefault();
+    if (!renameAccountName.trim()) {
+      setRenameError('Please enter a friendly account name (e.g. evital-prod)');
+      return;
+    }
+    setRenaming(true);
+    setRenameError('');
+    try {
+      await api.renameDatasetAccount(activeDataset, renameAccountName.trim(), renamePropagate);
+      setRenameModalOpen(false);
+      if (onRefreshDatasets) {
+        onRefreshDatasets();
+      }
+    } catch (err) {
+      setRenameError(err.message || 'Failed to update account alias');
+    } finally {
+      setRenaming(false);
+    }
+  };
 
   // =========================================================================
   // EFFECT 3: ORBIT-INSPIRED ACTIVE NAVIGATION INDICATOR
@@ -290,7 +334,7 @@ export default function Navbar({
             <div className="flex items-center gap-2 sm:gap-2.5 flex-shrink-0">
               
               {/* Dataset Dropdown (Desktop & Laptop) */}
-              <div className="hidden md:block">
+              <div className="hidden md:flex items-center gap-1.5">
                 <ClayDropdown
                   options={datasetOptions}
                   value={activeDataset}
@@ -300,6 +344,16 @@ export default function Navbar({
                   icon={Database}
                   width={isScrolled ? "w-44 lg:w-56" : "w-52 lg:w-64"}
                 />
+                {currentUser && activeOption && activeOption.type === 'upload' && (
+                  <button
+                    type="button"
+                    onClick={handleOpenRename}
+                    className="p-2 rounded-clay-pill clay-button text-zorvex-text-secondary hover:text-zorvex-forest dark:hover:text-zorvex-dark-forest transition-colors cursor-pointer flex-shrink-0"
+                    title={`Rename Account Alias (${activeOption.usage_account_id ? 'AWS ' + activeOption.usage_account_id : 'Dataset'})`}
+                  >
+                    <Edit3 className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
 
               {/* Tactile Light / Dark Mode Toggle */}
@@ -513,16 +567,31 @@ export default function Navbar({
 
             {/* Mobile Dataset Selector & Upload button */}
             <div className="pt-2 border-t border-zorvex-border dark:border-zorvex-dark-border space-y-2">
-              <div>
-                <ClayDropdown
-                  options={datasetOptions}
-                  value={activeDataset}
-                  onChange={onSelectDataset}
-                  placeholder={activePlaceholder}
-                  searchable={datasetOptions.length > 4}
-                  icon={Database}
-                  width="w-full"
-                />
+              <div className="flex items-center gap-2">
+                <div className="flex-1">
+                  <ClayDropdown
+                    options={datasetOptions}
+                    value={activeDataset}
+                    onChange={onSelectDataset}
+                    placeholder={activePlaceholder}
+                    searchable={datasetOptions.length > 4}
+                    icon={Database}
+                    width="w-full"
+                  />
+                </div>
+                {currentUser && activeOption && activeOption.type === 'upload' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMobileMenuOpen(false);
+                      handleOpenRename();
+                    }}
+                    className="p-2.5 rounded-xl clay-button text-zorvex-text-secondary hover:text-zorvex-forest flex-shrink-0 cursor-pointer"
+                    title="Rename Account Alias"
+                  >
+                    <Edit3 className="w-4 h-4" />
+                  </button>
+                )}
               </div>
 
               <button
@@ -554,6 +623,95 @@ export default function Navbar({
         )}
 
       </div>
+
+      {/* Account Alias Rename Modal */}
+      {renameModalOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
+          <div className="surface-floating border border-zorvex-border dark:border-zorvex-dark-border rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-zorvex-border dark:border-zorvex-dark-border">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-zorvex-forest-soft dark:bg-zorvex-dark-forest-soft text-zorvex-forest dark:text-zorvex-dark-forest flex items-center justify-center">
+                  <Edit3 className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-extrabold text-zorvex-text dark:text-zorvex-dark-text">
+                    Rename Account Alias
+                  </h3>
+                  <p className="text-[11px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">
+                    Set a recognizable friendly name for this AWS Account
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setRenameModalOpen(false)}
+                className="p-1 rounded-lg text-zorvex-text-secondary hover:text-zorvex-text dark:hover:text-zorvex-dark-text transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveRename} className="space-y-4">
+              {activeOption?.usage_account_id && (
+                <div className="px-3 py-2 rounded-xl bg-zorvex-surface-secondary/70 dark:bg-zorvex-dark-surface-secondary/50 border border-zorvex-border/60 dark:border-zorvex-dark-border/60 text-xs">
+                  <span className="font-semibold text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">AWS Account ID: </span>
+                  <span className="font-mono font-bold text-zorvex-forest dark:text-zorvex-dark-forest">{activeOption.usage_account_id}</span>
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs font-bold text-zorvex-text dark:text-zorvex-dark-text mb-1.5">
+                  Account Friendly Name / Alias
+                </label>
+                <input
+                  type="text"
+                  value={renameAccountName}
+                  onChange={(e) => setRenameAccountName(e.target.value)}
+                  placeholder="e.g. evital-prod, billing-master, prod-workloads"
+                  className="w-full px-3.5 py-2.5 rounded-xl clay-input text-xs font-semibold text-zorvex-text dark:text-zorvex-dark-text focus:outline-none"
+                  autoFocus
+                />
+              </div>
+
+              {activeOption?.usage_account_id && (
+                <label className="flex items-center gap-2 cursor-pointer text-xs text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary select-none">
+                  <input
+                    type="checkbox"
+                    checked={renamePropagate}
+                    onChange={(e) => setRenamePropagate(e.target.checked)}
+                    className="rounded text-zorvex-forest focus:ring-zorvex-forest"
+                  />
+                  <span>Apply alias to all CUR files with Account {activeOption.usage_account_id}</span>
+                </label>
+              )}
+
+              {renameError && (
+                <div className="text-xs font-semibold text-zorvex-spike bg-zorvex-spike-soft/30 p-2.5 rounded-xl border border-zorvex-spike/20">
+                  {renameError}
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-2.5 pt-2">
+                <button
+                  type="button"
+                  disabled={renaming}
+                  onClick={() => setRenameModalOpen(false)}
+                  className="px-4 py-2 rounded-xl clay-button text-xs font-bold text-zorvex-text dark:text-zorvex-dark-text cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={renaming}
+                  className="px-4 py-2 rounded-xl clay-button-primary text-xs font-bold text-white tracking-wide cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  {renaming ? 'Saving...' : 'Save Alias'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </header>
   );
 }

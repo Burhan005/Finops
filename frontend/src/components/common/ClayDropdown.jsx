@@ -138,7 +138,7 @@ export default function ClayDropdown({
       {/* Floating Dropdown Menu */}
       {isOpen && (
         <div
-          className={`absolute left-0 mt-2 ${width} min-w-[220px] rounded-2xl surface-floating z-50 p-2 animate-fade-in border border-zorvex-border dark:border-zorvex-dark-border`}
+          className={`absolute left-0 mt-2 ${width} min-w-[280px] rounded-2xl surface-floating z-50 p-2 animate-fade-in border border-zorvex-border dark:border-zorvex-dark-border`}
           role="listbox"
         >
           {searchable && (

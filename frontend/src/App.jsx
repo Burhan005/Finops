@@ -45,6 +45,7 @@ function DashboardLayout({
   datasets,
   activeDataset,
   onSelectDataset,
+  onRefreshDatasets,
   onOpenUpload,
   filterStartDate,
   filterEndDate,
@@ -92,6 +93,7 @@ function DashboardLayout({
         datasets={datasets}
         activeDataset={activeDataset}
         onSelectDataset={onSelectDataset}
+        onRefreshDatasets={onRefreshDatasets}
         onOpenUpload={onOpenUpload}
         darkMode={darkMode}
         onToggleDarkMode={onToggleDarkMode}
@@ -539,6 +541,7 @@ export default function App() {
                     datasets={datasets}
                     activeDataset={activeDataset}
                     onSelectDataset={handleSelectDataset}
+                    onRefreshDatasets={() => loadData(filterStartDate, filterEndDate, filterAccount, filterService, true)}
                     onOpenUpload={() => setUploadOpen(true)}
                     filterStartDate={filterStartDate}
                     filterEndDate={filterEndDate}
