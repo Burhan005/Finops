@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { NavLink, useLocation } from 'react-router-dom';
 import { 
   LayoutDashboard, 
@@ -221,6 +222,16 @@ export default function Navbar({
       setRenaming(false);
     }
   };
+
+  // Close rename modal on Escape key
+  useEffect(() => {
+    if (!renameModalOpen) return;
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') setRenameModalOpen(false);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [renameModalOpen]);
 
   // =========================================================================
   // EFFECT 3: ORBIT-INSPIRED ACTIVE NAVIGATION INDICATOR
@@ -628,10 +639,15 @@ export default function Navbar({
 
       </div>
 
-      {/* Account Alias Rename Modal */}
-      {renameModalOpen && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
-          <div className="surface-floating border border-zorvex-border dark:border-zorvex-dark-border rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4">
+      {/* Account Alias Rename Modal rendered via Portal to escape header containing block */}
+      {renameModalOpen && typeof document !== 'undefined' && createPortal(
+        <div 
+          className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setRenameModalOpen(false);
+          }}
+        >
+          <div className="surface-floating border border-zorvex-border dark:border-zorvex-dark-border rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4 relative">
             <div className="flex items-center justify-between pb-3 border-b border-zorvex-border dark:border-zorvex-dark-border">
               <div className="flex items-center gap-2.5">
                 <div className="w-8 h-8 rounded-xl bg-zorvex-forest-soft dark:bg-zorvex-dark-forest-soft text-zorvex-forest dark:text-zorvex-dark-forest flex items-center justify-center">
@@ -714,7 +730,8 @@ export default function Navbar({
               </div>
             </form>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </header>
   );
