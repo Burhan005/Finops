@@ -56,15 +56,17 @@ export default function Navbar({
   const userMenuRef = useRef(null);
   const location = useLocation();
 
-  const userName = currentUser?.name || 'Burhan Kapasi';
-  const userEmail = currentUser?.email || 'cloudops@finopsclay.io';
+  const userName = currentUser?.name || '';
+  const userEmail = currentUser?.email || '';
   const userInitials = userName
-    .split(' ')
-    .filter(Boolean)
-    .map((n) => n[0])
-    .join('')
-    .slice(0, 2)
-    .toUpperCase() || 'BK';
+    ? userName
+        .split(' ')
+        .filter(Boolean)
+        .map((n) => n[0])
+        .join('')
+        .slice(0, 2)
+        .toUpperCase()
+    : 'U';
 
   // Close menus on route change
   useEffect(() => {
@@ -379,72 +381,82 @@ export default function Navbar({
               />
 
               {/* User Account / Auth Dropdown */}
-              <div className="relative" ref={userMenuRef}>
-                <button
-                  type="button"
-                  onClick={() => setUserMenuOpen(!userMenuOpen)}
-                  className={`flex items-center gap-1.5 px-2.5 sm:px-3 rounded-clay-pill clay-button text-xs font-bold text-zorvex-text dark:text-zorvex-dark-text transition-all hover:border-zorvex-forest/50 flex-shrink-0 cursor-pointer ${
-                    isScrolled ? 'py-1 sm:py-1.5' : 'py-1.5 sm:py-2'
-                  }`}
-                  title="User Account & Auth"
-                >
-                  <div className="w-5 h-5 rounded-full bg-gradient-to-tr from-zorvex-forest to-[#5B7A60] text-zorvex-surface flex items-center justify-center text-[10px] font-extrabold shadow-sm flex-shrink-0">
-                    {userInitials}
-                  </div>
-                  <span className="hidden xl:inline text-xs font-extrabold whitespace-nowrap">{userName}</span>
-                  <ChevronDown className={`w-3.5 h-3.5 text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary transition-transform duration-200 ${userMenuOpen ? 'rotate-180' : ''}`} />
-                </button>
-
-                {userMenuOpen && (
-                  <div className="absolute right-0 mt-2 w-56 rounded-2xl surface-floating z-50 p-2 animate-fade-in border border-zorvex-border dark:border-zorvex-dark-border">
-                    <div className="px-3 py-2 border-b border-zorvex-border dark:border-zorvex-dark-border mb-1">
-                      <p className="text-xs font-extrabold text-zorvex-text dark:text-zorvex-dark-text truncate">{userName}</p>
-                      <p className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary truncate">{userEmail}</p>
+              {!currentUser ? (
+                <div className="flex items-center gap-1.5 sm:gap-2">
+                  <NavLink
+                    to="/login"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-clay-pill clay-button text-xs font-bold text-zorvex-text dark:text-zorvex-dark-text hover:text-zorvex-forest transition-colors flex-shrink-0"
+                  >
+                    <LogIn className="w-3.5 h-3.5" />
+                    <span>Sign In</span>
+                  </NavLink>
+                  <NavLink
+                    to="/register"
+                    className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-clay-pill clay-button text-xs font-extrabold text-zorvex-forest dark:text-zorvex-forest-highlight flex-shrink-0"
+                  >
+                    <UserPlus className="w-3.5 h-3.5" />
+                    <span>Register</span>
+                  </NavLink>
+                </div>
+              ) : (
+                <div className="relative" ref={userMenuRef}>
+                  <button
+                    type="button"
+                    onClick={() => setUserMenuOpen(!userMenuOpen)}
+                    className={`flex items-center gap-1.5 px-2.5 sm:px-3 rounded-clay-pill clay-button text-xs font-bold text-zorvex-text dark:text-zorvex-dark-text transition-all hover:border-zorvex-forest/50 flex-shrink-0 cursor-pointer ${
+                      isScrolled ? 'py-1 sm:py-1.5' : 'py-1.5 sm:py-2'
+                    }`}
+                    title="User Account & Auth"
+                  >
+                    <div className="w-5 h-5 rounded-full bg-gradient-to-tr from-zorvex-forest to-[#5B7A60] text-zorvex-surface flex items-center justify-center text-[10px] font-extrabold shadow-sm flex-shrink-0">
+                      {userInitials}
                     </div>
+                    <span className="hidden xl:inline text-xs font-extrabold whitespace-nowrap">{userName}</span>
+                    <ChevronDown className={`w-3.5 h-3.5 text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary transition-transform duration-200 ${userMenuOpen ? 'rotate-180' : ''}`} />
+                  </button>
 
-                    <NavLink
-                      to="/"
-                      onClick={() => setUserMenuOpen(false)}
-                      className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold text-zorvex-text dark:text-zorvex-dark-text hover:bg-zorvex-surface-secondary dark:hover:bg-zorvex-dark-surface-secondary transition-colors"
-                    >
-                      <Globe className="w-3.5 h-3.5 text-zorvex-forest dark:text-zorvex-dark-forest" />
-                      <span>Public Landing Page</span>
-                    </NavLink>
+                  {userMenuOpen && (
+                    <div className="absolute right-0 mt-2 w-56 rounded-2xl surface-floating z-50 p-2 animate-fade-in border border-zorvex-border dark:border-zorvex-dark-border">
+                      <div className="px-3 py-2 border-b border-zorvex-border dark:border-zorvex-dark-border mb-1">
+                        <p className="text-xs font-extrabold text-zorvex-text dark:text-zorvex-dark-text truncate">{userName}</p>
+                        <p className="text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary truncate">{userEmail}</p>
+                      </div>
 
-                    <NavLink
-                      to="/login"
-                      onClick={() => setUserMenuOpen(false)}
-                      className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold text-zorvex-text dark:text-zorvex-dark-text hover:bg-zorvex-surface-secondary dark:hover:bg-zorvex-dark-surface-secondary transition-colors"
-                    >
-                      <LogIn className="w-3.5 h-3.5 text-zorvex-forest dark:text-zorvex-dark-forest" />
-                      <span>Sign In</span>
-                    </NavLink>
-
-                    <NavLink
-                      to="/register"
-                      onClick={() => setUserMenuOpen(false)}
-                      className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold text-zorvex-text dark:text-zorvex-dark-text hover:bg-zorvex-surface-secondary dark:hover:bg-zorvex-dark-surface-secondary transition-colors"
-                    >
-                      <UserPlus className="w-3.5 h-3.5 text-zorvex-forest dark:text-zorvex-dark-forest" />
-                      <span>Create Workspace</span>
-                    </NavLink>
-
-                    <div className="border-t border-zorvex-border dark:border-zorvex-dark-border my-1 pt-1">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setUserMenuOpen(false);
-                          if (onLogout) onLogout();
-                        }}
-                        className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold text-zorvex-spike hover:bg-zorvex-spike-soft dark:hover:bg-red-950/30 transition-colors text-left cursor-pointer"
+                      <NavLink
+                        to="/app/settings"
+                        onClick={() => setUserMenuOpen(false)}
+                        className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold text-zorvex-text dark:text-zorvex-dark-text hover:bg-zorvex-surface-secondary dark:hover:bg-zorvex-dark-surface-secondary transition-colors"
                       >
-                        <LogOut className="w-3.5 h-3.5" />
-                        <span>Sign Out</span>
-                      </button>
+                        <Settings className="w-3.5 h-3.5 text-zorvex-forest dark:text-zorvex-dark-forest" />
+                        <span>Platform Settings</span>
+                      </NavLink>
+
+                      <NavLink
+                        to="/"
+                        onClick={() => setUserMenuOpen(false)}
+                        className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold text-zorvex-text dark:text-zorvex-dark-text hover:bg-zorvex-surface-secondary dark:hover:bg-zorvex-dark-surface-secondary transition-colors"
+                      >
+                        <Globe className="w-3.5 h-3.5 text-zorvex-forest dark:text-zorvex-dark-forest" />
+                        <span>Public Landing Page</span>
+                      </NavLink>
+
+                      <div className="border-t border-zorvex-border dark:border-zorvex-dark-border my-1 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setUserMenuOpen(false);
+                            if (onLogout) onLogout();
+                          }}
+                          className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold text-zorvex-spike hover:bg-zorvex-spike-soft dark:hover:bg-red-950/30 transition-colors text-left cursor-pointer"
+                        >
+                          <LogOut className="w-3.5 h-3.5" />
+                          <span>Sign Out</span>
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                )}
-              </div>
+                  )}
+                </div>
+              )}
 
               {/* Upload CTA Button (Visible on sm+) */}
               <div className="hidden sm:block">
