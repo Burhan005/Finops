@@ -104,9 +104,6 @@ def resolve_aws_session(
     except ImportError:
         return None, "ERROR", "boto3 is not installed in the environment."
 
-    # Determine profile
-    target_profile = profile_name or os.environ.get("AWS_PROFILE")
-    
     # Check if credentials exist in environment
     has_env = bool(
         os.environ.get("AWS_ACCESS_KEY_ID") and os.environ.get("AWS_SECRET_ACCESS_KEY")
@@ -115,6 +112,16 @@ def resolve_aws_session(
         os.environ.get("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI") or
         os.environ.get("AWS_WEB_IDENTITY_TOKEN_FILE")
     )
+
+    # Determine profile
+    target_profile = profile_name or os.environ.get("AWS_PROFILE")
+    if not target_profile and not has_env and not has_role:
+        try:
+            available = boto3.Session().available_profiles
+            if "iam-roles-anywhere" in available:
+                target_profile = "iam-roles-anywhere"
+        except Exception:
+            pass
 
     try:
         if target_profile:
