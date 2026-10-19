@@ -251,7 +251,16 @@ function DashboardLayout({
               <Route path="ai" element={<div className="page-transition"><AskZorvexView /></div>} />
               <Route
                 path="settings"
-                element={<div className="page-transition"><SettingsView activeDataset={activeDataset} currentUser={currentUser} /></div>}
+                element={
+                  <div className="page-transition">
+                    <SettingsView
+                      activeDataset={activeDataset}
+                      currentUser={currentUser}
+                      onRefreshDatasets={onRefreshDatasets}
+                      onSelectDataset={onSelectDataset}
+                    />
+                  </div>
+                }
               />
               <Route path="*" element={<Navigate to="overview" replace />} />
             </Routes>
@@ -470,6 +479,12 @@ export default function App() {
   useEffect(() => {
     loadData();
   }, []);
+
+  useEffect(() => {
+    if (currentUser) {
+      loadData(filterStartDate, filterEndDate, filterAccount, filterService, true);
+    }
+  }, [currentUser?.id]);
 
   const handleSelectDataset = async (filename) => {
     setLoading(true);

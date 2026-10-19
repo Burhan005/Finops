@@ -22,7 +22,7 @@ import {
 import ClayDropdown from './common/ClayDropdown';
 import { api } from '../services/api';
 
-export default function SettingsView({ activeDataset, currentUser }) {
+export default function SettingsView({ activeDataset, currentUser, onRefreshDatasets, onSelectDataset }) {
   const [currency, setCurrency] = useState('USD');
   const [awsRoleArn, setAwsRoleArn] = useState('');
   const [s3Bucket, setS3Bucket] = useState('');
@@ -133,6 +133,13 @@ export default function SettingsView({ activeDataset, currentUser }) {
       setS3Status('SYNCED');
       setS3Message(syncResult.message);
       setS3Feedback({ type: 'success', text: syncResult.message });
+
+      if (onRefreshDatasets) {
+        await onRefreshDatasets();
+      }
+      if (syncResult.filename && onSelectDataset) {
+        await onSelectDataset(syncResult.filename);
+      }
     } catch (err) {
       setS3Feedback({ type: 'error', text: err.message || 'S3 validation failed' });
     } finally {
@@ -215,10 +222,10 @@ export default function SettingsView({ activeDataset, currentUser }) {
                     name="s3Bucket"
                     aria-label="S3 CUR Delivery Bucket Name"
                     type="text"
-                    placeholder="e.g. my-company-cur-report-bucket"
+                    placeholder="e.g. cur-report-poc-96708"
                     value={s3Bucket}
                     onChange={(e) => setS3Bucket(e.target.value)}
-                    className="w-full px-4 py-2.5 clay-input text-xs font-mono text-zorvex-text dark:text-zorvex-dark-text placeholder:text-zorvex-text dark:text-zorvex-dark-text-light"
+                    className="w-full px-4 py-2.5 clay-input text-xs font-mono text-zorvex-text dark:text-zorvex-dark-text"
                   />
                 </div>
 
@@ -245,10 +252,10 @@ export default function SettingsView({ activeDataset, currentUser }) {
                     name="s3Prefix"
                     aria-label="CUR S3 Prefix or Path"
                     type="text"
-                    placeholder="e.g. cur-data-exports/my-report/"
+                    placeholder="e.g. cur/"
                     value={s3Prefix}
                     onChange={(e) => setS3Prefix(e.target.value)}
-                    className="w-full px-4 py-2.5 clay-input text-xs font-mono text-zorvex-text dark:text-zorvex-dark-text placeholder:text-zorvex-text dark:text-zorvex-dark-text-light"
+                    className="w-full px-4 py-2.5 clay-input text-xs font-mono text-zorvex-text dark:text-zorvex-dark-text"
                   />
                 </div>
 
@@ -277,10 +284,10 @@ export default function SettingsView({ activeDataset, currentUser }) {
                   name="s3AccountName"
                   aria-label="Account or Dataset Display Name"
                   type="text"
-                  placeholder="e.g. POC AWS Production Account, Client POC"
+                  placeholder="e.g. POC AWS Account (Leave blank to use bucket name)"
                   value={s3AccountName}
                   onChange={(e) => setS3AccountName(e.target.value)}
-                  className="w-full px-4 py-2.5 clay-input text-xs font-mono text-zorvex-text dark:text-zorvex-dark-text placeholder:text-zorvex-text dark:text-zorvex-dark-text-light"
+                  className="w-full px-4 py-2.5 clay-input text-xs font-mono text-zorvex-text dark:text-zorvex-dark-text"
                 />
                 <span className="block text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-muted mt-1">
                   Custom label shown in the top navigation dataset selector and executive reports. If left blank, defaults to bucket name.
@@ -289,18 +296,21 @@ export default function SettingsView({ activeDataset, currentUser }) {
 
               <div>
                 <label htmlFor="aws-role-arn" className="block text-[11px] font-bold uppercase tracking-wider text-zorvex-text dark:text-zorvex-dark-text-muted mb-1.5">
-                  Cross-Account IAM Read-Only Role ARN
+                  Cross-Account IAM Read-Only Role ARN (Optional)
                 </label>
                 <input
                   id="aws-role-arn"
                   name="awsRoleArn"
                   aria-label="Cross-Account IAM Read-Only Role ARN"
                   type="text"
-                  placeholder="arn:aws:iam::967089422962:role/FinOpsCurReadOnlyRole"
+                  placeholder="Leave blank (Not needed with IAM Roles Anywhere)"
                   value={awsRoleArn}
                   onChange={(e) => setAwsRoleArn(e.target.value)}
-                  className="w-full px-4 py-2.5 clay-input text-xs font-mono text-zorvex-text dark:text-zorvex-dark-text placeholder:text-zorvex-text dark:text-zorvex-dark-text-light"
+                  className="w-full px-4 py-2.5 clay-input text-xs font-mono text-zorvex-text dark:text-zorvex-dark-text"
                 />
+                <span className="block text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-muted mt-1">
+                  Leave completely blank when using IAM Roles Anywhere / local certificate authentication.
+                </span>
               </div>
 
               <div className="pt-2 flex items-center justify-between">

@@ -138,6 +138,13 @@ def resolve_aws_session(
         if role_arn:
             try:
                 sts_client = session.client("sts", region_name=region)
+                current_caller = sts_client.get_caller_identity()
+                current_arn = current_caller.get("Arn", "")
+                role_name = role_arn.split("/")[-1]
+                # If current session is already authenticated as or assumed this exact role, skip redundant assume_role
+                if f":assumed-role/{role_name}/" in current_arn or current_arn.endswith(f":role/{role_name}"):
+                    return session, "AUTHENTICATED", None
+
                 assumed = sts_client.assume_role(
                     RoleArn=role_arn,
                     RoleSessionName="ZorvexFinOpsCurSyncSession",

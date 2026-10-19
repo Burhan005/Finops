@@ -401,6 +401,21 @@ html.dark .clay-input,
     0 1px 1px rgba(175, 198, 155, 0.06) !important;
 }
 
+.clay-input::placeholder {
+  color: #9CA3AF !important;
+  opacity: 0.65 !important;
+  font-style: italic !important;
+  font-weight: 400 !important;
+}
+
+html.dark .clay-input::placeholder,
+.dark .clay-input::placeholder {
+  color: #6B7280 !important;
+  opacity: 0.65 !important;
+  font-style: italic !important;
+  font-weight: 400 !important;
+}
+
 html.dark .clay-input:focus {
   background: #252E26 !important;
   border-color: #AFC69B !important;
