@@ -62,11 +62,11 @@ export default function AuthPortal({ initialMode = 'login', onAuthSuccess, darkM
     try {
       if (mode === 'login') {
         const data = await api.login(email, password);
-        if (onAuthSuccess) onAuthSuccess(data.user);
+        if (onAuthSuccess) await onAuthSuccess(data.user);
         navigate('/app/overview');
       } else {
         const data = await api.register(name, company, email, password);
-        if (onAuthSuccess) onAuthSuccess(data.user);
+        if (onAuthSuccess) await onAuthSuccess(data.user);
         navigate('/app/overview');
       }
     } catch (err) {

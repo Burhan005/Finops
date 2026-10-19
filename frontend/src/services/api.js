@@ -587,6 +587,7 @@ export const api = {
     if (data.token) {
       localStorage.setItem('finops_token', data.token);
       localStorage.setItem('finops_user', JSON.stringify(data.user));
+      inFlightGets.clear();
     }
     return data;
   },
@@ -605,6 +606,7 @@ export const api = {
     if (data.token) {
       localStorage.setItem('finops_token', data.token);
       localStorage.setItem('finops_user', JSON.stringify(data.user));
+      inFlightGets.clear();
     }
     return data;
   },

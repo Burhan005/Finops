@@ -525,6 +525,15 @@ export default function App() {
     loadData('', '', 'all', 'All');
   };
 
+  const handleAuthSuccess = async (user) => {
+    setCurrentUser(user);
+    setFilterStartDate('');
+    setFilterEndDate('');
+    setFilterAccount('all');
+    setFilterService('All');
+    await loadData('', '', 'all', 'All', true);
+  };
+
   return (
     <BrowserRouter>
       {/* Living Atmospheric Ambient Lighting (Zero Grids/Checks) */}
@@ -534,8 +543,8 @@ export default function App() {
         <Suspense fallback={<ViewLoadingFallback />}>
           <Routes>
             <Route path="/" element={<LandingPageView darkMode={darkMode} onToggleDarkMode={toggleDarkMode} currentUser={currentUser} />} />
-            <Route path="/login" element={<LoginView onLoginSuccess={(u) => setCurrentUser(u)} darkMode={darkMode} onToggleDarkMode={toggleDarkMode} />} />
-            <Route path="/register" element={<RegisterView onRegisterSuccess={(u) => setCurrentUser(u)} darkMode={darkMode} onToggleDarkMode={toggleDarkMode} />} />
+            <Route path="/login" element={<LoginView onLoginSuccess={handleAuthSuccess} darkMode={darkMode} onToggleDarkMode={toggleDarkMode} />} />
+            <Route path="/register" element={<RegisterView onRegisterSuccess={handleAuthSuccess} darkMode={darkMode} onToggleDarkMode={toggleDarkMode} />} />
             <Route path="/forgot-password" element={<ForgotPasswordView darkMode={darkMode} onToggleDarkMode={toggleDarkMode} />} />
             <Route path="/reset-password" element={<ResetPasswordView darkMode={darkMode} onToggleDarkMode={toggleDarkMode} />} />
             <Route
