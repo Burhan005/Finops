@@ -672,6 +672,7 @@ def get_s3_config(
             "region": "us-east-1",
             "prefix": "",
             "role_arn": "",
+            "account_name": "",
             "is_enabled": False,
             "last_synced_at": None,
             "last_status": "NOT_CONFIGURED"
@@ -684,6 +685,7 @@ def get_s3_config(
             "region": "us-east-1",
             "prefix": "",
             "role_arn": "",
+            "account_name": "",
             "is_enabled": False,
             "last_synced_at": None,
             "last_status": "NOT_CONFIGURED"
@@ -694,6 +696,7 @@ def get_s3_config(
         "region": cfg.region,
         "prefix": cfg.prefix,
         "role_arn": cfg.role_arn,
+        "account_name": cfg.account_name or "",
         "is_enabled": bool(cfg.is_enabled),
         "last_synced_at": cfg.last_synced_at.isoformat() if cfg.last_synced_at else None,
         "last_status": cfg.last_status,
@@ -712,6 +715,8 @@ def save_s3_config(
         S3SyncConfig.organization_id == org.id
     ).order_by(S3SyncConfig.id.desc()).first()
 
+    account_name_val = req.account_name.strip() if req.account_name and req.account_name.strip() else None
+
     if not cfg:
         cfg = S3SyncConfig(
             organization_id=org.id,
@@ -719,6 +724,7 @@ def save_s3_config(
             region=req.region.strip() if req.region else "us-east-1",
             prefix=req.prefix.strip() if req.prefix else "",
             role_arn=req.role_arn.strip() if req.role_arn else "",
+            account_name=account_name_val,
             is_enabled=1,
             last_status="CONFIGURED",
             last_message="S3 Automated Sync configuration saved."
@@ -729,6 +735,7 @@ def save_s3_config(
         cfg.region = req.region.strip() if req.region else "us-east-1"
         cfg.prefix = req.prefix.strip() if req.prefix else ""
         cfg.role_arn = req.role_arn.strip() if req.role_arn else ""
+        cfg.account_name = account_name_val
         cfg.last_status = "CONFIGURED"
         cfg.last_message = "S3 configuration updated."
 

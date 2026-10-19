@@ -28,6 +28,7 @@ export default function SettingsView({ activeDataset, currentUser }) {
   const [s3Bucket, setS3Bucket] = useState('');
   const [s3Region, setS3Region] = useState('us-east-1');
   const [s3Prefix, setS3Prefix] = useState('');
+  const [s3AccountName, setS3AccountName] = useState('');
   const [externalId] = useState('finops-clay-94281');
   
   const [s3Status, setS3Status] = useState('IDLE');
@@ -72,6 +73,7 @@ export default function SettingsView({ activeDataset, currentUser }) {
           setS3Region(cfg.region || 'us-east-1');
           setS3Prefix(cfg.prefix || '');
           setAwsRoleArn(cfg.role_arn || '');
+          setS3AccountName(cfg.account_name || '');
           setS3Status(cfg.last_status || 'CONFIGURED');
           setS3Message(cfg.last_message || '');
         }
@@ -123,7 +125,8 @@ export default function SettingsView({ activeDataset, currentUser }) {
         bucket_name: s3Bucket.trim(),
         region: s3Region,
         prefix: s3Prefix.trim(),
-        role_arn: awsRoleArn.trim()
+        role_arn: awsRoleArn.trim(),
+        account_name: s3AccountName.trim()
       });
 
       const syncResult = await api.triggerS3Sync();
@@ -263,6 +266,25 @@ export default function SettingsView({ activeDataset, currentUser }) {
                     className="w-full px-4 py-2.5 clay-input text-xs font-mono bg-clay-surface/50 text-zorvex-text dark:text-zorvex-dark-text-muted cursor-not-allowed"
                   />
                 </div>
+              </div>
+
+              <div>
+                <label htmlFor="s3-account-name" className="block text-[11px] font-bold uppercase tracking-wider text-zorvex-text dark:text-zorvex-dark-text-muted mb-1.5">
+                  Account / Dataset Display Name (Optional)
+                </label>
+                <input
+                  id="s3-account-name"
+                  name="s3AccountName"
+                  aria-label="Account or Dataset Display Name"
+                  type="text"
+                  placeholder="e.g. POC AWS Production Account, Client POC"
+                  value={s3AccountName}
+                  onChange={(e) => setS3AccountName(e.target.value)}
+                  className="w-full px-4 py-2.5 clay-input text-xs font-mono text-zorvex-text dark:text-zorvex-dark-text placeholder:text-zorvex-text dark:text-zorvex-dark-text-light"
+                />
+                <span className="block text-[10px] text-zorvex-text-secondary dark:text-zorvex-dark-text-muted mt-1">
+                  Custom label shown in the top navigation dataset selector and executive reports. If left blank, defaults to bucket name.
+                </span>
               </div>
 
               <div>

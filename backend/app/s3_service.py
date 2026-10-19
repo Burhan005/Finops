@@ -445,7 +445,7 @@ def download_and_ingest_cur_from_s3(
             checksum_sha256=checksum_sha256,
             parsed=parsed,
             manifest_metadata=manifest_meta,
-            account_name=f"AWS S3 Sync ({bucket_name})"
+            account_name=(getattr(s3_config, 'account_name', None) or f"AWS S3 Sync ({bucket_name})")
         )
 
         # Update cache & active state

@@ -174,6 +174,7 @@ class S3SyncConfig(Base):
     region = Column(String(64), default="us-east-1")
     prefix = Column(String(255), default="")
     role_arn = Column(String(255), nullable=True)
+    account_name = Column(String(255), nullable=True)
     is_enabled = Column(Integer, default=1)
     last_synced_at = Column(DateTime, nullable=True)
     last_status = Column(String(64), default="IDLE")  # IDLE, SYNCED, FAILED, NOT_CONFIGURED

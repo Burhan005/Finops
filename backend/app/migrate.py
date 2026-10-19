@@ -152,6 +152,10 @@ def ensure_schema_compatibility(target_engine):
         if "line_item_id" not in br_cols:
             conn.exec_driver_sql("ALTER TABLE billing_records ADD COLUMN line_item_id VARCHAR(255)")
 
+        s3_cols = _get_cols("s3_sync_configs")
+        if "account_name" not in s3_cols:
+            conn.exec_driver_sql("ALTER TABLE s3_sync_configs ADD COLUMN account_name VARCHAR(255)")
+
         conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_billing_records_line_item ON billing_records(line_item_id)")
         conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_datasets_org_period ON datasets(organization_id, billing_period_start, billing_period_end)")
         conn.commit()

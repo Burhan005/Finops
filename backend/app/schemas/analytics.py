@@ -38,6 +38,7 @@ class S3SyncConfigRequest(BaseModel):
     region: Optional[str] = "us-east-1"
     prefix: Optional[str] = ""
     role_arn: Optional[str] = ""
+    account_name: Optional[str] = ""
 
 class AgencyBrandingRequest(BaseModel):
     agency_name: str
