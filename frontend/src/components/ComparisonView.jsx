@@ -44,7 +44,9 @@ import {
   Network,
   BarChart3,
   CheckCircle,
-  Hash
+  Hash,
+  Cloud,
+  Lightbulb
 } from 'lucide-react';
 import { api } from '../services/api';
 import ClayDropdown from './common/ClayDropdown';
@@ -1137,8 +1139,9 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
             <Info className="w-4 h-4 text-blue-600 flex-shrink-0 mt-0.5" />
             <div>
               <span>{currentWindows.baseline_note}</span>
-              <span className="block text-[11px] text-blue-700/80 dark:text-blue-300/80 font-normal mt-0.5">
-                💡 Tip: For an exact equal-duration (1-to-1) comparison, select a {currentWindows.duration_days ? Math.min(currentWindows.duration_days, 7) : 7}-day target range or choose <strong>Custom Baseline</strong>.
+              <span className="flex items-center gap-1.5 text-[11px] text-blue-700/80 dark:text-blue-300/80 font-normal mt-1">
+                <Lightbulb className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
+                <span>Tip: For an exact equal-duration (1-to-1) comparison, select a {currentWindows.duration_days ? Math.min(currentWindows.duration_days, 7) : 7}-day target range or choose <strong>Custom Baseline</strong>.</span>
               </span>
             </div>
           </div>
@@ -1744,7 +1747,7 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
             <div className="flex items-center justify-between text-xs text-zorvex-text-secondary bg-zorvex-surface-secondary/40 px-3.5 py-2 rounded-xl border border-zorvex-border/40 font-sans">
               <div className="flex items-center gap-2">
                 <Sparkles className="w-3.5 h-3.5 text-zorvex-forest flex-shrink-0" />
-                <span><strong>How to Inspect:</strong> Click anywhere on any resource row or the <strong>Audit 🔍</strong> button to open the deep CUR line-item audit modal.</span>
+                <span><strong>How to Inspect:</strong> Click anywhere on any resource row or the <strong>Audit</strong> button to open the deep CUR line-item audit modal.</span>
               </div>
               <span className="text-[10px] font-mono text-zorvex-text-secondary/70 hidden sm:inline-block">ESC or click backdrop to close</span>
             </div>
@@ -1930,7 +1933,8 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
 
                               {res.lifecycle_correlation?.primary_event && (
                                 <span className="inline-flex items-center gap-1 text-[9px] text-purple-700 dark:text-purple-300 bg-purple-500/10 px-1.5 py-0.5 rounded border border-purple-500/20 font-mono">
-                                  <span>☁️ {res.lifecycle_correlation.primary_event.event_name}</span>
+                                  <Cloud className="w-2.5 h-2.5 text-purple-600 dark:text-purple-400 flex-shrink-0" />
+                                  <span>{res.lifecycle_correlation.primary_event.event_name}</span>
                                 </span>
                               )}
                             </div>
@@ -1948,7 +1952,7 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
                               title="Audit raw CUR line items and mathematical decomposition"
                             >
                               <Search className="w-3 h-3" />
-                              <span>Audit 🔍</span>
+                              <span>Audit</span>
                             </button>
                           </td>
                         </tr>
@@ -2175,7 +2179,8 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
                 }`}>
                   <div className="flex items-center justify-between">
                     <span className="text-[10px] uppercase font-bold text-zorvex-text dark:text-zorvex-dark-text flex items-center gap-1.5">
-                      <span>☁️</span> AWS Resource Lifecycle Correlation
+                      <Cloud className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400 flex-shrink-0" />
+                      <span>AWS Resource Lifecycle Correlation</span>
                     </span>
                     <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
                       inspectModalResource.lifecycle_correlation.classification === 'SUPPORTED_EXPLANATION'
