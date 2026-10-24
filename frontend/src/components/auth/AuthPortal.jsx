@@ -17,7 +17,10 @@ import {
   Sparkles,
   CheckCircle2,
   Activity,
-  Layers
+  Layers,
+  Eye,
+  EyeOff,
+  Check
 } from 'lucide-react';
 import { api } from '../../services/api';
 import ZorvexLogo from '../common/ZorvexLogo';
@@ -35,6 +38,8 @@ export default function AuthPortal({ initialMode = 'login', onAuthSuccess, darkM
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [successMsg, setSuccessMsg] = useState('');
 
   // Sync mode with route
   useEffect(() => {
@@ -51,23 +56,32 @@ export default function AuthPortal({ initialMode = 'login', onAuthSuccess, darkM
   const handleTabChange = (newMode) => {
     setMode(newMode);
     setError('');
+    setSuccessMsg('');
+    setShowPassword(false);
     navigate(newMode === 'register' ? '/register' : '/login', { replace: true });
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
+    setSuccessMsg('');
     setLoading(true);
 
     try {
       if (mode === 'login') {
         const data = await api.login(email, password);
+        setSuccessMsg('Authentication verified. Launching workspace...');
         if (onAuthSuccess) await onAuthSuccess(data.user);
-        navigate('/app/overview');
+        setTimeout(() => {
+          navigate('/app/overview');
+        }, 650);
       } else {
         const data = await api.register(name, company, email, password);
+        setSuccessMsg('Organization workspace initialized! Entering console...');
         if (onAuthSuccess) await onAuthSuccess(data.user);
-        navigate('/app/overview');
+        setTimeout(() => {
+          navigate('/app/overview');
+        }, 650);
       }
     } catch (err) {
       setError(err.message || (mode === 'login' ? 'Invalid email or password' : 'Registration failed'));
@@ -293,7 +307,7 @@ export default function AuthPortal({ initialMode = 'login', onAuthSuccess, darkM
         </header>
 
         {/* Protected Solid 3D Clay Form Card (Shielded from background lines) */}
-        <main className="max-w-md w-full mx-auto my-auto p-6 sm:p-8 rounded-3xl surface-floating border border-zorvex-border dark:border-zorvex-dark-border shadow-surface-floating bg-[#FFFCF5] dark:bg-[#252E26] space-y-5 relative z-10">
+        <main className="max-w-md w-full mx-auto my-auto p-6 sm:p-8 rounded-3xl surface-floating border border-zorvex-border dark:border-white/[0.08] shadow-[0_20px_50px_-15px_rgba(0,0,0,0.5),0_0_40px_-10px_rgba(236,114,17,0.14)] bg-white dark:bg-[#121316] space-y-5 relative z-10 backdrop-blur-xl">
           
           {/* Header Title */}
           <div>
@@ -347,6 +361,14 @@ export default function AuthPortal({ initialMode = 'login', onAuthSuccess, darkM
             <div className="p-3.5 rounded-2xl bg-zorvex-spike-soft dark:bg-red-950/40 border border-zorvex-spike/30 text-xs text-zorvex-spike font-bold flex items-center gap-2 animate-fade-in">
               <AlertCircle className="w-4 h-4 flex-shrink-0" />
               <span>{error}</span>
+            </div>
+          )}
+
+          {/* Success Notification */}
+          {successMsg && (
+            <div className="p-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-xs text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-2.5 animate-fade-in shadow-surface-flat">
+              <CheckCircle2 className="w-4 h-4 text-emerald-500 flex-shrink-0 animate-pulse" />
+              <span>{successMsg}</span>
             </div>
           )}
 
@@ -431,29 +453,50 @@ export default function AuthPortal({ initialMode = 'login', onAuthSuccess, darkM
                 )}
               </div>
               <div className="relative">
-                <Lock className="w-4 h-4 text-zorvex-forest dark:text-zorvex-dark-forest absolute left-3.5 top-1/2 -translate-y-1/2" />
+                <Lock className="w-4 h-4 text-zorvex-forest dark:text-zorvex-dark-forest absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
                 <input
                   id="auth-password"
                   name="password"
-                  type="password"
+                  type={showPassword ? "text" : "password"}
                   required
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder={mode === 'register' ? 'At least 6 characters' : 'Enter your password'}
                   aria-label="Master Password"
-                  className="w-full pl-10 pr-4 py-2.5 clay-input text-xs font-semibold text-zorvex-text dark:text-zorvex-dark-text placeholder:text-zorvex-text-secondary/60 dark:placeholder:text-zorvex-dark-text-secondary/60"
+                  className="w-full pl-10 pr-11 py-2.5 clay-input text-xs font-semibold text-zorvex-text dark:text-zorvex-dark-text placeholder:text-zorvex-text-secondary/60 dark:placeholder:text-zorvex-dark-text-secondary/60"
                 />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-zorvex-text-secondary hover:text-zorvex-text dark:text-zorvex-dark-text-secondary dark:hover:text-white transition-colors cursor-pointer rounded-lg focus:outline-none"
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                  title={showPassword ? "Hide password" : "Show password"}
+                >
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
               </div>
             </div>
 
             {/* 3D Tactile Clay Button */}
             <button
               type="submit"
-              disabled={loading}
-              className="w-full py-3.5 mt-2 clay-button-primary text-xs font-black tracking-wider uppercase flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer shadow-surface-raised hover:-translate-y-0.5 active:translate-y-0 transition-all"
+              disabled={loading || !!successMsg}
+              className={`w-full py-3.5 mt-2 text-xs font-black tracking-wider uppercase flex items-center justify-center gap-2 cursor-pointer shadow-surface-raised hover:-translate-y-0.5 active:translate-y-0 transition-all ${
+                successMsg
+                  ? 'bg-gradient-to-r from-emerald-600 to-emerald-500 text-white shadow-emerald-500/20'
+                  : 'clay-button-primary disabled:opacity-50'
+              }`}
             >
-              {loading ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
+              {successMsg ? (
+                <>
+                  <Check className="w-4 h-4" />
+                  <span>Authenticated</span>
+                </>
+              ) : loading ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>Verifying Credentials...</span>
+                </>
               ) : (
                 <>
                   <span>{mode === 'login' ? 'Sign In to Console' : 'Initialize Workspace'}</span>

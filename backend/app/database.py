@@ -1,21 +1,23 @@
 """
-Database configuration using SQLite with SQLAlchemy.
-Easily switchable to PostgreSQL by setting DATABASE_URL.
+Database configuration and session management with SQLAlchemy.
+Defaults to PostgreSQL via app.config.settings, supporting isolated test execution.
 """
 
 import os
 import sys
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import declarative_base, sessionmaker
+from .config import settings
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(BASE_DIR, 'data', 'finops.db')
 
-DATABASE_URL = os.getenv('DATABASE_URL', f"sqlite:///{DB_PATH}")
+DATABASE_URL = os.getenv('DATABASE_URL', settings.DATABASE_URL)
+
 
 def check_test_database_isolation(db_url: str, is_test: bool = None) -> bool:
     """
-    Enforces strict test isolation: fails fast if any test process attempts to bind
+    Enforces test isolation: fails fast if any test process attempts to bind
     to the production database (finops.db).
     """
     if is_test is None:
@@ -36,12 +38,18 @@ def check_test_database_isolation(db_url: str, is_test: bool = None) -> bool:
             )
     return True
 
+
 # Enforce fail-fast guard immediately upon module import
 check_test_database_isolation(DATABASE_URL)
 
 engine_kwargs = {
-    "connect_args": {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {},
+    "connect_args": (
+        {"check_same_thread": False}
+        if DATABASE_URL.startswith("sqlite")
+        else {"options": "-c statement_timeout=30000 -c work_mem=16MB"}
+    ),
 }
+
 if DATABASE_URL.startswith("sqlite"):
     if ":memory:" in DATABASE_URL:
         from sqlalchemy.pool import StaticPool
@@ -53,15 +61,24 @@ if DATABASE_URL.startswith("sqlite"):
             "pool_timeout": 30,
             "pool_pre_ping": True,
         })
+else:
+    engine_kwargs.update({
+        "pool_size": 25,
+        "max_overflow": 25,
+        "pool_timeout": 30,
+        "pool_pre_ping": True,
+        "pool_recycle": 1800,
+    })
 
 engine = create_engine(
     DATABASE_URL,
     **engine_kwargs
 )
 
-# Enforce SQLite foreign keys, Write-Ahead Logging (WAL), memory cache, and busy timeouts for reliable concurrency
+
+# SQLite PRAGMA configuration (applied only when running with SQLite engine)
 @event.listens_for(engine, "connect")
-def set_sqlite_pragma(dbapi_connection, connection_record):
+def configure_sqlite_connection(dbapi_connection, connection_record):
     if DATABASE_URL.startswith("sqlite"):
         cursor = dbapi_connection.cursor()
         if ":memory:" not in DATABASE_URL:
@@ -74,8 +91,10 @@ def set_sqlite_pragma(dbapi_connection, connection_record):
         cursor.execute("PRAGMA mmap_size = 268435456")
         cursor.close()
 
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
+
 
 def get_db():
     db = SessionLocal()

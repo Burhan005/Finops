@@ -4,6 +4,7 @@ import {
   Filter, FileSpreadsheet, Layers, Coins, Server, RefreshCw
 } from 'lucide-react';
 import { api } from '../services/api';
+import { ClayTableSkeleton } from './common/DashboardSkeleton';
 
 export default function SavingsLedgerView() {
   const [records, setRecords] = useState([]);
@@ -48,7 +49,7 @@ export default function SavingsLedgerView() {
     <div className="space-y-8 animate-fade-in">
       
       {/* Header Banner */}
-      <div className="clay-card p-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border border-zorvex-forest/20">
+      <div className="clay-card p-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border border-zorvex-border dark:border-zorvex-dark-border">
         <div>
           <div className="flex items-center gap-2">
             <span className="p-1.5 rounded-lg bg-zorvex-forest-soft dark:bg-zorvex-forest-dark-soft text-zorvex-forest dark:text-zorvex-forest-highlight">
@@ -211,50 +212,64 @@ export default function SavingsLedgerView() {
 
       {/* Ledger Records Table */}
       <div className="clay-card overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
-            <thead className="bg-zorvex-secondary/60 dark:bg-zorvex-dark-secondary text-zorvex-text-muted dark:text-zorvex-dark-text-muted font-bold uppercase tracking-wider text-[10px] border-b border-zorvex-border dark:border-zorvex-dark-border">
-              <tr>
-                <th className="py-3 px-4">Opportunity & Resource</th>
-                <th className="py-3 px-4">Service / Region</th>
-                <th className="py-3 px-4">Status</th>
-                <th className="py-3 px-4">Projected Savings</th>
-                <th className="py-3 px-4">Confidence</th>
-                <th className="py-3 px-4 text-right">Lifecycle Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-zorvex-border/60 dark:divide-zorvex-dark-border/60 font-medium">
-              {records.map((r) => (
-                <tr key={r.id} className="hover:bg-zorvex-secondary/40 dark:hover:bg-zorvex-dark-secondary/60 transition-colors">
-                  <td className="py-3.5 px-4">
-                    <div className="font-black text-zorvex-text dark:text-zorvex-dark-text">
-                      {r.title}
-                    </div>
-                    <div className="text-[11px] font-mono text-zorvex-text-muted dark:text-zorvex-dark-text-muted mt-0.5">
-                      {r.resource_id}
-                    </div>
-                  </td>
+        {loading ? (
+          <ClayTableSkeleton rows={6} />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[650px] text-left text-xs">
+              <thead className="surface-recessed text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary font-mono uppercase tracking-wider text-[11px] font-bold border-b border-zorvex-border/80 dark:border-zorvex-dark-border/80">
+                <tr>
+                  <th className="py-3.5 px-4">Opportunity & Resource</th>
+                  <th className="py-3.5 px-4">Service / Region</th>
+                  <th className="py-3.5 px-4">Lifecycle Status</th>
+                  <th className="py-3.5 px-4">Projected Savings</th>
+                  <th className="py-3.5 px-4">Confidence</th>
+                  <th className="py-3.5 px-4 text-right">Lifecycle Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zorvex-border/60 dark:divide-zorvex-dark-border/60 font-medium">
+                {records.map((r) => (
+                  <tr key={r.id} className="hover:bg-amber-500/[0.04] dark:hover:bg-amber-400/[0.04] transition-all duration-150 group">
+                    <td className="py-3.5 px-4">
+                      <div className="font-black text-zorvex-text dark:text-zorvex-dark-text">
+                        {r.title}
+                      </div>
+                      <div className="text-[11px] font-mono text-zorvex-text-muted dark:text-zorvex-dark-text-muted mt-0.5">
+                        {r.resource_id}
+                      </div>
+                    </td>
 
-                  <td className="py-3.5 px-4 whitespace-nowrap">
-                    <div className="font-bold text-zorvex-text dark:text-zorvex-dark-text">{r.service}</div>
-                    <div className="text-[10px] text-zorvex-text-muted dark:text-zorvex-dark-text-muted">{r.region} • <span className="font-mono">{r.account_id}</span></div>
-                  </td>
+                    <td className="py-3.5 px-4 whitespace-nowrap">
+                      <div className="font-bold text-zorvex-text dark:text-zorvex-dark-text">{r.service}</div>
+                      <div className="text-[10px] text-zorvex-text-muted dark:text-zorvex-dark-text-muted">{r.region} • <span className="font-mono">{r.account_id}</span></div>
+                    </td>
 
-                  <td className="py-3.5 px-4 whitespace-nowrap">
-                    <span className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border ${
-                      r.status === 'VERIFIED'
-                        ? 'bg-zorvex-forest-soft dark:bg-zorvex-forest-dark-soft text-zorvex-forest dark:text-zorvex-forest-highlight border-zorvex-forest/40'
-                        : r.status === 'IMPLEMENTED'
-                        ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30'
-                        : r.status === 'APPROVED'
-                        ? 'bg-zorvex-forest-soft dark:bg-zorvex-forest-dark-soft text-zorvex-forest dark:text-zorvex-forest-highlight border-zorvex-forest/25'
-                        : r.status === 'DISMISSED'
-                        ? 'bg-zorvex-text-muted/15 text-zorvex-text-muted dark:text-zorvex-dark-text-muted border-zorvex-text-muted/30'
-                        : 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30'
-                    }`}>
-                      {r.status}
-                    </span>
-                  </td>
+                    <td className="py-3.5 px-4 whitespace-nowrap">
+                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono font-bold tracking-wider surface-recessed border ${
+                        r.status === 'VERIFIED'
+                          ? 'text-emerald-700 dark:text-emerald-400 border-emerald-500/30'
+                          : r.status === 'IMPLEMENTED'
+                          ? 'text-teal-700 dark:text-teal-400 border-teal-500/30'
+                          : r.status === 'APPROVED'
+                          ? 'text-amber-700 dark:text-amber-400 border-amber-500/30'
+                          : r.status === 'DISMISSED'
+                          ? 'text-slate-500 dark:text-slate-400 border-slate-500/30'
+                          : 'text-amber-600 dark:text-amber-400 border-amber-500/30'
+                      }`}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${
+                          r.status === 'VERIFIED'
+                            ? 'bg-emerald-500 animate-pulse'
+                            : r.status === 'IMPLEMENTED'
+                            ? 'bg-teal-500'
+                            : r.status === 'APPROVED'
+                            ? 'bg-amber-500 animate-pulse'
+                            : r.status === 'DISMISSED'
+                            ? 'bg-slate-400'
+                            : 'bg-amber-500 animate-pulse'
+                        }`} />
+                        <span>{r.status}</span>
+                      </span>
+                    </td>
 
                   <td className="py-3.5 px-4 whitespace-nowrap font-mono font-bold">
                     <div className="text-zorvex-forest dark:text-zorvex-forest-highlight">
@@ -314,6 +329,7 @@ export default function SavingsLedgerView() {
             </tbody>
           </table>
         </div>
+        )}
       </div>
 
     </div>

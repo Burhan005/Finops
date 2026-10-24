@@ -3,11 +3,14 @@ import React from 'react';
 /**
  * ZorvexLogo
  * 
- * Official ZORVEX Claymorphic Brand Identity:
- * - Volumetric 3D tactile Z emblem with sculpted ivory & forest folds and glowing forest highlight seam
- * - Soft-touch bespoke typography matching the official identity system
- * - Supports sizes: 'sm' (header/navbar), 'md' (standard), 'lg' (showcases), 'xl' (hero)
- * - Contrast-aware: seamlessly adapts to light/dark themes with optional forceLightText
+ * Official ZORVEX Identity System (Synchronized with downloaded brand kit):
+ * - variant="mark" (Default): Clean horizontal brand lockup using the official Zorvex Mark
+ *   - Light Mode: Amber #FF9A1A + Charcoal #23272C
+ *   - Dark Mode: Amber #FF9A1A + Pure White #FFFFFF
+ * - variant="stacked": High-resolution vertical lockup for Hero sections & landing showcases
+ *   - Light Mode: /zorvex-logo-stacked.png
+ *   - Dark Mode: /zorvex-logo-stacked-reversed.png
+ * - Fully vector-sharp, zero green artifacts, seamless light/dark mode adaptation.
  */
 export default function ZorvexLogo({ 
   size = 'md', 
@@ -15,70 +18,103 @@ export default function ZorvexLogo({
   showTagline = true,
   className = '',
   forceLightText = false,
-  variant = '3d' // '3d' | 'tile' | 'flat'
+  variant = 'mark' // 'mark' | 'stacked'
 }) {
-  // Dimensions based on size
   const iconSizes = {
-    sm: 'w-8 h-8',
-    md: 'w-10 h-10',
-    lg: 'w-14 h-14',
-    xl: 'w-20 h-20'
+    sm: 'w-7 h-7',
+    md: 'w-9 h-9',
+    lg: 'w-12 h-12',
+    xl: 'w-16 h-16',
+    '2xl': 'w-20 h-20'
   };
 
   const textSizes = {
     sm: 'text-base',
-    md: 'text-xl',
+    md: 'text-lg',
     lg: 'text-2xl',
     xl: 'text-3xl'
   };
 
-  return (
-    <div className={`flex items-center gap-3 ${className}`}>
-      {/* Official Volumetric Claymorphic 3D Emblem */}
-      <div 
-        className={`${iconSizes[size] || iconSizes.md} relative flex items-center justify-center flex-shrink-0 group select-none`}
-      >
-        {variant === 'tile' ? (
+  // Stacked Logo Variant (for Landing Page Hero / High-Impact Showcases)
+  if (variant === 'stacked') {
+    const stackedWidths = {
+      sm: 'max-w-[140px]',
+      md: 'max-w-[180px]',
+      lg: 'max-w-[240px]',
+      xl: 'max-w-[320px]',
+      hero: 'max-w-[380px] sm:max-w-[440px]'
+    };
+
+    return (
+      <div className={`flex flex-col items-center select-none ${className}`}>
+        {forceLightText ? (
           <img 
-            src="/favicon_exact_tile.png?v=4" 
-            alt="ZORVEX App Tile" 
-            className="w-full h-full object-contain rounded-2xl shadow-lg transition-transform duration-300 group-hover:scale-105" 
+            src="/zorvex-logo-stacked-reversed.png" 
+            alt="ZORVEX - See Beyond Spend." 
+            className={`w-full h-auto object-contain ${stackedWidths[size] || stackedWidths.md}`}
           />
         ) : (
-          <img 
-            src="/zorvex_emblem_3d_transparent.png?v=5" 
-            alt="ZORVEX 3D Emblem" 
-            className="w-full h-full object-contain filter drop-shadow-[0_4px_10px_rgba(0,0,0,0.3)] transition-transform duration-300 group-hover:scale-105" 
-          />
+          <>
+            <img 
+              src="/zorvex-logo-stacked.png" 
+              alt="ZORVEX - See Beyond Spend." 
+              className={`w-full h-auto object-contain block dark:hidden ${stackedWidths[size] || stackedWidths.md}`}
+            />
+            <img 
+              src="/zorvex-logo-stacked-reversed.png" 
+              alt="ZORVEX - See Beyond Spend." 
+              className={`w-full h-auto object-contain hidden dark:block ${stackedWidths[size] || stackedWidths.md}`}
+            />
+          </>
         )}
       </div>
+    );
+  }
 
-      {/* Bespoke Soft-Touch Wordmark */}
+  // Horizontal Mark & Typography Variant (for Navbars, Headers, Modals)
+  return (
+    <div className={`flex items-center gap-2.5 ${className}`}>
+      {/* Official Zorvex Adaptive Vector Mark */}
+      <div 
+        className={`${iconSizes[size] || iconSizes.md} relative flex items-center justify-center flex-shrink-0 select-none transition-transform duration-200 group-hover:scale-105`}
+      >
+        <svg 
+          viewBox="5 -20 240 240" 
+          fill="none" 
+          className="w-full h-full filter drop-shadow-[0_2px_4px_rgba(0,0,0,0.12)]"
+          style={{ shapeRendering: 'geometricPrecision' }}
+        >
+          {/* Top Amber Sweep (Universal) */}
+          <path 
+            fill="#FF9A1A" 
+            d="M 22 78 C 62 44 130 30 226 30 C 205 56 152 100 103 128 L 160 71 Q 167 64 152 64 C 132 64 80 64 22 78 Z"
+          />
+          {/* Bottom Sweep: Adapts to Dark Mode / Light Mode */}
+          <path 
+            className={forceLightText ? "fill-white" : "fill-[#23272C] dark:fill-white"}
+            d="M 228 122 C 188 156 120 170 24 170 C 45 144 98 100 147 72 L 90 129 Q 83 136 98 136 C 118 136 170 136 228 122 Z"
+          />
+        </svg>
+      </div>
+
+      {/* Official Typography Wordmark & Tagline */}
       {showWordmark && (
         <div className="flex flex-col select-none">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
             <span 
               className={`${textSizes[size] || textSizes.md} font-black tracking-tight leading-none ${
-                forceLightText ? 'text-[#FFFCF5]' : 'text-zorvex-text dark:text-zorvex-dark-text'
+                forceLightText ? 'text-white' : 'text-zorvex-text dark:text-zorvex-dark-text'
               }`}
               style={{
-                letterSpacing: '-0.02em',
-                fontFeatureSettings: '"cv02", "cv03", "cv04"'
+                letterSpacing: '-0.025em'
               }}
             >
               ZORVEX
             </span>
-            <span className={`hidden sm:inline-block px-1.5 py-0.5 text-[9px] font-black tracking-widest rounded-md uppercase leading-none ${
-              forceLightText 
-                ? 'bg-zorvex-forest-soft/30 text-[#FFFCF5] border border-zorvex-forest/40' 
-                : 'bg-zorvex-forest-soft text-zorvex-forest dark:bg-zorvex-dark-forest-soft dark:text-zorvex-dark-forest border border-zorvex-forest/20'
-            }`}>
-              ENTERPRISE
-            </span>
           </div>
           {showTagline && (
-            <p className={`hidden sm:block text-[11px] font-semibold mt-0.5 tracking-tight ${
-              forceLightText ? 'text-zorvex-dark-text-secondary' : 'text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary'
+            <p className={`hidden sm:block text-[10px] font-semibold mt-0.5 tracking-tight ${
+              forceLightText ? 'text-slate-400' : 'text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary'
             }`}>
               See Beyond Spend.
             </p>

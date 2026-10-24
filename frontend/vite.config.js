@@ -11,7 +11,8 @@ export default defineConfig({
         manualChunks: {
           'vendor-react': ['react', 'react-dom', 'react-router-dom'],
           'vendor-charts': ['chart.js', 'react-chartjs-2'],
-          'vendor-icons': ['lucide-react']
+          'vendor-icons': ['lucide-react'],
+          'vendor-aws-icons': ['@nxavis/aws-icons']
         }
       }
     }

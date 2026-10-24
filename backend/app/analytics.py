@@ -81,6 +81,245 @@ def deduce_service_cause(
     return "Steady ongoing baseline operations"
 
 
+def _extract_ec2_size(usage_types: List[str]) -> str:
+    for u in usage_types:
+        if 'BoxUsage:' in u:
+            return u.split('BoxUsage:')[-1]
+        elif ':' in u and any(f in u for f in ['t2.', 't3.', 't3a.', 't4g.', 'c5.', 'm5.', 'r5.']):
+            return u.split(':')[-1]
+    return ""
+
+
+def _match_tax(ctx: dict) -> Optional[str]:
+    ltypes = ctx['ltypes_set']
+    is_tax = (
+        'Tax' in ltypes or
+        any(t.lower() == 'tax' for t in ltypes) or
+        ctx['res_id'].startswith('TAX-') or
+        ctx['service'] in ('Taxes & Surcharges', 'Tax') or
+        'gst' in ctx['ut_lower'] or
+        'tax' in ctx['ut_lower']
+    )
+    if not is_tax:
+        return None
+    cost_base, cost_target, diff = ctx['cost_base'], ctx['cost_target'], ctx['diff']
+    if cost_base > 0 and cost_target == 0:
+        return f"INVOICE TAX: Statutory tax levy billed on baseline period (${cost_base:.2f}) - invoice adjustment, not infrastructure change"
+    elif cost_base == 0 and cost_target > 0:
+        return f"INVOICE TAX: Statutory tax levy billed on target period (+${cost_target:.2f})"
+    elif diff != 0:
+        return f"INVOICE TAX: Statutory tax adjustment ({'+' if diff > 0 else ''}${diff:.2f})"
+    return "INVOICE TAX: Steady statutory tax allocation"
+
+
+def _match_commitment(ctx: dict) -> Optional[str]:
+    ltypes = ctx['ltypes_set']
+    is_commitment = (
+        any(t in ('RIFee', 'SavingsPlanRecurringFee', 'Fee') for t in ltypes) or
+        'rifee' in ctx['ut_lower'] or
+        ctx['term'] == 'Reserved' or
+        (ctx['res_id'].startswith('No-Resource-ID') and any(s in ctx['service'] for s in ['RDS', 'EC2', 'Redshift', 'OpenSearch']) and any(t in ('RIFee', 'Fee') for t in ltypes))
+    )
+    if not is_commitment:
+        return None
+    fee_name = "Reserved Instance" if (any(t == 'RIFee' for t in ltypes) or 'rifee' in ctx['ut_lower'] or ctx['term'] == 'Reserved') else "Commitment"
+    cost_base, cost_target, diff = ctx['cost_base'], ctx['cost_target'], ctx['diff']
+    if cost_base > 0 and cost_target == 0:
+        return f"COMMITMENT CHARGE: Monthly {fee_name} recurring fee billed on baseline period (${cost_base:.2f}) - contract commitment, not infrastructure deletion"
+    elif cost_base == 0 and cost_target > 0:
+        return f"COMMITMENT CHARGE: Monthly {fee_name} recurring fee billed on target period (+${cost_target:.2f})"
+    elif diff != 0:
+        return f"COMMITMENT CHARGE: {fee_name} recurring fee variance ({'+' if diff > 0 else ''}${diff:.2f})"
+    return f"COMMITMENT CHARGE: Steady {fee_name} recurring allocation"
+
+
+def _match_unallocated(ctx: dict) -> Optional[str]:
+    if not ctx['res_id'].startswith('No-Resource-ID'):
+        return None
+    service_label = ctx['service'] or 'workload'
+    cost_base, cost_target, diff = ctx['cost_base'], ctx['cost_target'], ctx['diff']
+    if cost_base > 0 and cost_target == 0:
+        return f"UNALLOCATED USAGE: Unassigned operational usage on {service_label} ceased (-${cost_base:.4f}) - usage-level variance, not physical instance"
+    elif cost_base == 0 and cost_target > 0:
+        return f"UNALLOCATED USAGE: Unassigned operational usage on {service_label} began (+${cost_target:.4f})"
+    elif diff != 0:
+        return f"UNALLOCATED USAGE: Unassigned operational usage on {service_label} shifted ({'+' if diff > 0 else ''}${diff:.4f})"
+    return f"UNALLOCATED USAGE: Steady {service_label} unassigned baseline"
+
+
+def _match_dns(ctx: dict) -> Optional[str]:
+    if 'hostedzone' in ctx['res_lower'] and 'hostedzone' in ctx['ut_lower']:
+        if ctx['cost_base'] > 0 and ctx['cost_target'] == 0:
+            return f"DNS CONFIGURATION: Monthly Route 53 hosted zone fee billed on baseline period (${ctx['cost_base']:.2f}) - active hosted zone"
+    return None
+
+
+def _match_storage_asset(ctx: dict) -> Optional[str]:
+    res_lower, ut_lower, service_lower = ctx['res_lower'], ctx['ut_lower'], ctx['service'].lower()
+    is_storage = (
+        ':snapshot/' in res_lower or
+        ':snapshot:' in res_lower or
+        ctx['res_id'].startswith('snap-') or
+        'timedstorage' in ut_lower or
+        ('backup' in ut_lower and ('rds' in service_lower or ':db:' in res_lower))
+    )
+    if is_storage and ctx['cost_base'] > 0 and ctx['cost_target'] == 0:
+        return f"STORAGE RETENTION: Backup/snapshot storage volume ceased incurring charges{ctx['last_str']} (Saved -${ctx['cost_base']:.4f})"
+    return None
+
+
+def _match_request_service(ctx: dict) -> Optional[str]:
+    is_req = (
+        ctx['service'] in ('Amazon SNS', 'Amazon SQS', 'Amazon CloudFront') or
+        any(k in ctx['ut_lower'] for k in ['requests', 'queries', 'datapayments', 'apicalls']) or
+        ctx['res_lower'].startswith(('arn:aws:sns:', 'arn:aws:sqs:', 'arn:aws:cloudfront:'))
+    )
+    if is_req and ctx['cost_base'] > 0 and ctx['cost_target'] == 0:
+        return f"USAGE ACTIVITY: Operational traffic or API calls subsided to zero on {ctx['service']} (-${ctx['cost_base']:.4f})"
+    return None
+
+
+def _match_ec2(ctx: dict) -> Optional[str]:
+    if not ctx['res_id'].startswith('i-'):
+        return None
+    inst_size = _extract_ec2_size(ctx['usage_types'])
+    size_lbl = f" ({inst_size})" if inst_size else ""
+    cost_base, cost_target, diff, last_str = ctx['cost_base'], ctx['cost_target'], ctx['diff'], ctx['last_str']
+    if cost_base > 0 and cost_target == 0:
+        return f"TERMINATED: Server instance stopped & deleted{last_str} (No ongoing fees)"
+    elif cost_base == 0 and cost_target > 0:
+        return f"EC2 INSTANCE: Newly launched server{size_lbl} provisioned on-demand (+${cost_target:.4f}/day)"
+    elif diff < -0.005:
+        if ctx['sp_arn'] or 'savingsplan' in ctx['term'].lower() or 'savingsplan' in ctx['line_type'].lower():
+            return f"COST OPTIMIZATION: Applied Compute Savings Plan (-${abs(diff):.2f}/day saved)"
+        return f"USAGE REDUCTION: Server runtime hours decreased (-${abs(diff):.4f}/day)"
+    elif diff > 0.005:
+        return f"USAGE SPIKE: Higher running hours or capacity on server{size_lbl} (+${diff:.4f}/day)"
+    return f"EC2 INSTANCE: Active server{size_lbl} (Steady-state baseline operation)"
+
+
+def _match_ebs(ctx: dict) -> Optional[str]:
+    if not (ctx['res_id'].startswith('vol-') or 'volumeusage' in ctx['ut_lower']):
+        return None
+    vol_type = "gp3" if "gp3" in ctx['ut_lower'] else ("gp2" if "gp2" in ctx['ut_lower'] else "gp3")
+    cost_base, cost_target, diff, last_str = ctx['cost_base'], ctx['cost_target'], ctx['diff'], ctx['last_str']
+    if cost_base > 0 and cost_target == 0:
+        return f"DELETED DISK: {vol_type} root volume detached & deleted{last_str}"
+    elif cost_base == 0 and cost_target > 0:
+        return f"EBS STORAGE: {vol_type} root storage volume attached to EC2 instance (+${cost_target:.4f}/day)"
+    elif diff > 0.0005:
+        return f"EBS GROWTH: Volume storage or IOPS capacity expansion (+${diff:.4f}/day)"
+    elif diff < -0.0005:
+        return f"EBS REDUCTION: Volume storage scaled down (-${abs(diff):.4f}/day)"
+    return f"EBS STORAGE: Steady-state {vol_type} storage volume"
+
+
+def _match_network(ctx: dict) -> Optional[str]:
+    if not ('network-interface' in ctx['res_lower'] or 'eni-' in ctx['res_lower'] or 'publicipv4' in ctx['ut_lower']):
+        return None
+    cost_base, cost_target, diff, last_str = ctx['cost_base'], ctx['cost_target'], ctx['diff'], ctx['last_str']
+    if cost_base > 0 and cost_target == 0:
+        return f"RELEASED IP: Public IPv4 address released upon instance shutdown{last_str}"
+    elif cost_base == 0 and cost_target > 0:
+        return f"VPC NETWORKING: Public IPv4 address assigned to ENI (+${cost_target:.4f}/day)"
+    elif diff > 0.0005:
+        return f"VPC NETWORKING: In-use Public IPv4 address hours surge (+${diff:.4f}/day)"
+    elif diff < -0.0005:
+        return f"VPC NETWORKING: Public IPv4 address released / detached (-${abs(diff):.4f}/day)"
+    return "VPC NETWORKING: Public IPv4 address attached to running ENI"
+
+
+def _match_rds(ctx: dict) -> Optional[str]:
+    if not ('rds' in ctx['res_lower'] or 'database' in ctx['service'].lower()):
+        return None
+    cost_base, cost_target, diff, last_str = ctx['cost_base'], ctx['cost_target'], ctx['diff'], ctx['last_str']
+    if cost_base > 0 and cost_target == 0:
+        return f"DECOMMISSIONED: Database instance deleted{last_str}"
+    elif cost_base == 0 and cost_target > 0:
+        return f"DATABASE: Managed RDS instance provisioned (+${cost_target:.2f})"
+    elif diff < -0.005:
+        if 'multi-az' in ctx['ut_lower'] and 'instanceusage' in ctx['ut_lower']:
+            return f"ARCHITECTURE CHANGE: Switched from Multi-AZ to Single-AZ (-${abs(diff):.2f} saved)"
+        return f"DATABASE USAGE: Workload activity or storage reduced (-${abs(diff):.2f})"
+    elif diff > 0.005:
+        return f"DATABASE SPIKE: Storage auto-scaling or query workload surge (+${diff:.2f})"
+    return "DATABASE: Steady-state relational database"
+
+
+def _match_cloudfront(ctx: dict) -> Optional[str]:
+    if not ('distribution' in ctx['res_lower'] or 'cloudfront' in ctx['service'].lower()):
+        return None
+    diff = ctx['diff']
+    if diff > 0.005:
+        return f"CDN EGRESS: High viewer bandwidth egress & HTTPS API requests (+${diff:.2f})"
+    elif diff < -0.005:
+        return f"CDN NORMALIZATION: Viewer egress and request traffic subsided (-${abs(diff):.2f})"
+    return "CLOUDFRONT: Baseline content delivery distribution"
+
+
+def _match_alb(ctx: dict) -> Optional[str]:
+    if not ('app/' in ctx['res_lower'] or 'elb' in ctx['service'].lower()):
+        return None
+    diff = ctx['diff']
+    if diff > 0.005:
+        return f"LOAD BALANCER: ALB LCU capacity units surge & client traffic processed (+${diff:.2f})"
+    elif diff < -0.005:
+        return f"LOAD BALANCER: LCU consumption and client traffic normalized (-${abs(diff):.2f})"
+    return "LOAD BALANCER: Baseline application traffic balancing"
+
+
+def _match_nat(ctx: dict) -> Optional[str]:
+    if not 'nat-' in ctx['res_lower']:
+        return None
+    diff = ctx['diff']
+    if diff > 0.005:
+        return f"NAT GATEWAY: Private VPC subnet internet egress spike (+${diff:.2f})"
+    elif diff < -0.005:
+        return f"NAT GATEWAY: Private VPC data transfer subsided (-${abs(diff):.2f})"
+    return "NAT GATEWAY: Steady VPC outbound translation"
+
+
+def _match_s3(ctx: dict) -> Optional[str]:
+    if not ('s3' in ctx['service'].lower() or 'cur-report' in ctx['res_lower'] or 'bucket' in ctx['res_lower']):
+        return None
+    diff = ctx['diff']
+    if diff > 0.0005:
+        return f"OBJECT STORAGE: Growth in stored data or API PUT/POST requests (+${diff:.4f})"
+    elif diff < -0.0005:
+        return f"STORAGE CLEANUP: Objects deleted or expired via lifecycle rules (-${abs(diff):.4f})"
+    return "OBJECT STORAGE: Steady-state bucket storage & API requests"
+
+
+def _match_kms(ctx: dict) -> Optional[str]:
+    if not ('kms' in ctx['service'].lower() or 'key/' in ctx['res_lower']):
+        return None
+    diff = ctx['diff']
+    if diff > 0.0005:
+        return f"KEY MANAGEMENT: Cryptographic API requests & KMS customer key (+${diff:.4f})"
+    elif diff < -0.0005:
+        return f"KEY MANAGEMENT: Cryptographic API calls decreased (-${abs(diff):.4f})"
+    return "KEY MANAGEMENT: Baseline KMS key hosting"
+
+
+ROOT_CAUSE_MATCHERS = [
+    _match_tax,
+    _match_commitment,
+    _match_unallocated,
+    _match_dns,
+    _match_storage_asset,
+    _match_request_service,
+    _match_ec2,
+    _match_ebs,
+    _match_network,
+    _match_rds,
+    _match_cloudfront,
+    _match_alb,
+    _match_nat,
+    _match_s3,
+    _match_kms,
+]
+
+
 def deduce_resource_root_cause(
     res_id: str,
     cost_base: float,
@@ -94,195 +333,38 @@ def deduce_resource_root_cause(
     last_seen: str = '',
     line_types: Optional[Any] = None
 ) -> str:
-    """Individual resource engineering root cause synthesis matching finops_analyzer.py"""
+    """Config-driven individual resource engineering root cause synthesis."""
     usage_types = usage_types or []
-    ut_lower = " ".join(u.lower() for u in usage_types)
-    res_lower = res_id.lower()
-    last_str = f" [Last active: {last_seen}]" if last_seen else ""
-
     ltypes_set = set(line_types or [])
     if line_type:
         ltypes_set.add(line_type)
 
-    # 0a. Invoiced Statutory Taxes (India GST, etc.)
-    is_tax = (
-        'Tax' in ltypes_set or
-        any(t.lower() == 'tax' for t in ltypes_set) or
-        res_id.startswith('TAX-') or
-        service in ('Taxes & Surcharges', 'Tax') or
-        'gst' in ut_lower or
-        'tax' in ut_lower
-    )
-    if is_tax:
-        if cost_base > 0 and cost_target == 0:
-            return f"INVOICE TAX: Statutory tax levy billed on baseline period (${cost_base:.2f}) - invoice adjustment, not infrastructure change"
-        elif cost_base == 0 and cost_target > 0:
-            return f"INVOICE TAX: Statutory tax levy billed on target period (+${cost_target:.2f})"
-        elif diff != 0:
-            return f"INVOICE TAX: Statutory tax adjustment ({'+' if diff > 0 else ''}${diff:.2f})"
-        return "INVOICE TAX: Steady statutory tax allocation"
+    ctx = {
+        'res_id': res_id,
+        'res_lower': res_id.lower(),
+        'cost_base': cost_base,
+        'cost_target': cost_target,
+        'diff': diff,
+        'usage_types': usage_types,
+        'ut_lower': " ".join(u.lower() for u in usage_types),
+        'service': service,
+        'term': term,
+        'line_type': line_type,
+        'sp_arn': sp_arn,
+        'last_str': f" [Last active: {last_seen}]" if last_seen else "",
+        'ltypes_set': ltypes_set,
+    }
 
-    # 0b. Reserved Instance and Savings Plan Commitment Recurring Fees
-    is_commitment = (
-        any(t in ('RIFee', 'SavingsPlanRecurringFee', 'Fee') for t in ltypes_set) or
-        'rifee' in ut_lower or
-        term == 'Reserved' or
-        (res_id.startswith('No-Resource-ID') and any(s in service for s in ['RDS', 'EC2', 'Redshift', 'OpenSearch']) and any(t in ('RIFee', 'Fee') for t in ltypes_set))
-    )
-    if is_commitment:
-        fee_name = "Reserved Instance" if (any(t == 'RIFee' for t in ltypes_set) or 'rifee' in ut_lower or term == 'Reserved') else "Commitment"
-        if cost_base > 0 and cost_target == 0:
-            return f"COMMITMENT CHARGE: Monthly {fee_name} recurring fee billed on baseline period (${cost_base:.2f}) - contract commitment, not infrastructure deletion"
-        elif cost_base == 0 and cost_target > 0:
-            return f"COMMITMENT CHARGE: Monthly {fee_name} recurring fee billed on target period (+${cost_target:.2f})"
-        elif diff != 0:
-            return f"COMMITMENT CHARGE: {fee_name} recurring fee variance ({'+' if diff > 0 else ''}${diff:.2f})"
-        return f"COMMITMENT CHARGE: Steady {fee_name} recurring allocation"
+    for matcher in ROOT_CAUSE_MATCHERS:
+        res = matcher(ctx)
+        if res is not None:
+            return res
 
-    # 0c. Account-Level Unallocated Operational Usage (e.g. GuardDuty, CloudWatch without resource ID)
-    if res_id.startswith('No-Resource-ID'):
-        if cost_base > 0 and cost_target == 0:
-            return f"UNALLOCATED USAGE: Unassigned operational usage on {service or 'workload'} ceased (-${cost_base:.4f}) - usage-level variance, not physical instance"
-        elif cost_base == 0 and cost_target > 0:
-            return f"UNALLOCATED USAGE: Unassigned operational usage on {service or 'workload'} began (+${cost_target:.4f})"
-        elif diff != 0:
-            return f"UNALLOCATED USAGE: Unassigned operational usage on {service or 'workload'} shifted ({'+' if diff > 0 else ''}${diff:.4f})"
-        return f"UNALLOCATED USAGE: Steady {service or 'workload'} unassigned baseline"
-
-    # 0d. Periodic Domain & Configuration Fees (e.g. Route 53 Hosted Zone monthly domain fee)
-    if 'hostedzone' in res_lower and 'hostedzone' in ut_lower:
-        if cost_base > 0 and cost_target == 0:
-            return f"DNS CONFIGURATION: Monthly Route 53 hosted zone fee billed on baseline period (${cost_base:.2f}) - active hosted zone"
-
-    # 0e. Backup & Snapshot Storage Assets (Storage lifecycles, not compute terminations)
-    is_storage_asset = (
-        ':snapshot/' in res_lower or
-        ':snapshot:' in res_lower or
-        res_id.startswith('snap-') or
-        'timedstorage' in ut_lower or
-        ('backup' in ut_lower and ('rds' in service.lower() or ':db:' in res_lower))
-    )
-    if is_storage_asset and cost_base > 0 and cost_target == 0:
-        return f"STORAGE RETENTION: Backup/snapshot storage volume ceased incurring charges{last_str} (Saved -${cost_base:.4f})"
-
-    # 0f. API / Request Services Activity Subsidence (SNS, SQS, CloudFront request traffic)
-    is_request_service = (
-        service in ('Amazon SNS', 'Amazon SQS', 'Amazon CloudFront') or
-        any(k in ut_lower for k in ['requests', 'queries', 'datapayments', 'apicalls']) or
-        res_lower.startswith(('arn:aws:sns:', 'arn:aws:sqs:', 'arn:aws:cloudfront:'))
-    )
-    if is_request_service and cost_base > 0 and cost_target == 0:
-        return f"USAGE ACTIVITY: Operational traffic or API calls subsided to zero on {service} (-${cost_base:.4f})"
-
-    # Helper to extract EC2 instance size
-    inst_size = ""
-    for u in usage_types:
-        if 'BoxUsage:' in u:
-            inst_size = u.split('BoxUsage:')[-1]
-            break
-        elif ':' in u and any(f in u for f in ['t2.', 't3.', 't3a.', 't4g.', 'c5.', 'm5.', 'r5.']):
-            inst_size = u.split(':')[-1]
-            break
-
-    # 1. EC2 Instances
-    if res_id.startswith('i-'):
-        size_lbl = f" ({inst_size})" if inst_size else ""
-        if cost_base > 0 and cost_target == 0:
-            return f"TERMINATED: Server instance stopped & deleted{last_str} (No ongoing fees)"
-        elif cost_base == 0 and cost_target > 0:
-            return f"EC2 INSTANCE: Newly launched server{size_lbl} provisioned on-demand (+${cost_target:.4f}/day)"
-        elif diff < -0.005:
-            if sp_arn or 'savingsplan' in term.lower() or 'savingsplan' in line_type.lower():
-                return f"COST OPTIMIZATION: Applied Compute Savings Plan (-${abs(diff):.2f}/day saved)"
-            return f"USAGE REDUCTION: Server runtime hours decreased (-${abs(diff):.4f}/day)"
-        elif diff > 0.005:
-            return f"USAGE SPIKE: Higher running hours or capacity on server{size_lbl} (+${diff:.4f}/day)"
-        return f"EC2 INSTANCE: Active server{size_lbl} (Steady-state baseline operation)"
-
-    # 2. EBS Block Storage Volumes
-    if res_id.startswith('vol-') or 'volumeusage' in ut_lower:
-        vol_type = "gp3" if "gp3" in ut_lower else ("gp2" if "gp2" in ut_lower else "gp3")
-        if cost_base > 0 and cost_target == 0:
-            return f"DELETED DISK: {vol_type} root volume detached & deleted{last_str}"
-        elif cost_base == 0 and cost_target > 0:
-            return f"EBS STORAGE: {vol_type} root storage volume attached to EC2 instance (+${cost_target:.4f}/day)"
-        elif diff > 0.0005:
-            return f"EBS GROWTH: Volume storage or IOPS capacity expansion (+${diff:.4f}/day)"
-        elif diff < -0.0005:
-            return f"EBS REDUCTION: Volume storage scaled down (-${abs(diff):.4f}/day)"
-        return f"EBS STORAGE: Steady-state {vol_type} storage volume"
-
-    # 3. VPC Network Interfaces / Public IPv4
-    if 'network-interface' in res_lower or 'eni-' in res_lower or 'publicipv4' in ut_lower:
-        if cost_base > 0 and cost_target == 0:
-            return f"RELEASED IP: Public IPv4 address released upon instance shutdown{last_str}"
-        elif cost_base == 0 and cost_target > 0:
-            return f"VPC NETWORKING: Public IPv4 address assigned to ENI (+${cost_target:.4f}/day)"
-        elif diff > 0.0005:
-            return f"VPC NETWORKING: In-use Public IPv4 address hours surge (+${diff:.4f}/day)"
-        elif diff < -0.0005:
-            return f"VPC NETWORKING: Public IPv4 address released / detached (-${abs(diff):.4f}/day)"
-        return "VPC NETWORKING: Public IPv4 address attached to running ENI"
-
-    # 4. Amazon RDS
-    if 'rds' in res_lower or 'database' in service.lower():
-        if cost_base > 0 and cost_target == 0:
-            return f"DECOMMISSIONED: Database instance deleted{last_str}"
-        elif cost_base == 0 and cost_target > 0:
-            return f"DATABASE: Managed RDS instance provisioned (+${cost_target:.2f})"
-        elif diff < -0.005:
-            if 'multi-az' in ut_lower and 'instanceusage' in ut_lower:
-                return f"ARCHITECTURE CHANGE: Switched from Multi-AZ to Single-AZ (-${abs(diff):.2f} saved)"
-            return f"DATABASE USAGE: Workload activity or storage reduced (-${abs(diff):.2f})"
-        elif diff > 0.005:
-            return f"DATABASE SPIKE: Storage auto-scaling or query workload surge (+${diff:.2f})"
-        return "DATABASE: Steady-state relational database"
-
-    # 5. CloudFront CDN
-    if 'distribution' in res_lower or 'cloudfront' in service.lower():
-        if diff > 0.005:
-            return f"CDN EGRESS: High viewer bandwidth egress & HTTPS API requests (+${diff:.2f})"
-        elif diff < -0.005:
-            return f"CDN NORMALIZATION: Viewer egress and request traffic subsided (-${abs(diff):.2f})"
-        return "CLOUDFRONT: Baseline content delivery distribution"
-
-    # 6. Elastic Load Balancer (ALB)
-    if 'app/' in res_lower or 'elb' in service.lower():
-        if diff > 0.005:
-            return f"LOAD BALANCER: ALB LCU capacity units surge & client traffic processed (+${diff:.2f})"
-        elif diff < -0.005:
-            return f"LOAD BALANCER: LCU consumption and client traffic normalized (-${abs(diff):.2f})"
-        return "LOAD BALANCER: Baseline application traffic balancing"
-
-    # 7. NAT Gateway
-    if 'nat-' in res_lower:
-        if diff > 0.005:
-            return f"NAT GATEWAY: Private VPC subnet internet egress spike (+${diff:.2f})"
-        elif diff < -0.005:
-            return f"NAT GATEWAY: Private VPC data transfer subsided (-${abs(diff):.2f})"
-        return "NAT GATEWAY: Steady VPC outbound translation"
-
-    # 8. S3 Object Storage
-    if 's3' in service.lower() or 'cur-report' in res_lower or 'bucket' in res_lower:
-        if diff > 0.0005:
-            return f"OBJECT STORAGE: Growth in stored data or API PUT/POST requests (+${diff:.4f})"
-        elif diff < -0.0005:
-            return f"STORAGE CLEANUP: Objects deleted or expired via lifecycle rules (-${abs(diff):.4f})"
-        return "OBJECT STORAGE: Steady-state bucket storage & API requests"
-
-    # 9. AWS KMS (Key Management Service)
-    if 'kms' in service.lower() or 'key/' in res_lower:
-        if diff > 0.0005:
-            return f"KEY MANAGEMENT: Cryptographic API requests & KMS customer key (+${diff:.4f})"
-        elif diff < -0.0005:
-            return f"KEY MANAGEMENT: Cryptographic API calls decreased (-${abs(diff):.4f})"
-        return "KEY MANAGEMENT: Baseline KMS key hosting"
-
-    # 10. Fallback
+    # Fallback
     if cost_base == 0 and cost_target > 0:
         return f"NEW WORKLOAD: Newly provisioned {service or 'AWS'} resource (+${cost_target:.4f})"
     elif cost_base > 0 and cost_target == 0:
-        return f"DECOMMISSIONED: Resource terminated or removed{last_str} (Saved -${cost_base:.4f})"
+        return f"DECOMMISSIONED: Resource terminated or removed{ctx['last_str']} (Saved -${cost_base:.4f})"
     elif diff > 0.0005:
         return f"USAGE INCREASE: Operational consumption increased on {service or 'workload'} (+${diff:.4f})"
     elif diff < -0.0005:

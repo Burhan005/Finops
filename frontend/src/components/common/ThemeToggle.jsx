@@ -34,8 +34,8 @@ export default function ThemeToggle({
       onClick={onToggle}
       className={`relative inline-flex items-center justify-center rounded-xl sm:rounded-2xl transition-all duration-300 ease-out select-none cursor-pointer group active:scale-90 active:rotate-6 ${sizeClasses[size] || sizeClasses.md} ${
         darkMode 
-          ? 'bg-[#252E26] hover:bg-[#2D382D] border border-[#3B493D] shadow-md shadow-black/40 text-[#AFC69B]' 
-          : 'bg-[#FFFCF5] hover:bg-[#E6E9DD] border border-[#E3DCCB] shadow-sm shadow-[#292E28]/10 text-[#49664D]'
+          ? 'bg-[#16171B] hover:bg-[#1F2026] border border-[#282930] shadow-md shadow-black/60 text-[#FF9900]' 
+          : 'bg-[#FFFFFF] hover:bg-[#EEF2F6] border border-[#E2E8F0] shadow-sm text-[#EC7211]'
       } ${className}`}
       title={darkMode ? 'Switch to Ivory Canvas mode' : 'Switch to Dark Forest mode'}
       aria-label={darkMode ? 'Switch to Ivory Canvas mode' : 'Switch to Dark Forest mode'}
@@ -43,13 +43,13 @@ export default function ThemeToggle({
       {/* Gentle ambient halo glow behind icon */}
       <span 
         className={`absolute inset-1 rounded-xl transition-opacity duration-500 opacity-0 group-hover:opacity-100 pointer-events-none blur-sm ${
-          darkMode ? 'bg-[#AFC69B]/20' : 'bg-[#49664D]/15'
+          darkMode ? 'bg-[#FF9900]/20' : 'bg-[#EC7211]/15'
         }`}
       />
 
       {/* Sun Icon (Light Mode) */}
       <span
-        className={`absolute transition-all duration-500 ease-[cubic-bezier(0.34,1.56,0.64,1)] flex items-center justify-center text-[#49664D] group-hover:text-[#3B533E] ${
+        className={`absolute transition-all duration-500 ease-[cubic-bezier(0.34,1.56,0.64,1)] flex items-center justify-center text-[#EC7211] group-hover:text-[#D4650D] ${
           darkMode 
             ? 'rotate-90 scale-0 opacity-0 pointer-events-none' 
             : 'rotate-0 scale-100 opacity-100 group-hover:rotate-45'
@@ -60,7 +60,7 @@ export default function ThemeToggle({
 
       {/* Moon Icon (Dark Mode) */}
       <span
-        className={`absolute transition-all duration-500 ease-[cubic-bezier(0.34,1.56,0.64,1)] flex items-center justify-center text-[#AFC69B] group-hover:text-[#F0EEE4] ${
+        className={`absolute transition-all duration-500 ease-[cubic-bezier(0.34,1.56,0.64,1)] flex items-center justify-center text-[#FF9900] group-hover:text-[#FFA726] ${
           darkMode 
             ? 'rotate-0 scale-100 opacity-100 group-hover:-rotate-12' 
             : '-rotate-90 scale-0 opacity-0 pointer-events-none'

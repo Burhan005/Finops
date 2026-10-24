@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import { 
   Settings, 
@@ -45,6 +46,8 @@ export default function SettingsView({ activeDataset, currentUser, onRefreshData
   const [brandSaving, setBrandSaving] = useState(false);
   const [brandFeedback, setBrandFeedback] = useState(null);
   const [showBoardroomPreview, setShowBoardroomPreview] = useState(false);
+
+
 
   const userName = currentUser?.name || 'Burhan Kapasi';
   const userEmail = currentUser?.email || 'cloudops@finopsclay.io';
@@ -130,6 +133,12 @@ export default function SettingsView({ activeDataset, currentUser, onRefreshData
       });
 
       const syncResult = await api.triggerS3Sync();
+      if (syncResult && syncResult.success === false) {
+        setS3Status('FAILED');
+        setS3Message(syncResult.message || syncResult.error || 'S3 sync failed');
+        setS3Feedback({ type: 'error', text: syncResult.message || syncResult.error || 'S3 sync failed' });
+        return;
+      }
       setS3Status('SYNCED');
       setS3Message(syncResult.message);
       setS3Feedback({ type: 'success', text: syncResult.message });
@@ -202,8 +211,8 @@ export default function SettingsView({ activeDataset, currentUser, onRefreshData
             {s3Feedback && (
               <div className={`p-3.5 rounded-xl text-xs font-bold flex items-center gap-2 ${
                 s3Feedback.type === 'success'
-                  ? 'bg-clay-sage-light text-zorvex-forest dark:text-zorvex-forest-highlight border border-clay-sage/30'
-                  : 'bg-zorvex-spike-soft dark:bg-zorvex-spike-dark-soft text-zorvex-spike border border-clay-coral/30'
+                  ? 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-700 dark:text-emerald-400'
+                  : 'bg-rose-500/10 border border-rose-500/30 text-rose-600 dark:text-rose-400'
               }`}>
                 {s3Feedback.type === 'success' ? <CheckCircle2 className="w-4 h-4 flex-shrink-0" /> : <AlertCircle className="w-4 h-4 flex-shrink-0" />}
                 <span>{s3Feedback.text}</span>
@@ -552,10 +561,18 @@ export default function SettingsView({ activeDataset, currentUser, onRefreshData
 
       </div>
 
-      {/* Executive Boardroom Memo Modal (Printable / PDF-Ready) */}
-      {showBoardroomPreview && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-fade-in">
-          <div className="clay-card w-full max-w-3xl bg-zorvex-surface dark:bg-zorvex-dark-surface border border-zorvex-border dark:border-zorvex-dark-border shadow-2xl rounded-2xl overflow-hidden flex flex-col max-h-[90vh]">
+{/* Executive Boardroom Memo Modal (Printable / PDF-Ready) */}
+      {showBoardroomPreview && typeof document !== 'undefined' && createPortal(
+        <div 
+          className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-fade-in overflow-y-auto"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowBoardroomPreview(false);
+          }}
+        >
+          <div 
+            className="clay-card w-full max-w-3xl my-auto bg-zorvex-surface dark:bg-zorvex-dark-surface border border-zorvex-border dark:border-zorvex-dark-border shadow-2xl rounded-2xl overflow-hidden flex flex-col max-h-[90vh] relative"
+            onClick={(e) => e.stopPropagation()}
+          >
             
             {/* Modal Controls Bar */}
             <div className="flex items-center justify-between px-6 py-4 border-b border-zorvex-border dark:border-zorvex-dark-border bg-zorvex-secondary dark:bg-zorvex-dark-secondary">
@@ -699,7 +716,8 @@ export default function SettingsView({ activeDataset, currentUser, onRefreshData
             </div>
 
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
     </div>

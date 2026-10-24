@@ -45,13 +45,55 @@ function authHeaders(extraHeaders = {}) {
   return headers;
 }
 
+// Dual-tier Client-side Stale-While-Revalidate (SWR) cache
+const clientResponseCache = new Map();
 const inFlightGets = new Map();
 
-async function memoizedGet(url, headers = {}) {
+export function clearClientCache() {
+  clientResponseCache.clear();
+  inFlightGets.clear();
+}
+
+if (typeof window !== 'undefined') {
+  window.finopsClearClientCache = clearClientCache;
+}
+
+async function memoizedGet(url, headers = {}, options = {}) {
+  const { ttl = 30000, swr = true } = options;
   const cacheKey = `${url}:${headers['Authorization'] || ''}`;
+
+  // 1. Instant SWR Memory Tier: return cached data in 0ms if fresh
+  const cached = clientResponseCache.get(cacheKey);
+  const now = Date.now();
+  if (cached) {
+    const age = now - cached.timestamp;
+    if (age < ttl) {
+      // Background revalidation: fetch fresh data silently without UI spinners
+      if (swr && age > 3000 && !inFlightGets.has(cacheKey)) {
+        const bgPromise = (async () => {
+          try {
+            const res = await fetch(url, { headers });
+            if (res.ok) {
+              const freshData = await res.json();
+              clientResponseCache.set(cacheKey, { data: freshData, timestamp: Date.now() });
+            }
+          } catch (e) {
+            // Background revalidation failure silently discarded
+          } finally {
+            inFlightGets.delete(cacheKey);
+          }
+        })();
+        inFlightGets.set(cacheKey, bgPromise);
+      }
+      return cached.data;
+    }
+  }
+
+  // 2. Coalesce in-flight concurrent requests
   if (inFlightGets.has(cacheKey)) {
     return inFlightGets.get(cacheKey);
   }
+
   const promise = (async () => {
     try {
       const res = await fetch(url, { headers });
@@ -59,14 +101,16 @@ async function memoizedGet(url, headers = {}) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.detail || `Request failed with status ${res.status}`);
       }
-      return await res.json();
+      const data = await res.json();
+      clientResponseCache.set(cacheKey, { data, timestamp: Date.now() });
+      return data;
     } catch (err) {
-      inFlightGets.delete(cacheKey);
       throw err;
     } finally {
-      setTimeout(() => inFlightGets.delete(cacheKey), 1500);
+      inFlightGets.delete(cacheKey);
     }
   })();
+
   inFlightGets.set(cacheKey, promise);
   return promise;
 }
@@ -77,26 +121,28 @@ export const api = {
   },
 
   async getDatasets() {
-    const res = await fetch(`${API_BASE}/datasets`, {
-      headers: authHeaders()
-    });
-    if (!res.ok) throw new Error('Failed to fetch datasets');
-    return res.json();
+    return memoizedGet(`${API_BASE}/datasets`, authHeaders());
   },
 
   async selectDataset(filename) {
-    inFlightGets.clear();
+    clearClientCache();
     const res = await fetch(`${API_BASE}/datasets/select`, {
       method: 'POST',
       headers: authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ filename })
     });
-    if (!res.ok) throw new Error('Failed to select dataset');
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      const msg = typeof err.detail === 'string' 
+        ? err.detail 
+        : (Array.isArray(err.detail) ? err.detail.map(d => d.msg || JSON.stringify(d)).join(', ') : (err.message || 'Failed to select dataset'));
+      throw new Error(msg);
+    }
     return res.json();
   },
 
   async renameDatasetAccount(datasetIdOrFilename, accountName, propagate = true) {
-    inFlightGets.clear();
+    clearClientCache();
     const res = await fetch(`${API_BASE}/datasets/rename`, {
       method: 'POST',
       headers: authHeaders({ 'Content-Type': 'application/json' }),
@@ -113,8 +159,21 @@ export const api = {
     return res.json();
   },
 
+  async deleteDataset(datasetId) {
+    clearClientCache();
+    const res = await fetch(`${API_BASE}/datasets/${datasetId}`, {
+      method: 'DELETE',
+      headers: authHeaders()
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'Failed to delete dataset');
+    }
+    return res.json();
+  },
+
   async uploadFile(fileOrFiles, accountName = null) {
-    inFlightGets.clear();
+    clearClientCache();
     const formData = new FormData();
     if (Array.isArray(fileOrFiles)) {
       fileOrFiles.forEach(f => formData.append('files', f));
@@ -261,12 +320,13 @@ export const api = {
     return res.json();
   },
 
-  async downloadExecutiveExcel(baseline_date = null, target_date = null, account_id = null) {
+  async downloadExecutiveExcel(baseline_date = null, target_date = null, account_id = null, currency = 'USD') {
     const params = new URLSearchParams();
     params.append('format', 'excel');
     if (baseline_date) params.append('baseline_date', baseline_date);
     if (target_date) params.append('target_date', target_date);
     if (account_id && account_id !== 'all') params.append('account_id', account_id);
+    if (currency) params.append('currency', currency);
 
     const res = await fetch(`${API_BASE}/export/executive-report?${params.toString()}`, {
       headers: authHeaders()
@@ -327,10 +387,37 @@ export const api = {
     return res.json();
   },
 
-  async getRecommendations() {
-    const res = await fetch(`${API_BASE}/recommendations`, { headers: authHeaders() });
-    if (!res.ok) throw new Error('Failed to fetch recommendations');
+  async getS3Status() {
+    const res = await fetch(`${API_BASE}/s3/status`, { headers: authHeaders() });
+    if (!res.ok) throw new Error('Failed to fetch S3 sync status');
     return res.json();
+  },
+
+  async getS3Policy(bucket = '', prefix = '') {
+    const params = new URLSearchParams();
+    if (bucket) params.append('bucket', bucket);
+    if (prefix) params.append('prefix', prefix);
+    const res = await fetch(`${API_BASE}/s3/policy?${params.toString()}`, { headers: authHeaders() });
+    if (!res.ok) throw new Error('Failed to generate IAM policy');
+    return res.json();
+  },
+
+  async getAuditLogs(limit = 50, offset = 0, action = null) {
+    const params = new URLSearchParams();
+    params.append('limit', limit);
+    params.append('offset', offset);
+    if (action && action !== 'ALL') params.append('action', action);
+    const res = await fetch(`${API_BASE}/governance/audit-logs?${params.toString()}`, { headers: authHeaders() });
+    if (!res.ok) throw new Error('Failed to fetch audit logs');
+    return res.json();
+  },
+
+  async getRecommendations() {
+    return memoizedGet(`${API_BASE}/recommendations`, authHeaders());
+  },
+
+  async getTagGovernance() {
+    return memoizedGet(`${API_BASE}/governance/tags`, authHeaders());
   },
 
   async getResources(options = {}, legacyService = null, legacyMinCost = null, legacyAccount = null) {
@@ -386,26 +473,43 @@ export const api = {
   },
 
   async getResourceHierarchies() {
-    const res = await fetch(`${API_BASE}/resources/hierarchies`, { headers: authHeaders() });
-    if (!res.ok) throw new Error('Failed to fetch resource hierarchies');
-    return res.json();
+    return memoizedGet(`${API_BASE}/resources/hierarchies`, authHeaders());
   },
 
   async getResourceDetail(resourceId) {
     const params = new URLSearchParams();
     params.append('resource_id', resourceId);
-    const res = await fetch(`${API_BASE}/resources/detail?${params.toString()}`, { headers: authHeaders() });
-    if (!res.ok) throw new Error('Failed to fetch resource detail');
+    return memoizedGet(`${API_BASE}/resources/detail?${params.toString()}`, authHeaders());
+  },
+
+  async getClusterTelemetry({ service, clusterName, targetDate, cutoffHour = '18:00', datasetId } = {}) {
+    const params = new URLSearchParams();
+    if (service) params.set('service', service);
+    if (clusterName) params.set('cluster_name', clusterName);
+    if (targetDate) params.set('target_date', targetDate);
+    if (cutoffHour) params.set('cutoff_hour', cutoffHour);
+    if (datasetId) params.set('dataset_id', datasetId);
+
+    const res = await fetch(`${API_BASE}/analytics/clusters/telemetry?${params.toString()}`, {
+      headers: authHeaders()
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      const msg = typeof err.detail === 'string'
+        ? err.detail
+        : (Array.isArray(err.detail) ? err.detail.map(d => d.msg || JSON.stringify(d)).join(', ') : (err.message || 'Failed to fetch cluster telemetry'));
+      throw new Error(msg);
+    }
     return res.json();
   },
 
+
   async getBranding() {
-    const res = await fetch(`${API_BASE}/branding`, { headers: authHeaders() });
-    if (!res.ok) throw new Error('Failed to fetch branding configuration');
-    return res.json();
+    return memoizedGet(`${API_BASE}/branding`, authHeaders());
   },
 
   async saveBranding(config) {
+    clearClientCache();
     const res = await fetch(`${API_BASE}/branding`, {
       method: 'POST',
       headers: authHeaders({ 'Content-Type': 'application/json' }),
@@ -416,12 +520,11 @@ export const api = {
   },
 
   async getUnitEconomics() {
-    const res = await fetch(`${API_BASE}/unit-economics`, { headers: authHeaders() });
-    if (!res.ok) throw new Error('Failed to fetch unit economics');
-    return res.json();
+    return memoizedGet(`${API_BASE}/unit-economics`, authHeaders());
   },
 
   async saveUnitEconomics(config) {
+    clearClientCache();
     const res = await fetch(`${API_BASE}/unit-economics`, {
       method: 'POST',
       headers: authHeaders({ 'Content-Type': 'application/json' }),
@@ -442,9 +545,7 @@ export const api = {
   },
 
   async getForexRate() {
-    const res = await fetch(`${API_BASE}/forex/usd-inr`, { headers: authHeaders() });
-    if (!res.ok) throw new Error('Failed to fetch forex rate');
-    return res.json();
+    return memoizedGet(`${API_BASE}/forex/usd-inr`, authHeaders());
   },
 
   // Cost Anomaly Detection
@@ -453,12 +554,11 @@ export const api = {
     if (status && status !== 'all') params.append('status', status);
     if (severity && severity !== 'all') params.append('severity', severity);
     const qs = params.toString() ? `?${params.toString()}` : '';
-    const res = await fetch(`${API_BASE}/anomalies${qs}`, { headers: authHeaders() });
-    if (!res.ok) throw new Error('Failed to fetch anomaly alerts');
-    return res.json();
+    return memoizedGet(`${API_BASE}/anomalies${qs}`, authHeaders());
   },
 
   async acknowledgeAnomaly(alertId, userName = 'Admin', notes = '') {
+    clearClientCache();
     const res = await fetch(`${API_BASE}/anomalies/${alertId}/acknowledge`, {
       method: 'POST',
       headers: authHeaders({ 'Content-Type': 'application/json' }),
@@ -469,6 +569,7 @@ export const api = {
   },
 
   async resolveAnomaly(alertId, userName = 'Admin', notes = '') {
+    clearClientCache();
     const res = await fetch(`${API_BASE}/anomalies/${alertId}/resolve`, {
       method: 'POST',
       headers: authHeaders({ 'Content-Type': 'application/json' }),
@@ -479,6 +580,7 @@ export const api = {
   },
 
   async syncAnomalies() {
+    clearClientCache();
     const res = await fetch(`${API_BASE}/anomalies/sync`, {
       method: 'POST',
       headers: authHeaders({ 'Content-Type': 'application/json' })
@@ -489,18 +591,15 @@ export const api = {
 
   // Forecasting & Budget Guard
   async getForecast() {
-    const res = await fetch(`${API_BASE}/forecast`, { headers: authHeaders() });
-    if (!res.ok) throw new Error('Failed to fetch cost forecast');
-    return res.json();
+    return memoizedGet(`${API_BASE}/forecast`, authHeaders());
   },
 
   async getBudgets() {
-    const res = await fetch(`${API_BASE}/budgets`, { headers: authHeaders() });
-    if (!res.ok) throw new Error('Failed to fetch budgets');
-    return res.json();
+    return memoizedGet(`${API_BASE}/budgets`, authHeaders());
   },
 
   async createBudget(budgetData) {
+    clearClientCache();
     const res = await fetch(`${API_BASE}/budgets`, {
       method: 'POST',
       headers: authHeaders({ 'Content-Type': 'application/json' }),
@@ -511,6 +610,7 @@ export const api = {
   },
 
   async deleteBudget(budgetId) {
+    clearClientCache();
     const res = await fetch(`${API_BASE}/budgets/${budgetId}`, {
       method: 'DELETE',
       headers: authHeaders()
@@ -525,18 +625,15 @@ export const api = {
     if (status && status !== 'all') params.append('status', status);
     if (category && category !== 'all') params.append('category', category);
     const qs = params.toString() ? `?${params.toString()}` : '';
-    const res = await fetch(`${API_BASE}/ledger/records${qs}`, { headers: authHeaders() });
-    if (!res.ok) throw new Error('Failed to fetch savings ledger records');
-    return res.json();
+    return memoizedGet(`${API_BASE}/ledger/records${qs}`, authHeaders());
   },
 
   async getLedgerSummary() {
-    const res = await fetch(`${API_BASE}/ledger/summary`, { headers: authHeaders() });
-    if (!res.ok) throw new Error('Failed to fetch savings ledger summary');
-    return res.json();
+    return memoizedGet(`${API_BASE}/ledger/summary`, authHeaders());
   },
 
   async syncLedger() {
+    clearClientCache();
     const res = await fetch(`${API_BASE}/ledger/sync`, {
       method: 'POST',
       headers: authHeaders({ 'Content-Type': 'application/json' })
@@ -546,6 +643,7 @@ export const api = {
   },
 
   async updateRecommendationStatus(recId, status, userName = 'Admin', notes = '') {
+    clearClientCache();
     const res = await fetch(`${API_BASE}/recommendations/${recId}/status`, {
       method: 'POST',
       headers: authHeaders({ 'Content-Type': 'application/json' }),
@@ -567,9 +665,7 @@ export const api = {
   },
 
   async getAiHistory() {
-    const res = await fetch(`${API_BASE}/ai/history`, { headers: authHeaders() });
-    if (!res.ok) throw new Error('Failed to fetch AI query history');
-    return res.json();
+    return memoizedGet(`${API_BASE}/ai/history`, authHeaders());
   },
 
   // Auth APIs
@@ -587,34 +683,48 @@ export const api = {
     if (data.token) {
       localStorage.setItem('finops_token', data.token);
       localStorage.setItem('finops_user', JSON.stringify(data.user));
-      inFlightGets.clear();
+      clearClientCache();
     }
     return data;
   },
 
-  async login(email, password) {
+  async getCaptcha() {
+    const res = await fetch(`${API_BASE}/auth/captcha`);
+    if (!res.ok) throw new Error('Failed to generate security challenge');
+    return res.json();
+  },
+
+  async login(email, password, captchaData = {}) {
+    const payload = {
+      email,
+      password,
+      captcha_id: captchaData.captcha_id || undefined,
+      captcha_solution: captchaData.captcha_solution || undefined,
+      turnstile_token: captchaData.turnstile_token || undefined
+    };
     const res = await fetch(`${API_BASE}/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password })
+      body: JSON.stringify(payload)
     });
     if (!res.ok) {
+      const isCaptchaReq = res.headers.get('X-Captcha-Required') === 'true';
       const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || 'Invalid email or password');
+      const errorObj = new Error(err.detail || 'Invalid email or password');
+      errorObj.captchaRequired = isCaptchaReq || (err.detail && err.detail.toLowerCase().includes('verification'));
+      throw errorObj;
     }
     const data = await res.json();
     if (data.token) {
       localStorage.setItem('finops_token', data.token);
       localStorage.setItem('finops_user', JSON.stringify(data.user));
-      inFlightGets.clear();
+      clearClientCache();
     }
     return data;
   },
 
   async getMe() {
-    const res = await fetch(`${API_BASE}/auth/me`, { headers: authHeaders() });
-    if (!res.ok) throw new Error('Failed to fetch user session');
-    return res.json();
+    return memoizedGet(`${API_BASE}/auth/me`, authHeaders());
   },
 
   async logout() {
@@ -626,7 +736,7 @@ export const api = {
     } catch (e) {
       // ignore
     }
-    inFlightGets.clear();
+    clearClientCache();
     localStorage.removeItem('finops_token');
     localStorage.removeItem('finops_user');
     return { success: true };

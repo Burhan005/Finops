@@ -186,7 +186,7 @@ class ZorvexDualTierCache:
         # Purge from Redis
         if self.redis_available and self.redis_client:
             try:
-                keys = self.redis_client.keys(f"{prefix}*")
+                keys = list(self.redis_client.scan_iter(match=f"{prefix}*", count=500))
                 if keys:
                     purged += self.redis_client.delete(*keys)
             except Exception as e:
@@ -214,7 +214,7 @@ class ZorvexDualTierCache:
         # Purge from Redis
         if self.redis_available and self.redis_client:
             try:
-                keys = self.redis_client.keys(pattern)
+                keys = list(self.redis_client.scan_iter(match=pattern, count=500))
                 if keys:
                     purged += self.redis_client.delete(*keys)
             except Exception as e:
@@ -337,8 +337,12 @@ def get_dataset_cache_key(dataset: Optional[Dict[str, Any]] = None, repo: Option
         rev = getattr(repo.d_rec, 'revision_version', 1) or 1
         ds_base = repo.d_rec.filename or f"active_{repo.dataset_id or 'default'}"
     elif dataset:
-        rev = dataset.get('revision_version') or 1
-        ds_base = dataset.get('filename') or (os.path.basename(dataset.get('filepath', '')) if dataset.get('filepath') else None) or f"active_{dataset.get('id', 'default')}"
+        if isinstance(dataset, dict):
+            rev = dataset.get('revision_version') or 1
+            ds_base = dataset.get('filename') or (os.path.basename(dataset.get('filepath', '')) if dataset.get('filepath') else None) or f"active_{dataset.get('id', 'default')}"
+        else:
+            rev = getattr(dataset, 'revision_version', 1) or 1
+            ds_base = getattr(dataset, 'filename', None) or (os.path.basename(getattr(dataset, 'filepath', '')) if getattr(dataset, 'filepath', None) else None) or f"active_{getattr(dataset, 'id', 'default')}"
     elif repo and getattr(repo, 'dataset_id', None):
         ds_base = f"active_{repo.dataset_id}"
     return f"{ds_base}_v{rev}"

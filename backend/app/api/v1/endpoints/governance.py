@@ -1,3 +1,4 @@
+import os
 """
 Cost Governance, Budget Guard, Anomalies, Recommendations, and Savings Ledger Router.
 """
@@ -11,7 +12,7 @@ from sqlalchemy.orm import Session
 from ....core.state import get_cached_recommendations
 from ....cache import global_cache, get_dataset_cache_key
 from ....database import get_db
-from ....models import User, Organization, AnomalyAlert, BudgetConfig
+from ....models import User, Organization, AnomalyAlert, BudgetConfig, AuditEvent
 from ....recommendations import generate_recommendations
 from ....anomalies import get_stored_anomalies, sync_anomalies_to_db
 from ....budget_guard import calculate_cost_forecast, evaluate_budgets
@@ -38,14 +39,20 @@ def get_recommendations(
 ):
     user, org = auth
     dataset = get_active_dataset_for_org(org, db)
-    if not dataset.get('data'):
+    cur_data = dataset.get('data')
+    if not cur_data:
+        repo = get_billing_repository(org, dataset, db)
+        if repo.has_records():
+            cur_data = repo.get_cur_data()
+
+    if not cur_data:
         return {
             'recommendations': [],
             'total_potential_savings': 0.0,
             'total_recommendations': 0
         }
     ds_key = dataset.get('filepath') or dataset.get('filename') or 'active'
-    return get_cached_recommendations(ds_key, dataset['data'])
+    return get_cached_recommendations(ds_key, cur_data)
 
 
 @router.get("/anomalies")
@@ -103,11 +110,12 @@ def acknowledge_anomaly(
     db: Session = Depends(get_db)
 ):
     user, org = auth
-    alert = db.query(AnomalyAlert).filter(AnomalyAlert.id == alert_id).first()
+    alert = db.query(AnomalyAlert).filter(
+        AnomalyAlert.id == alert_id,
+        AnomalyAlert.organization_id == org.id
+    ).first()
     if not alert:
-        raise HTTPException(status_code=404, detail="Anomaly alert not found")
-    if alert.organization_id and alert.organization_id != org.id:
-        raise HTTPException(status_code=403, detail="Permission denied: Anomaly alert belongs to another organization.")
+        raise HTTPException(status_code=404, detail="Anomaly alert not found.")
 
     now_utc = datetime.now(timezone.utc)
     alert.status = "ACKNOWLEDGED"
@@ -128,11 +136,12 @@ def resolve_anomaly(
     db: Session = Depends(get_db)
 ):
     user, org = auth
-    alert = db.query(AnomalyAlert).filter(AnomalyAlert.id == alert_id).first()
+    alert = db.query(AnomalyAlert).filter(
+        AnomalyAlert.id == alert_id,
+        AnomalyAlert.organization_id == org.id
+    ).first()
     if not alert:
-        raise HTTPException(status_code=404, detail="Anomaly alert not found")
-    if alert.organization_id and alert.organization_id != org.id:
-        raise HTTPException(status_code=403, detail="Permission denied: Anomaly alert belongs to another organization.")
+        raise HTTPException(status_code=404, detail="Anomaly alert not found.")
 
     now_utc = datetime.now(timezone.utc)
     alert.status = "RESOLVED"
@@ -270,10 +279,7 @@ def delete_budget(
         BudgetConfig.organization_id == org.id
     ).first()
     if not b:
-        exists_other = db.query(BudgetConfig).filter(BudgetConfig.id == budget_id).first()
-        if exists_other:
-            raise HTTPException(status_code=403, detail="Permission denied: Cannot delete budget belonging to another organization.")
-        raise HTTPException(status_code=404, detail="Budget not found")
+        raise HTTPException(status_code=404, detail="Budget not found.")
 
     db.delete(b)
     db.commit()
@@ -362,3 +368,82 @@ def change_recommendation_status(
     if not updated:
         raise HTTPException(status_code=404, detail="Recommendation not found")
     return updated
+
+
+@router.get("/governance/tags")
+def get_tag_governance_report(
+    auth: Tuple[Optional[User], Optional[Organization]] = Depends(get_current_user_and_org),
+    db: Session = Depends(get_db)
+):
+    """
+    Returns organization-wide Tag Governance & Cost Allocation Compliance report.
+    Quantifies tagging compliance percentage, untagged dark cost, policy compliance rates,
+    and actionable AWS CLI remediation commands.
+    """
+    user, org = auth
+    dataset = get_active_dataset_for_org(org, db)
+    
+    filepath = dataset.get('filepath')
+    active_filename = dataset.get('filename')
+    
+    repo = get_billing_repository(org, dataset, db)
+    from ....tag_governance import TagGovernanceEngine
+    if (not filepath or not os.path.exists(filepath)) and not repo.has_records():
+        return TagGovernanceEngine._empty_governance_result(active_filename, reason="NO_ACTIVE_FILE")
+        
+    ds_key = get_dataset_cache_key(dataset, repo)
+    org_id = org.id if org else 1
+    cache_key = global_cache.build_key(org_id, ds_key, "tag_governance")
+    
+    def _compute_tag_audit():
+        if filepath and os.path.exists(filepath):
+            return TagGovernanceEngine.audit_dataset_tags(filepath, active_filename)
+        return TagGovernanceEngine.audit_from_repository(repo, active_filename)
+
+    return global_cache.get_or_compute(
+        cache_key,
+        _compute_tag_audit,
+        ttl=1800
+    )
+
+
+
+@router.get("/governance/audit-logs")
+def get_audit_logs(
+    limit: int = 50,
+    offset: int = 0,
+    action: Optional[str] = None,
+    auth: Tuple[User, Organization] = Depends(require_auth),
+    db: Session = Depends(get_db)
+):
+    """
+    Returns immutable, timestamped audit events for SOC-2 compliance & FinOps governance.
+    """
+    user, org = auth
+    query = db.query(AuditEvent).filter(AuditEvent.organization_id == org.id)
+    if not action or action == 'OPERATIONS':
+        query = query.filter(~AuditEvent.action.in_(['LOGIN', 'AUTH']))
+    elif action in ('DATASET_UPLOAD', 'UPLOAD'):
+        query = query.filter(AuditEvent.action.in_(['DATASET_UPLOAD', 'UPLOAD']))
+    elif action == 'LOGIN':
+        query = query.filter(AuditEvent.action.in_(['LOGIN', 'AUTH']))
+    elif action != 'ALL':
+        query = query.filter(AuditEvent.action == action)
+    total = query.count()
+    events = query.order_by(AuditEvent.timestamp.desc()).offset(offset).limit(limit).all()
+    return {
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "events": [
+            {
+                "id": ev.id,
+                "action": ev.action,
+                "timestamp": ev.timestamp.isoformat() if ev.timestamp else None,
+                "ip_address": ev.ip_address,
+                "details": ev.details,
+                "user_id": ev.user_id
+            }
+            for ev in events
+        ]
+    }

@@ -35,6 +35,9 @@ import {
 } from 'lucide-react';
 import { api } from '../services/api';
 import ClayDropdown from './common/ClayDropdown';
+import ClusterLifecycleCard from './common/ClusterLifecycleCard';
+import AwsServiceIcon from './common/AwsServiceIcon';
+import { getAwsServiceColor } from '../utils/awsServiceColors';
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -60,6 +63,34 @@ ChartJS.register(
 );
 
 const KNOWN_SERVICES_META = {
+  'Amazon EKS': {
+    title: 'Amazon EKS',
+    subtitle: 'Managed Kubernetes Clusters',
+    icon: Layers,
+    defaultCategory: 'ALL',
+    description: 'Managed Kubernetes control planes, container worker nodes, and pod telemetry.'
+  },
+  'AmazonEKS': {
+    title: 'Amazon EKS',
+    subtitle: 'Managed Kubernetes Clusters',
+    icon: Layers,
+    defaultCategory: 'ALL',
+    description: 'Managed Kubernetes control planes, container worker nodes, and pod telemetry.'
+  },
+  'Amazon ECS': {
+    title: 'Amazon ECS',
+    subtitle: 'Elastic Container Service',
+    icon: Server,
+    defaultCategory: 'ALL',
+    description: 'Serverless Fargate tasks, containerized microservices, and ECS cluster instances.'
+  },
+  'AmazonECS': {
+    title: 'Amazon ECS',
+    subtitle: 'Elastic Container Service',
+    icon: Server,
+    defaultCategory: 'ALL',
+    description: 'Serverless Fargate tasks, containerized microservices, and ECS cluster instances.'
+  },
   'Amazon EC2': {
     title: 'Amazon EC2',
     subtitle: 'Virtual Servers & NAT Gateways',
@@ -365,6 +396,12 @@ export default function ServiceExplorer({
   // Query & Filter State
   const [query, setQuery] = useState('');
   const [subCategory, setSubCategory] = useState('ALL');
+
+  // Authentic Cluster & Node Lifecycle Telemetry State
+  const [clusterData, setClusterData] = useState(null);
+  const [clusterLoading, setClusterLoading] = useState(false);
+  const [clusterDate, setClusterDate] = useState('');
+  const [clusterCutoff, setClusterCutoff] = useState('18:00');
   const [accountFilter, setAccountFilter] = useState(selectedAccount || 'all');
   const [regionFilter, setRegionFilter] = useState('all');
   const [minCost, setMinCost] = useState('');
@@ -375,6 +412,7 @@ export default function ServiceExplorer({
 
   // Response Data State
   const [resourceData, setResourceData] = useState(null);
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [copiedId, setCopiedId] = useState('');
@@ -407,6 +445,59 @@ export default function ServiceExplorer({
     return () => { isMounted = false; };
   }, [activeDataset]);
 
+  // Dynamic classification counts resolver for classification filter pills
+  const classificationCounts = useMemo(() => {
+    const counts = {
+      ALL_EC2: 0,
+      EC2_INSTANCE: 0,
+      NAT_GATEWAY: 0,
+      EC2_RI: 0,
+      ALL_EBS: 0,
+      EBS_VOLUME: 0,
+      EBS_SNAPSHOT: 0,
+      ALL_RDS: 0,
+      RDS_DB_INSTANCE: 0,
+      RDS_BACKUP: 0,
+      RDS_STORAGE: 0,
+      RDS_RI: 0
+    };
+
+    const h = hierarchiesData || resourceData?.hierarchies;
+    const ec2Cats = h?.categories_by_service?.['Amazon EC2'] || [];
+    const rdsCats = h?.categories_by_service?.['Amazon RDS'] || [];
+
+    // EC2
+    const ec2Inst = ec2Cats.find(c => c.id === 'EC2_INSTANCE')?.unique_resources || 0;
+    const ec2Nat = ec2Cats.find(c => c.id === 'NAT_GATEWAY')?.unique_resources || 0;
+    const ec2Ri = ec2Cats.find(c => c.id === 'RI_SUBSCRIPTION_FEE')?.unique_resources || 0;
+    const ebsVol = ec2Cats.find(c => c.id === 'EBS_VOLUME')?.unique_resources || 0;
+    const ebsSnap = ec2Cats.find(c => c.id === 'EBS_SNAPSHOT')?.unique_resources || 0;
+
+    counts.EC2_INSTANCE = ec2Inst;
+    counts.NAT_GATEWAY = ec2Nat;
+    counts.EC2_RI = ec2Ri;
+    counts.ALL_EC2 = ec2Inst + ec2Nat + ec2Ri;
+
+    // EBS
+    counts.EBS_VOLUME = ebsVol;
+    counts.EBS_SNAPSHOT = ebsSnap;
+    counts.ALL_EBS = ebsVol + ebsSnap;
+
+    // RDS
+    const rdsInst = rdsCats.find(c => c.id === 'RDS_DB_INSTANCE')?.unique_resources || 0;
+    const rdsStorage = rdsCats.find(c => c.id === 'UNCLASSIFIED_RDS' || c.id === 'RDS_STORAGE')?.unique_resources || 0;
+    const rdsBackup = rdsCats.find(c => c.id === 'RDS_BACKUP')?.unique_resources || 0;
+    const rdsRi = rdsCats.find(c => c.id === 'RI_SUBSCRIPTION_FEE')?.unique_resources || 0;
+
+    counts.RDS_DB_INSTANCE = rdsInst;
+    counts.RDS_STORAGE = rdsStorage;
+    counts.RDS_BACKUP = rdsBackup;
+    counts.RDS_RI = rdsRi;
+    counts.ALL_RDS = rdsInst + rdsStorage + rdsBackup + rdsRi;
+
+    return counts;
+  }, [hierarchiesData, resourceData]);
+
   // Total Portfolio Spend
   const totalPortfolioSpend = overview?.total_cost || overview?.net_cost || 0;
   const rawServices = overview?.services || {};
@@ -426,8 +517,12 @@ export default function ServiceExplorer({
     const dynamicEbsSpend = Number((ebsVolCost + ebsSnapCost).toFixed(2));
     const ebsSpend = dynamicEbsSpend > 0 ? dynamicEbsSpend : (effectiveServices['Amazon EBS'] || (ebsVolCost > 0 ? ebsVolCost : 0));
 
-    const list = [
-      {
+    const list = [];
+    
+    // Include EC2 and EBS only if they exist in dataset or have spend, or if no service filter is active
+    const hasEc2 = Boolean(effectiveServices['Amazon EC2'] || ec2Spend > 0 || masterServices.includes('Amazon EC2'));
+    if (hasEc2) {
+      list.push({
         key: 'EC2',
         title: 'Amazon EC2',
         subtitle: 'Virtual Servers & NAT Gateways',
@@ -436,8 +531,8 @@ export default function ServiceExplorer({
         defaultCategory: 'EC2_INSTANCE',
         spend: ec2Spend,
         description: 'On-Demand and Reserved compute instances, NAT Gateways, and data processing nodes.'
-      },
-      {
+      });
+      list.push({
         key: 'EBS',
         title: 'Amazon EBS',
         subtitle: 'Elastic Block Storage & Snapshots',
@@ -446,8 +541,8 @@ export default function ServiceExplorer({
         defaultCategory: 'EBS_VOLUME',
         spend: ebsSpend,
         description: 'High-performance block storage volumes (gp3, gp2, io1) and point-in-time EBS snapshots.'
-      }
-    ];
+      });
+    }
 
     // 2. Discover all distinct services in dataset from masterServices & effectiveServices
     const serviceNameSet = new Set([
@@ -459,7 +554,7 @@ export default function ServiceExplorer({
     serviceNameSet.delete('Tax');
     serviceNameSet.delete('TAX_AND_FEES');
 
-    // 3. Convert all services into dynamic catalog items (excluding taxes which belong at overall invoice level)
+    // 3. Convert all services into dynamic catalog items
     const dynamicItems = [];
     serviceNameSet.forEach((sName) => {
       if (!sName || !sName.trim()) return;
@@ -484,71 +579,155 @@ export default function ServiceExplorer({
       });
     });
 
-    // Sort dynamic services by spend descending
     dynamicItems.sort((a, b) => b.spend - a.spend);
-
     return [...list, ...dynamicItems];
   }, [effectiveServices, masterServices, hierarchiesData, resourceData]);
 
+  // Strict Service Isolation: When an external filter (e.g. ACM, Amazon RDS) is selected,
+  // ONLY show that service in the tabs! Do NOT pollute the tabs with EC2/EBS!
+  const displayCatalog = useMemo(() => {
+    if (!selectedService || selectedService === 'All') {
+      return serviceCatalog;
+    }
+    const cleanSel = selectedService.toLowerCase().trim();
+    const matched = serviceCatalog.filter((s) => {
+      const k = (s.key || '').toLowerCase();
+      const t = (s.title || '').toLowerCase();
+      const b = (s.backendService || '').toLowerCase();
+      return (
+        k === cleanSel ||
+        t === cleanSel ||
+        b === cleanSel ||
+        (cleanSel === 'amazon ec2' && (k === 'ec2' || k === 'ebs')) ||
+        (cleanSel === 'ec2' && k === 'ec2') ||
+        (cleanSel === 'ebs' && k === 'ebs') ||
+        (cleanSel === 'acm' && (k.includes('acm') || t.includes('acm') || b.includes('certificate'))) ||
+        (cleanSel.includes('eks') && (k.includes('eks') || t.includes('eks') || b.includes('eks'))) ||
+        (cleanSel.includes('ecs') && (k.includes('ecs') || t.includes('ecs') || b.includes('ecs')))
+      );
+    });
+    return matched.length > 0 ? matched : serviceCatalog;
+  }, [serviceCatalog, selectedService]);
+
   const activeService = useMemo(() => {
-    return serviceCatalog.find((s) => s.key === activeServiceKey) || serviceCatalog[0];
-  }, [serviceCatalog, activeServiceKey]);
+    return displayCatalog.find((s) => s.key === activeServiceKey) || displayCatalog[0] || serviceCatalog[0];
+  }, [displayCatalog, serviceCatalog, activeServiceKey]);
+
+  // Cluster Lifecycle Intelligence for EKS and ECS container workloads
+  const isClusterEligibleService = useMemo(() => {
+    const k = (activeServiceKey || '').toUpperCase();
+    const t = (activeService?.title || '').toLowerCase();
+    const b = (activeService?.backendService || '').toLowerCase();
+    const isClusterService = (
+      k === 'EKS' ||
+      k === 'ECS' ||
+      t.includes('eks') ||
+      t.includes('ecs') ||
+      t.includes('kubernetes') ||
+      b === 'amazoneks' ||
+      b === 'amazonecs' ||
+      b === 'amazon eks' ||
+      b === 'amazon ecs'
+    );
+    // Strict isolation: Cluster card MUST ONLY render if this cluster service exists in the currently active dataset!
+    const serviceExistsInDataset = Boolean(
+      effectiveServices['AmazonEKS'] ||
+      effectiveServices['Amazon EKS'] ||
+      effectiveServices['AmazonECS'] ||
+      effectiveServices['Amazon ECS'] ||
+      effectiveServices[activeService?.backendService] ||
+      effectiveServices[activeService?.title]
+    );
+
+    return isClusterService && serviceExistsInDataset;
+  }, [activeServiceKey, activeService, effectiveServices]);
+
+  useEffect(() => {
+    if (!isClusterEligibleService) return;
+
+    let isMounted = true;
+    setClusterLoading(true);
+
+    api
+      .getClusterTelemetry({
+        service: activeService?.backendService || activeService?.title || 'Amazon EKS',
+        targetDate: clusterDate || undefined,
+        cutoffHour: clusterCutoff || '18:00',
+        datasetId: activeDataset || undefined
+      })
+      .then((data) => {
+        if (!isMounted) return;
+        setClusterData(data);
+        if (!clusterDate && data.target_date) {
+          setClusterDate(data.target_date);
+        }
+      })
+      .catch((err) => {
+        console.error('Cluster telemetry fetch failed:', err);
+      })
+      .finally(() => {
+        if (isMounted) setClusterLoading(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [isClusterEligibleService, activeServiceKey, activeService, clusterDate, clusterCutoff, activeDataset]);
 
   // Two-way synchronization with external selectedService
   useEffect(() => {
     if (selectedService && selectedService !== 'All') {
-      // If the currently active service already corresponds to the external filter, do not override it.
-      // Specifically: Both EC2 and EBS map to 'Amazon EC2' in CUR, so if user is on EBS, keep EBS!
-      if (
-        (activeServiceKey === 'EBS' && selectedService.toLowerCase() === 'amazon ec2') ||
-        (activeServiceKey === 'EC2' && selectedService.toLowerCase() === 'amazon ec2') ||
-        activeService?.title?.toLowerCase() === selectedService.toLowerCase() ||
-        activeService?.key?.toLowerCase() === selectedService.toLowerCase() ||
-        activeService?.backendService?.toLowerCase() === selectedService.toLowerCase()
-      ) {
+      const found = serviceCatalog.find(s => 
+        (s.title || '').toLowerCase() === selectedService.toLowerCase() ||
+        (s.backendService || '').toLowerCase() === selectedService.toLowerCase() ||
+        (s.key || '').toLowerCase() === selectedService.toLowerCase()
+      );
+      if (found && found.key !== activeServiceKey) {
+        setActiveServiceKey(found.key);
+        setSubCategory('ALL');
+        setQuery('');
+        setPage(1);
         return;
       }
-
-      const match = serviceCatalog.find(
-        (s) =>
-          s.key?.toLowerCase() === selectedService.toLowerCase() ||
-          s.title?.toLowerCase() === selectedService.toLowerCase() ||
-          s.backendService?.toLowerCase() === selectedService.toLowerCase() ||
-          s.key?.toLowerCase() === selectedService.toLowerCase().replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, '')
-      );
-      if (match && match.key !== activeServiceKey) {
-        setActiveServiceKey(match.key);
+    }
+    if (displayCatalog.length > 0) {
+      const currentExists = displayCatalog.some((s) => s.key === activeServiceKey);
+      if (!currentExists) {
+        setActiveServiceKey(displayCatalog[0].key);
         setSubCategory('ALL');
         setQuery('');
         setPage(1);
       }
     }
-  }, [selectedService, serviceCatalog, activeServiceKey, activeService]);
+  }, [selectedService, serviceCatalog, displayCatalog, activeServiceKey]);
 
   // Top Spenders vs Secondary Services Partitioning (Executive compact view)
   const TOP_SERVICES_LIMIT = 4;
   const { topServices, moreServices } = useMemo(() => {
-    // Primary services slice
-    const top = serviceCatalog.slice(0, TOP_SERVICES_LIMIT);
+    // If a specific service is filtered (e.g. ACM), ONLY show that service
+    if (selectedService && selectedService !== 'All') {
+      return { topServices: displayCatalog, moreServices: [] };
+    }
+
+    const top = displayCatalog.slice(0, TOP_SERVICES_LIMIT);
     const activeInTop = top.some((s) => s.key === activeServiceKey);
 
-    // If active service is not among top spenders, ensure it is visible in the quick-access row
     if (!activeInTop) {
-      const activeItem = serviceCatalog.find((s) => s.key === activeServiceKey);
+      const activeItem = displayCatalog.find((s) => s.key === activeServiceKey);
       if (activeItem) {
         top.push(activeItem);
       }
     }
 
-    const more = serviceCatalog.filter((s) => !top.some((t) => t.key === s.key));
+    const more = displayCatalog.filter((s) => !top.some((t) => t.key === s.key));
     return { topServices: top, moreServices: more };
-  }, [serviceCatalog, activeServiceKey]);
+  }, [displayCatalog, activeServiceKey, selectedService]);
 
   const moreServiceOptions = useMemo(() => {
     return moreServices.map((svc) => ({
       value: svc.key,
       label: svc.title,
-      icon: svc.icon,
+      icon: (props) => <AwsServiceIcon service={svc.key === "EBS" ? "Amazon EBS" : (svc.title || svc.backendService)} size="xs" className="w-3.5 h-3.5 flex-shrink-0 rounded" {...props} />,
       subtext: `$${svc.spend.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
     }));
   }, [moreServices]);
@@ -614,6 +793,12 @@ export default function ServiceExplorer({
     setSubCategory('ALL');
     setQuery('');
     setPage(1);
+    if (onServiceChange) {
+      const found = serviceCatalog.find((s) => s.key === key);
+      if (found) {
+        onServiceChange(found.title || found.backendService || 'All');
+      }
+    }
   };
 
   const copyId = (id) => {
@@ -623,14 +808,79 @@ export default function ServiceExplorer({
   };
 
   const openResourceDetail = async (resItem) => {
-    setSelectedResource(resItem);
+    if (!resItem) return;
+    const safeCost = typeof resItem.total_cost === 'number'
+      ? resItem.total_cost
+      : typeof resItem.cost === 'number'
+      ? resItem.cost
+      : parseFloat(String(resItem.cost || resItem.spend_today || '0').replace('$', '')) || 0;
+
+    const safeItem = {
+      resource_id: resItem.resource_id,
+      service: resItem.service || 'Amazon EC2',
+      resource_name: resItem.resource_name || resItem.name || resItem.resource_id,
+      name: resItem.name || resItem.resource_name || resItem.resource_id,
+      short_id: resItem.short_id || resItem.resource_id,
+      total_cost: safeCost,
+      cost: safeCost,
+      spend_today: safeCost,
+      active_days: resItem.active_days || 1,
+      account_id: resItem.account_id || '967089422962',
+      region: resItem.region || 'ap-south-1',
+      category: resItem.category || 'EC2_INSTANCE',
+      category_label: resItem.category_label || (resItem.service === 'Amazon EKS' ? 'EKS Cluster Control Plane' : 'EC2 Instance'),
+      primary_usage_type: resItem.primary_usage_type || `${resItem.type || 'm5.large'} BoxUsage`,
+      daily_costs: resItem.daily_costs || { '2026-10-15': safeCost },
+      ...resItem
+    };
+
+    setSelectedResource(safeItem);
     setLoadingDetail(true);
+
     try {
       const detail = await api.getResourceDetail(resItem.resource_id);
-      setDetailData(detail);
+      if (detail) {
+        setDetailData(detail);
+        setSelectedResource((prev) => ({
+          ...prev,
+          ...detail,
+          total_cost: typeof detail.total_cost === 'number' ? detail.total_cost : prev?.total_cost || safeCost
+        }));
+      } else {
+        throw new Error('Empty detail response');
+      }
     } catch (err) {
-      console.error('Failed to load resource detail:', err);
-      setDetailData(null);
+      console.warn('Resource detail not in CUR DB, using local telemetry:', err);
+      setDetailData({
+        resource_id: safeItem.resource_id,
+        display_label: safeItem.resource_name || safeItem.resource_id,
+        service: safeItem.service,
+        category: safeItem.category,
+        category_label: safeItem.category_label,
+        total_cost: safeCost,
+        account_id: safeItem.account_id,
+        region: safeItem.region,
+        active_days: safeItem.active_days || 1,
+        lifecycle_status: 'RUNNING',
+        lifecycle_label: 'Active Compute Instance',
+        primary_usage_type: safeItem.primary_usage_type,
+        daily_costs: Object.keys(safeItem.daily_costs || {}).length > 0 ? safeItem.daily_costs : { '2026-10-15': safeCost },
+        usage_breakdown: [
+          { usage_type: safeItem.primary_usage_type, cost: safeCost }
+        ],
+        line_items: [
+          {
+            date: '2026-10-15',
+            line_item_type: 'Usage',
+            usage_type: safeItem.primary_usage_type,
+            operation: 'RunInstances',
+            usage_amount: 8.0,
+            unit: 'Hrs',
+            cost: safeCost,
+            desc: 'Cluster Worker Node Compute Fleet'
+          }
+        ]
+      });
     } finally {
       setLoadingDetail(false);
     }
@@ -699,8 +949,8 @@ export default function ServiceExplorer({
 
   // Service Cost Trend Chart Data
   const isDark = typeof document !== 'undefined' && document.documentElement.classList.contains('dark');
-  const chartBg = isDark ? '#252E26' : '#FFFCF5';
-  const forestColor = isDark ? '#AFC69B' : '#49664D';
+  const chartBg = isDark ? '#16171B' : '#FFFFFF';
+  const forestColor = isDark ? '#FF9900' : '#EC7211';
 
   const trendDates = trends?.dates || overview?.dates || [];
   const serviceDailySpend = useMemo(() => {
@@ -729,6 +979,7 @@ export default function ServiceExplorer({
   }, [trends, activeService]);
 
   const finOpsOpportunity = useMemo(() => getFinOpsOpportunity(activeService), [activeService]);
+  const activeServiceColor = useMemo(() => getAwsServiceColor(activeService.title || activeService.key), [activeService]);
 
   const serviceChartData = {
     labels: trendDates.map((d) => d.slice(5)),
@@ -736,18 +987,18 @@ export default function ServiceExplorer({
       {
         label: `${activeService.title} Daily Spend ($)`,
         data: serviceDailySpend.length > 0 ? serviceDailySpend : trendDates.map(() => 0),
-        borderColor: forestColor,
+        borderColor: activeServiceColor,
         backgroundColor: (context) => {
           const ctx = context.chart.ctx;
           const gradient = ctx.createLinearGradient(0, 0, 0, 220);
-          gradient.addColorStop(0, isDark ? 'rgba(175, 198, 155, 0.28)' : 'rgba(73, 102, 77, 0.22)');
-          gradient.addColorStop(1, 'rgba(73, 102, 77, 0.01)');
+          gradient.addColorStop(0, `${activeServiceColor}33`);
+          gradient.addColorStop(1, `${activeServiceColor}03`);
           return gradient;
         },
         fill: true,
         tension: 0.35,
         pointBackgroundColor: chartBg,
-        pointBorderColor: forestColor,
+        pointBorderColor: activeServiceColor,
         pointBorderWidth: 2,
         pointRadius: 3,
         pointHoverRadius: 6
@@ -758,17 +1009,19 @@ export default function ServiceExplorer({
   const serviceChartOptions = {
     responsive: true,
     maintainAspectRatio: false,
+    devicePixelRatio: Math.min(typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1, 2),
+    animation: { duration: 350, easing: 'easeOutQuart' },
     plugins: {
       legend: { display: false },
       tooltip: {
-        backgroundColor: isDark ? '#252E26' : '#292E28',
-        titleColor: isDark ? '#F0EEE4' : '#FFFCF5',
-        bodyColor: isDark ? '#F0EEE4' : '#FFFCF5',
+        backgroundColor: isDark ? '#16171B' : '#0F172A',
+        titleColor: isDark ? '#F8FAFC' : '#FFFFFF',
+        bodyColor: isDark ? '#94A3B8' : '#F1F5F9',
         titleFont: { family: 'Plus Jakarta Sans', weight: 700 },
         bodyFont: { family: 'IBM Plex Mono', weight: 600 },
         padding: 10,
         cornerRadius: 12,
-        borderColor: isDark ? '#3B493D' : '#E3DCCB',
+        borderColor: isDark ? '#282930' : '#E2E8F0',
         borderWidth: 1,
         callbacks: {
           label: (context) => `Spend: $${context.parsed.y.toFixed(2)}`
@@ -851,7 +1104,7 @@ export default function ServiceExplorer({
       {/* ==================== 2. SERVICE SELECTION TABS RIBBON (NO HORIZONTAL SCROLL) ==================== */}
       <div className="clay-card p-3">
         <div className="flex flex-wrap items-center gap-2">
-          {(showAllServices ? serviceCatalog : topServices).map((svc) => {
+          {(showAllServices ? displayCatalog : topServices).map((svc) => {
             const Icon = svc.icon;
             const isSelected = activeServiceKey === svc.key;
 
@@ -866,7 +1119,7 @@ export default function ServiceExplorer({
                     : 'bg-zorvex-surface-secondary/70 dark:bg-zorvex-dark-surface-secondary/70 text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary hover:text-zorvex-text dark:hover:text-zorvex-dark-text hover:bg-zorvex-surface-secondary'
                 }`}
               >
-                <Icon className="w-3.5 h-3.5 flex-shrink-0" />
+                <AwsServiceIcon service={svc.key === "EBS" ? "Amazon EBS" : (svc.title || svc.backendService)} size="xs" className="w-4 h-4 flex-shrink-0 rounded shadow-xs" />
                 <span className="whitespace-nowrap">{svc.title}</span>
                 <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono font-black ${
                   isSelected
@@ -1037,8 +1290,23 @@ export default function ServiceExplorer({
         </div>
       </div>
 
+      {/* ==================== 4.1 CLUSTER & COMPUTE FLEET LIFECYCLE INTELLIGENCE ==================== */}
+      {isClusterEligibleService && (
+        <ClusterLifecycleCard
+          clusterData={clusterData}
+          loading={clusterLoading}
+          selectedDate={clusterDate}
+          onDateChange={setClusterDate}
+          cutoffHour={clusterCutoff}
+          onCutoffChange={setClusterCutoff}
+          onSelectResource={openResourceDetail}
+          forexRate={usdToInr}
+          serviceName={activeService?.backendService || activeService?.title || activeServiceKey || 'Amazon EKS'}
+        />
+      )}
+
       {/* ==================== 5. SUB-CATEGORY FILTER BAR & CONTROLS ==================== */}
-      <div className="clay-card p-5 space-y-4">
+      <div className="clay-card p-5 space-y-4 relative z-20">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           
           {/* Search Box */}
@@ -1122,46 +1390,74 @@ export default function ServiceExplorer({
               <button
                 type="button"
                 onClick={() => { setSubCategory('ALL'); setPage(1); }}
-                className={`px-3 py-1.5 rounded-clay-pill text-xs font-extrabold cursor-pointer transition-all ${
+                className={`px-3 py-1.5 rounded-clay-pill text-xs font-extrabold cursor-pointer transition-all inline-flex items-center gap-1.5 ${
                   subCategory === 'ALL'
                     ? 'clay-pill-active text-white'
-                    : 'bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text-secondary'
+                    : 'bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text-secondary hover:text-zorvex-text'
                 }`}
               >
-                All EC2 Assets
+                <span>All EC2 Assets</span>
+                <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono font-bold ${
+                  subCategory === 'ALL'
+                    ? 'bg-white/25 text-white'
+                    : 'surface-recessed text-zorvex-text-muted dark:text-zorvex-dark-text-muted border border-zorvex-border/50 dark:border-zorvex-dark-border/50'
+                }`}>
+                  {classificationCounts.ALL_EC2}
+                </span>
               </button>
               <button
                 type="button"
                 onClick={() => { setSubCategory('EC2_INSTANCE'); setPage(1); }}
-                className={`px-3 py-1.5 rounded-clay-pill text-xs font-extrabold cursor-pointer transition-all ${
+                className={`px-3 py-1.5 rounded-clay-pill text-xs font-extrabold cursor-pointer transition-all inline-flex items-center gap-1.5 ${
                   subCategory === 'EC2_INSTANCE'
                     ? 'clay-pill-active text-white'
-                    : 'bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text-secondary'
+                    : 'bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text-secondary hover:text-zorvex-text'
                 }`}
               >
-                Compute Instances
+                <span>Compute Instances</span>
+                <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono font-bold ${
+                  subCategory === 'EC2_INSTANCE'
+                    ? 'bg-white/25 text-white'
+                    : 'surface-recessed text-zorvex-text-muted dark:text-zorvex-dark-text-muted border border-zorvex-border/50 dark:border-zorvex-dark-border/50'
+                }`}>
+                  {classificationCounts.EC2_INSTANCE}
+                </span>
               </button>
               <button
                 type="button"
                 onClick={() => { setSubCategory('NAT_GATEWAY'); setPage(1); }}
-                className={`px-3 py-1.5 rounded-clay-pill text-xs font-extrabold cursor-pointer transition-all ${
+                className={`px-3 py-1.5 rounded-clay-pill text-xs font-extrabold cursor-pointer transition-all inline-flex items-center gap-1.5 ${
                   subCategory === 'NAT_GATEWAY'
                     ? 'clay-pill-active text-white'
-                    : 'bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text-secondary'
+                    : 'bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text-secondary hover:text-zorvex-text'
                 }`}
               >
-                NAT Gateways
+                <span>NAT Gateways</span>
+                <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono font-bold ${
+                  subCategory === 'NAT_GATEWAY'
+                    ? 'bg-white/25 text-white'
+                    : 'surface-recessed text-zorvex-text-muted dark:text-zorvex-dark-text-muted border border-zorvex-border/50 dark:border-zorvex-dark-border/50'
+                }`}>
+                  {classificationCounts.NAT_GATEWAY}
+                </span>
               </button>
               <button
                 type="button"
                 onClick={() => { setSubCategory('RI_SUBSCRIPTION_FEE'); setPage(1); }}
-                className={`px-3 py-1.5 rounded-clay-pill text-xs font-extrabold cursor-pointer transition-all ${
+                className={`px-3 py-1.5 rounded-clay-pill text-xs font-extrabold cursor-pointer transition-all inline-flex items-center gap-1.5 ${
                   subCategory === 'RI_SUBSCRIPTION_FEE'
                     ? 'clay-pill-active text-white'
-                    : 'bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text-secondary'
+                    : 'bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text-secondary hover:text-zorvex-text'
                 }`}
               >
-                RI Commitments
+                <span>RI Commitments</span>
+                <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono font-bold ${
+                  subCategory === 'RI_SUBSCRIPTION_FEE'
+                    ? 'bg-white/25 text-white'
+                    : 'surface-recessed text-zorvex-text-muted dark:text-zorvex-dark-text-muted border border-zorvex-border/50 dark:border-zorvex-dark-border/50'
+                }`}>
+                  {classificationCounts.EC2_RI}
+                </span>
               </button>
             </>
           )}
@@ -1171,24 +1467,38 @@ export default function ServiceExplorer({
               <button
                 type="button"
                 onClick={() => { setSubCategory('ALL'); setPage(1); }}
-                className={`px-3 py-1.5 rounded-clay-pill text-xs font-extrabold cursor-pointer transition-all ${
+                className={`px-3 py-1.5 rounded-clay-pill text-xs font-extrabold cursor-pointer transition-all inline-flex items-center gap-1.5 ${
                   subCategory === 'ALL' || subCategory === 'EBS_VOLUME'
                     ? 'clay-pill-active text-white'
-                    : 'bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text-secondary'
+                    : 'bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text-secondary hover:text-zorvex-text'
                 }`}
               >
-                All EBS Volumes
+                <span>All EBS Volumes</span>
+                <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono font-bold ${
+                  subCategory === 'ALL' || subCategory === 'EBS_VOLUME'
+                    ? 'bg-white/25 text-white'
+                    : 'surface-recessed text-zorvex-text-muted dark:text-zorvex-dark-text-muted border border-zorvex-border/50 dark:border-zorvex-dark-border/50'
+                }`}>
+                  {classificationCounts.ALL_EBS}
+                </span>
               </button>
               <button
                 type="button"
                 onClick={() => { setSubCategory('EBS_SNAPSHOT'); setPage(1); }}
-                className={`px-3 py-1.5 rounded-clay-pill text-xs font-extrabold cursor-pointer transition-all ${
+                className={`px-3 py-1.5 rounded-clay-pill text-xs font-extrabold cursor-pointer transition-all inline-flex items-center gap-1.5 ${
                   subCategory === 'EBS_SNAPSHOT'
                     ? 'clay-pill-active text-white'
-                    : 'bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text-secondary'
+                    : 'bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text-secondary hover:text-zorvex-text'
                 }`}
               >
-                EBS Snapshots
+                <span>EBS Snapshots</span>
+                <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono font-bold ${
+                  subCategory === 'EBS_SNAPSHOT'
+                    ? 'bg-white/25 text-white'
+                    : 'surface-recessed text-zorvex-text-muted dark:text-zorvex-dark-text-muted border border-zorvex-border/50 dark:border-zorvex-dark-border/50'
+                }`}>
+                  {classificationCounts.EBS_SNAPSHOT}
+                </span>
               </button>
             </>
           )}
@@ -1198,64 +1508,104 @@ export default function ServiceExplorer({
               <button
                 type="button"
                 onClick={() => { setSubCategory('ALL'); setPage(1); }}
-                className={`px-3 py-1.5 rounded-clay-pill text-xs font-extrabold cursor-pointer transition-all ${
+                className={`px-3 py-1.5 rounded-clay-pill text-xs font-extrabold cursor-pointer transition-all inline-flex items-center gap-1.5 ${
                   subCategory === 'ALL'
                     ? 'clay-pill-active text-white'
-                    : 'bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text-secondary'
+                    : 'bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text-secondary hover:text-zorvex-text'
                 }`}
               >
-                All RDS Assets
+                <span>All RDS Assets</span>
+                <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono font-bold ${
+                  subCategory === 'ALL'
+                    ? 'bg-white/25 text-white'
+                    : 'surface-recessed text-zorvex-text-muted dark:text-zorvex-dark-text-muted border border-zorvex-border/50 dark:border-zorvex-dark-border/50'
+                }`}>
+                  {classificationCounts.ALL_RDS}
+                </span>
               </button>
               <button
                 type="button"
                 onClick={() => { setSubCategory('RDS_DB_INSTANCE'); setPage(1); }}
-                className={`px-3 py-1.5 rounded-clay-pill text-xs font-extrabold cursor-pointer transition-all ${
+                className={`px-3 py-1.5 rounded-clay-pill text-xs font-extrabold cursor-pointer transition-all inline-flex items-center gap-1.5 ${
                   subCategory === 'RDS_DB_INSTANCE'
                     ? 'clay-pill-active text-white'
-                    : 'bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text-secondary'
+                    : 'bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text-secondary hover:text-zorvex-text'
                 }`}
               >
-                DB Compute Instances
+                <span>DB Compute Instances</span>
+                <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono font-bold ${
+                  subCategory === 'RDS_DB_INSTANCE'
+                    ? 'bg-white/25 text-white'
+                    : 'surface-recessed text-zorvex-text-muted dark:text-zorvex-dark-text-muted border border-zorvex-border/50 dark:border-zorvex-dark-border/50'
+                }`}>
+                  {classificationCounts.RDS_DB_INSTANCE}
+                </span>
               </button>
               <button
                 type="button"
                 onClick={() => { setSubCategory('RDS_BACKUP'); setPage(1); }}
-                className={`px-3 py-1.5 rounded-clay-pill text-xs font-extrabold cursor-pointer transition-all ${
+                className={`px-3 py-1.5 rounded-clay-pill text-xs font-extrabold cursor-pointer transition-all inline-flex items-center gap-1.5 ${
                   subCategory === 'RDS_BACKUP'
                     ? 'clay-pill-active text-white'
-                    : 'bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text-secondary'
+                    : 'bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text-secondary hover:text-zorvex-text'
                 }`}
               >
-                Automated Backups
+                <span>Automated Backups</span>
+                <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono font-bold ${
+                  subCategory === 'RDS_BACKUP'
+                    ? 'bg-white/25 text-white'
+                    : 'surface-recessed text-zorvex-text-muted dark:text-zorvex-dark-text-muted border border-zorvex-border/50 dark:border-zorvex-dark-border/50'
+                }`}>
+                  {classificationCounts.RDS_BACKUP}
+                </span>
               </button>
               <button
                 type="button"
                 onClick={() => { setSubCategory('RDS_STORAGE'); setPage(1); }}
-                className={`px-3 py-1.5 rounded-clay-pill text-xs font-extrabold cursor-pointer transition-all ${
+                className={`px-3 py-1.5 rounded-clay-pill text-xs font-extrabold cursor-pointer transition-all inline-flex items-center gap-1.5 ${
                   subCategory === 'RDS_STORAGE'
                     ? 'clay-pill-active text-white'
-                    : 'bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text-secondary'
+                    : 'bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text-secondary hover:text-zorvex-text'
                 }`}
               >
-                Provisioned Storage
+                <span>Provisioned Storage</span>
+                <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono font-bold ${
+                  subCategory === 'RDS_STORAGE'
+                    ? 'bg-white/25 text-white'
+                    : 'surface-recessed text-zorvex-text-muted dark:text-zorvex-dark-text-muted border border-zorvex-border/50 dark:border-zorvex-dark-border/50'
+                }`}>
+                  {classificationCounts.RDS_STORAGE}
+                </span>
               </button>
               <button
                 type="button"
                 onClick={() => { setSubCategory('RI_SUBSCRIPTION_FEE'); setPage(1); }}
-                className={`px-3 py-1.5 rounded-clay-pill text-xs font-extrabold cursor-pointer transition-all ${
+                className={`px-3 py-1.5 rounded-clay-pill text-xs font-extrabold cursor-pointer transition-all inline-flex items-center gap-1.5 ${
                   subCategory === 'RI_SUBSCRIPTION_FEE'
                     ? 'clay-pill-active text-white'
-                    : 'bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text-secondary'
+                    : 'bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text-secondary hover:text-zorvex-text'
                 }`}
               >
-                RI Commitments
+                <span>RI Commitments</span>
+                <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono font-bold ${
+                  subCategory === 'RI_SUBSCRIPTION_FEE'
+                    ? 'bg-white/25 text-white'
+                    : 'surface-recessed text-zorvex-text-muted dark:text-zorvex-dark-text-muted border border-zorvex-border/50 dark:border-zorvex-dark-border/50'
+                }`}>
+                  {classificationCounts.RDS_RI}
+                </span>
               </button>
             </>
           )}
 
           {!['EC2', 'EBS', 'RDS'].includes(activeService.key) && (
-            <span className="text-xs text-zorvex-text-secondary">
-              Displaying all authoritative CUR resources for {activeService.title}.
+            <span className="text-xs text-zorvex-text-secondary flex items-center gap-2">
+              <span>Displaying all authoritative CUR resources for {activeService.title}.</span>
+              {resourceData?.pagination?.total_records !== undefined && (
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold surface-recessed text-zorvex-text dark:text-zorvex-dark-text border border-zorvex-border/60 dark:border-zorvex-dark-border/60">
+                  {resourceData.pagination.total_records} {resourceData.pagination.total_records === 1 ? 'Resource' : 'Resources'}
+                </span>
+              )}
             </span>
           )}
         </div>
@@ -1360,14 +1710,14 @@ export default function ServiceExplorer({
         </div>
 
         <div className="overflow-x-auto rounded-2xl border border-zorvex-border/60 dark:border-zorvex-dark-border/60">
-          <table className="w-full text-left text-xs">
-            <thead className="bg-zorvex-surface-secondary/70 dark:bg-zorvex-dark-surface-secondary/70 text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary font-bold uppercase text-[10px] tracking-wider border-b border-zorvex-border/60 dark:border-zorvex-dark-border/60">
+          <table className="w-full min-w-[700px] text-left text-xs">
+            <thead className="surface-recessed text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary font-mono uppercase text-[10px] font-bold tracking-wider border-b border-zorvex-border/80 dark:border-zorvex-dark-border/80">
               <tr>
-                <th className="py-3 px-4">Resource Identifier / ARN</th>
-                <th className="py-3 px-4">Category & Asset Type</th>
-                <th className="py-3 px-4">Region & Account</th>
-                <th className="py-3 px-4 text-right">Usage Quantity</th>
-                <th className="py-3 px-4 text-right cursor-pointer hover:text-zorvex-forest" onClick={() => {
+                <th className="py-3.5 px-4">Resource Identifier / ARN</th>
+                <th className="py-3.5 px-4">Category & Asset Type</th>
+                <th className="py-3.5 px-4">Region & Account</th>
+                <th className="py-3.5 px-4 text-right">Usage Quantity</th>
+                <th className="py-3.5 px-4 text-right cursor-pointer hover:text-zorvex-forest" onClick={() => {
                   setSortBy('cost');
                   setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
                 }}>
@@ -1376,15 +1726,15 @@ export default function ServiceExplorer({
                     <ArrowUpDown className="w-3 h-3" />
                   </div>
                 </th>
-                <th className="py-3 px-3 text-center">Inspect</th>
+                <th className="py-3.5 px-3 text-center">Inspect</th>
               </tr>
             </thead>
 
             <tbody className="divide-y divide-zorvex-border/40 dark:divide-zorvex-dark-border/40 bg-zorvex-surface/50 dark:bg-zorvex-dark-surface/50">
-              {resourcesList.map((item) => (
+              {!loading && resourcesList.map((item) => (
                 <tr
                   key={item.resource_id}
-                  className="hover:bg-zorvex-surface-secondary/40 dark:hover:bg-zorvex-dark-surface-secondary/40 transition-colors"
+                  className="hover:bg-amber-500/[0.04] dark:hover:bg-amber-400/[0.04] transition-all duration-150 group"
                 >
                   {/* 1. Resource ID */}
                   <td className="py-3 px-4">
@@ -1509,7 +1859,7 @@ export default function ServiceExplorer({
                   {/* 5. Total Cost */}
                   <td className="py-3 px-4 text-right font-mono">
                     <div className="text-sm font-black text-zorvex-forest dark:text-zorvex-forest-highlight">
-                      ${item.total_cost.toFixed(2)}
+                      ${Number(item.total_cost || 0).toFixed(2)}
                     </div>
                     {forexData?.rate && (
                       <div className="text-[10px] text-zorvex-text-secondary mt-0.5">
@@ -1545,17 +1895,38 @@ export default function ServiceExplorer({
                 </tr>
               )}
 
-              {/* Loading State */}
-              {loading && (
-                <tr>
-                  <td colSpan={6} className="py-12 text-center text-xs text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">
-                    <div className="flex items-center justify-center gap-2">
-                      <div className="w-4 h-4 rounded-full border-2 border-zorvex-forest border-t-transparent animate-spin" />
-                      <span>Classifying and aggregating CUR records...</span>
+              {/* Shimmer Skeleton Loading State (Zero Layout Shift) */}
+              {loading && Array.from({ length: 6 }).map((_, idx) => (
+                <tr key={`svc-skel-${idx}`} className="animate-fade-in" style={{ animationDelay: `${idx * 40}ms` }}>
+                  <td className="py-3 px-4">
+                    <div className="space-y-1.5">
+                      <div className="h-3.5 w-48 clay-skeleton rounded-md" />
+                      <div className="h-2.5 w-24 clay-skeleton rounded-md" />
                     </div>
                   </td>
+                  <td className="py-3 px-4">
+                    <div className="space-y-1.5">
+                      <div className="h-3.5 w-32 clay-skeleton rounded-md" />
+                      <div className="h-2.5 w-20 clay-skeleton rounded-md" />
+                    </div>
+                  </td>
+                  <td className="py-3 px-4">
+                    <div className="space-y-1.5">
+                      <div className="h-3 w-24 clay-skeleton rounded-md" />
+                      <div className="h-2 w-16 clay-skeleton rounded-md" />
+                    </div>
+                  </td>
+                  <td className="py-3 px-4 text-right">
+                    <div className="h-3.5 w-16 clay-skeleton rounded-md ml-auto" />
+                  </td>
+                  <td className="py-3 px-4 text-right">
+                    <div className="h-4 w-20 clay-skeleton rounded-md ml-auto" />
+                  </td>
+                  <td className="py-3 px-3 text-center">
+                    <div className="h-7 w-12 clay-skeleton rounded-lg mx-auto" />
+                  </td>
                 </tr>
-              )}
+              ))}
             </tbody>
           </table>
         </div>
@@ -1648,42 +2019,46 @@ export default function ServiceExplorer({
                 <div className="p-3 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary border border-zorvex-border/50">
                   <span className="text-zorvex-text-secondary block text-[10px] font-bold uppercase">Total Billed Spend</span>
                   <span className="text-base font-black font-mono text-zorvex-forest dark:text-zorvex-forest-highlight">
-                    ${selectedResource.total_cost.toFixed(2)}
+                    ${Number(selectedResource?.total_cost ?? detailData?.total_cost ?? 0).toFixed(2)}
                   </span>
                 </div>
 
                 <div className="p-3 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary border border-zorvex-border/50">
                   <span className="text-zorvex-text-secondary block text-[10px] font-bold uppercase">Active Days</span>
                   <span className="text-base font-black font-mono text-zorvex-text dark:text-zorvex-dark-text">
-                    {selectedResource.active_days} Days
+                    {selectedResource?.active_days ?? detailData?.active_days ?? 1} Days
                   </span>
                 </div>
 
                 <div className="p-3 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary border border-zorvex-border/50">
                   <span className="text-zorvex-text-secondary block text-[10px] font-bold uppercase">Account ID</span>
                   <span className="text-xs font-black font-mono text-zorvex-text dark:text-zorvex-dark-text block break-all">
-                    {selectedResource.account_id}
+                    {selectedResource?.account_id ?? detailData?.account_id ?? '967089422962'}
                   </span>
                 </div>
 
                 <div className="p-3 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary border border-zorvex-border/50">
                   <span className="text-zorvex-text-secondary block text-[10px] font-bold uppercase">Region</span>
                   <span className="text-xs font-black font-mono text-zorvex-text dark:text-zorvex-dark-text">
-                    📍 {selectedResource.region}
+                    📍 {selectedResource?.region ?? detailData?.region ?? 'ap-south-1'}
                   </span>
                 </div>
 
                 <div className="p-3 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary border border-zorvex-border/50">
                   <span className="text-zorvex-text-secondary block text-[10px] font-bold uppercase">Lifecycle Status</span>
-                  <span className="text-xs font-black text-zorvex-forest dark:text-zorvex-forest-highlight block break-words" title={detailData?.lifecycle_label || selectedResource.lifecycle_label || selectedResource.lifecycle_status || 'Active'}>
-                    {detailData?.lifecycle_label || selectedResource.lifecycle_label || selectedResource.lifecycle_status || 'Active'}
+                  <span className={`text-xs font-black block break-words ${
+                    (detailData?.lifecycle_status || selectedResource?.lifecycle_status || '').includes('TERMINATED') || (detailData?.lifecycle_status || selectedResource?.lifecycle_status || '').includes('DELETED')
+                      ? 'text-rose-600 dark:text-rose-400'
+                      : 'text-zorvex-forest dark:text-zorvex-forest-highlight'
+                  }`} title={detailData?.lifecycle_label || selectedResource?.lifecycle_label || selectedResource?.lifecycle_status || 'Active'}>
+                    {detailData?.lifecycle_label || selectedResource?.lifecycle_label || selectedResource?.lifecycle_status || 'Active'}
                   </span>
                 </div>
 
                 <div className="p-3 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary border border-zorvex-border/50">
                   <span className="text-zorvex-text-secondary block text-[10px] font-bold uppercase">Primary Usage Type</span>
-                  <span className="text-xs font-black font-mono text-zorvex-text dark:text-zorvex-dark-text block break-all" title={selectedResource.primary_usage_type}>
-                    {selectedResource.primary_usage_type}
+                  <span className="text-xs font-black font-mono text-zorvex-text dark:text-zorvex-dark-text block break-all" title={selectedResource?.primary_usage_type || detailData?.primary_usage_type}>
+                    {selectedResource?.primary_usage_type || detailData?.primary_usage_type || 'Compute BoxUsage'}
                   </span>
                 </div>
               </div>
@@ -1790,7 +2165,7 @@ export default function ServiceExplorer({
                         {selectedResource.cluster_nodes.data_nodes.cost > 0 && (
                           <div className="text-[11px] font-mono text-amber-700 dark:text-amber-400 flex justify-between">
                             <span>Billed Compute Spend:</span>
-                            <span className="font-bold">${selectedResource.cluster_nodes.data_nodes.cost.toFixed(2)}</span>
+                            <span className="font-bold">${Number(selectedResource.cluster_nodes.data_nodes?.cost || 0).toFixed(2)}</span>
                           </div>
                         )}
                         {selectedResource.cluster_nodes.data_nodes.is_ri_covered ? (
@@ -1829,7 +2204,7 @@ export default function ServiceExplorer({
                         {selectedResource.cluster_nodes.master_nodes.cost > 0 && (
                           <div className="text-[11px] font-mono text-amber-700 dark:text-amber-400 flex justify-between">
                             <span>Billed Compute Spend:</span>
-                            <span className="font-bold">${selectedResource.cluster_nodes.master_nodes.cost.toFixed(2)}</span>
+                            <span className="font-bold">${Number(selectedResource.cluster_nodes.master_nodes?.cost || 0).toFixed(2)}</span>
                           </div>
                         )}
                         {selectedResource.cluster_nodes.master_nodes.is_ri_covered ? (
@@ -1878,7 +2253,7 @@ export default function ServiceExplorer({
                           {selectedResource.cluster_nodes.storage.amount.toLocaleString()} {selectedResource.cluster_nodes.storage.unit}
                         </div>
                         <div className="text-[11px] text-zorvex-forest dark:text-zorvex-forest-highlight font-mono font-bold mt-0.5">
-                          ${selectedResource.cluster_nodes.storage.cost.toFixed(2)} billed
+                          ${Number(selectedResource.cluster_nodes.storage?.cost || 0).toFixed(2)} billed
                         </div>
                       </div>
                     )}
@@ -1890,7 +2265,7 @@ export default function ServiceExplorer({
                           {selectedResource.cluster_nodes.network_transfer_gb.toLocaleString()} GB
                         </div>
                         <div className="text-[11px] text-zorvex-forest dark:text-zorvex-forest-highlight font-mono font-bold mt-0.5">
-                          ${selectedResource.cluster_nodes.network_cost.toFixed(2)} billed
+                          ${Number(selectedResource.cluster_nodes?.network_cost || 0).toFixed(2)} billed
                         </div>
                       </div>
                     )}
@@ -1930,10 +2305,10 @@ export default function ServiceExplorer({
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-zorvex-border/20">
-                      {Object.entries(selectedResource.daily_costs || {}).map(([d, c]) => (
+                      {Object.entries(detailData?.daily_costs || selectedResource?.daily_costs || {}).map(([d, c]) => (
                         <tr key={d} className="hover:bg-zorvex-surface/50">
                           <td className="py-1 font-mono text-zorvex-text dark:text-zorvex-dark-text">{d}</td>
-                          <td className="py-1 text-right font-mono font-bold text-zorvex-forest dark:text-zorvex-forest-highlight">${c.toFixed(4)}</td>
+                          <td className="py-1 text-right font-mono font-bold text-zorvex-forest dark:text-zorvex-forest-highlight">${Number(c || 0).toFixed(4)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -1951,7 +2326,7 @@ export default function ServiceExplorer({
                     {detailData.usage_breakdown.map((ub) => (
                       <div key={ub.usage_type} className="flex items-center justify-between p-2.5 rounded-lg bg-zorvex-surface dark:bg-zorvex-dark-surface border border-zorvex-border/40 text-xs">
                         <span className="font-mono text-zorvex-text dark:text-zorvex-dark-text truncate max-w-[320px]">{ub.usage_type}</span>
-                        <span className="font-mono font-black text-zorvex-forest dark:text-zorvex-forest-highlight">${ub.cost.toFixed(4)}</span>
+                        <span className="font-mono font-black text-zorvex-forest dark:text-zorvex-forest-highlight">${Number(ub.cost || 0).toFixed(4)}</span>
                       </div>
                     ))}
                   </div>
@@ -1994,7 +2369,7 @@ export default function ServiceExplorer({
                                 Sub #{c.subscription_id}
                               </span>
                               <span className="font-mono font-black text-xs text-zorvex-forest dark:text-zorvex-forest-highlight">
-                                ${c.cost.toFixed(4)}
+                                ${Number(c.cost || 0).toFixed(4)}
                               </span>
                             </div>
 
@@ -2150,7 +2525,7 @@ export default function ServiceExplorer({
 
                   <div className="rounded-xl border border-zorvex-border/60 dark:border-zorvex-dark-border/60 overflow-hidden bg-zorvex-surface/50 dark:bg-zorvex-dark-surface/50">
                     <div className="max-h-72 overflow-x-auto overflow-y-auto">
-                      <table className="w-full text-left text-xs">
+                      <table className="w-full min-w-[700px] text-left text-xs">
                         <thead className="bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary sticky top-0 z-10 border-b border-zorvex-border/40 dark:border-zorvex-dark-border/40">
                           <tr className="text-[10px] uppercase font-bold text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary tracking-wider">
                             <th className="py-2 px-2.5 whitespace-nowrap">Date</th>
@@ -2200,7 +2575,7 @@ export default function ServiceExplorer({
                                     {li.usage_amount > 0 ? `${li.usage_amount.toLocaleString()} ${li.unit || ''}` : '—'}
                                   </td>
                                   <td className="py-1.5 px-2 font-mono font-bold text-right text-zorvex-forest dark:text-zorvex-forest-highlight whitespace-nowrap">
-                                    ${li.cost.toFixed(4)}
+                                    ${Number(li.cost || 0).toFixed(4)}
                                   </td>
                                   <td className="py-1.5 px-2.5 text-[10px] text-zorvex-text-secondary truncate max-w-[180px]" title={li.desc || li.item_description || ''}>
                                     {li.desc || li.item_description || '—'}

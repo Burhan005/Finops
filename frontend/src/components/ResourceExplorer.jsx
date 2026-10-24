@@ -1,3 +1,4 @@
+import AwsServiceIcon from './common/AwsServiceIcon';
 import React, { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import {
@@ -39,6 +40,7 @@ import {
 } from 'lucide-react';
 import { api } from '../services/api';
 import ClayDropdown from './common/ClayDropdown';
+import { useToast } from '../context/ToastContext';
 
 export default function ResourceExplorer({ 
   overview, 
@@ -60,6 +62,7 @@ export default function ResourceExplorer({
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [showAllServices, setShowAllServices] = useState(false);
+  const [tagFilter, setTagFilter] = useState('ALL');
 
   // Response Data State
   const [data, setData] = useState(null);
@@ -171,10 +174,13 @@ export default function ResourceExplorer({
     setPage(1);
   };
 
+  const toast = useToast();
+
   // Copy Identifier Helper
   const copyId = (id) => {
     navigator.clipboard.writeText(id);
     setCopiedId(id);
+    toast.success('Resource ARN Copied', id.length > 32 ? id.slice(0, 32) + '...' : id);
     setTimeout(() => setCopiedId(''), 2000);
   };
 
@@ -254,7 +260,21 @@ export default function ResourceExplorer({
   // Data helpers
   const summary = data?.summary || {};
   const snapshotsSummary = data?.snapshots_summary;
-  const resourcesList = data?.resources || [];
+  const rawResourcesList = data?.resources || [];
+  const isResourceTagged = (item) => {
+    if (!item) return false;
+    const name = (item.name || '').trim();
+    if (name && name !== item.resource_id && name !== item.short_id && !name.startsWith('No-Resource-ID') && name !== 'Unassigned' && name !== 'Unknown') {
+      return true;
+    }
+    if (item.tags && typeof item.tags === 'object' && Object.keys(item.tags).length > 0) return true;
+    return false;
+  };
+  const resourcesList = useMemo(() => {
+    if (tagFilter === 'TAGGED') return rawResourcesList.filter(isResourceTagged);
+    if (tagFilter === 'UNTAGGED') return rawResourcesList.filter(r => !isResourceTagged(r));
+    return rawResourcesList;
+  }, [rawResourcesList, tagFilter]);
   const pagination = data?.pagination || { page: 1, page_size: 25, total_records: 0, total_pages: 1 };
 
   // Discovered Accounts & Regions from overview or hierarchies
@@ -401,7 +421,7 @@ export default function ResourceExplorer({
             }`}
           >
             <Camera className="w-3.5 h-3.5 text-amber-500" />
-            <span>📸 Snapshots & Backups</span>
+            <span>Snapshots & Backups</span>
             {hierarchies?.snapshots_and_backups && (
               <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-amber-900/30 font-mono font-bold">
                 ${hierarchies.snapshots_and_backups.total_cost.toLocaleString()}
@@ -419,7 +439,7 @@ export default function ResourceExplorer({
                 : 'bg-zorvex-secondary dark:bg-zorvex-dark-secondary text-zorvex-text-muted dark:text-zorvex-dark-text-muted hover:text-zorvex-text dark:hover:text-zorvex-dark-text'
             }`}
           >
-            <Cpu className="w-3.5 h-3.5" />
+            <AwsServiceIcon service="Amazon EC2" size="xs" className="w-3.5 h-3.5" />
             <span>Amazon EC2</span>
           </button>
 
@@ -433,7 +453,7 @@ export default function ResourceExplorer({
                 : 'bg-zorvex-secondary dark:bg-zorvex-dark-secondary text-zorvex-text-muted dark:text-zorvex-dark-text-muted hover:text-zorvex-text dark:hover:text-zorvex-dark-text'
             }`}
           >
-            <Database className="w-3.5 h-3.5" />
+            <AwsServiceIcon service="Amazon RDS" size="xs" className="w-3.5 h-3.5" />
             <span>Amazon RDS</span>
           </button>
 
@@ -443,12 +463,13 @@ export default function ResourceExplorer({
               key={svc.id || svc.name || sIdx}
               type="button"
               onClick={() => handleServiceChange(svc.name)}
-              className={`px-3 py-1.5 rounded-clay-pill text-xs font-bold transition-all cursor-pointer ${
+              className={`px-3 py-1.5 rounded-clay-pill text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
                 selectedService === svc.name
                   ? 'clay-pill-active'
                   : 'bg-zorvex-secondary dark:bg-zorvex-dark-secondary text-zorvex-text-muted dark:text-zorvex-dark-text-muted hover:text-zorvex-text dark:hover:text-zorvex-dark-text'
               }`}
             >
+              <AwsServiceIcon service={svc.name} size="xs" className="w-3.5 h-3.5" />
               <span>{svc.name}</span>
             </button>
           ))}
@@ -717,7 +738,7 @@ export default function ResourceExplorer({
       )}
 
       {/* ==================== SEARCH, FILTERS & CONTROLS ==================== */}
-      <div className="clay-card p-5 space-y-4">
+      <div className="clay-card p-5 space-y-4 relative z-20">
         <div className="flex flex-col lg:flex-row items-center gap-3">
           
           {/* Search Bar */}
@@ -800,6 +821,23 @@ export default function ResourceExplorer({
             />
           </div>
 
+                    {/* Tag Filter */}
+          <div className="w-full sm:w-44">
+            <ClayDropdown
+              options={[
+                { value: 'ALL', label: 'All Tag Status' },
+                { value: 'TAGGED', label: 'Tagged Assets' },
+                { value: 'UNTAGGED', label: 'Untagged Assets' }
+              ]}
+              value={tagFilter}
+              onChange={(val) => {
+                setTagFilter(val);
+                setPage(1);
+              }}
+              width="w-full"
+            />
+          </div>
+
           {/* Reset Filters Button */}
           {(query || selectedService !== 'All' || selectedCategory !== 'ALL' || accountFilter !== 'all' || regionFilter !== 'all' || minCost) && (
             <button
@@ -811,6 +849,7 @@ export default function ResourceExplorer({
                 setAccountFilter('all');
                 setRegionFilter('all');
                 setMinCost('');
+                setTagFilter('ALL');
                 setPage(1);
               }}
               className="px-3.5 py-2 rounded-clay-pill text-xs font-black bg-zorvex-secondary dark:bg-zorvex-dark-secondary text-zorvex-text-muted dark:text-zorvex-dark-text-muted hover:text-zorvex-text dark:hover:text-zorvex-dark-text flex items-center gap-1.5 flex-shrink-0 cursor-pointer"
@@ -2132,22 +2171,22 @@ export default function ResourceExplorer({
 
         {/* Streamlined 6-Column High-Density Table */}
         <div className="rounded-2xl border border-zorvex-border dark:border-zorvex-dark-border overflow-hidden">
-          <table className="w-full text-left text-xs border-collapse">
+          <table className="w-full min-w-[700px] text-left text-xs border-collapse">
             <thead>
-              <tr className="bg-zorvex-secondary/60 dark:bg-zorvex-dark-secondary border-b border-zorvex-border dark:border-zorvex-dark-border text-zorvex-text-muted dark:text-zorvex-dark-text-muted uppercase text-[10px] font-black tracking-wider">
-                <th className="py-3 px-4">Resource & Name</th>
-                <th className="py-3 px-4">Service & Category</th>
-                <th className="py-3 px-4">Region & Account</th>
-                <th className="py-3 px-4 text-right">Usage & Activity</th>
-                <th className="py-3 px-4 text-right">Total Cost ($)</th>
-                <th className="py-3 px-3 text-center">Inspect</th>
+              <tr className="surface-recessed border-b border-zorvex-border/80 dark:border-zorvex-dark-border/80 text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary uppercase text-[10px] font-mono font-bold tracking-wider">
+                <th className="py-3.5 px-4">Resource & Name</th>
+                <th className="py-3.5 px-4">Service & Category</th>
+                <th className="py-3.5 px-4">Region & Account</th>
+                <th className="py-3.5 px-4 text-right">Usage & Activity</th>
+                <th className="py-3.5 px-4 text-right">Total Cost ($)</th>
+                <th className="py-3.5 px-3 text-center">Inspect</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-zorvex-border/50 dark:divide-zorvex-dark-border">
-              {resourcesList.map((item) => (
+              {!loading && resourcesList.map((item) => (
                 <tr
                   key={item.resource_id}
-                  className="hover:bg-zorvex-secondary/40 dark:hover:bg-zorvex-dark-secondary transition-colors"
+                  className="hover:bg-amber-500/[0.04] dark:hover:bg-amber-400/[0.04] transition-all duration-150 group"
                 >
                   
                   {/* 1. Resource & Name */}
@@ -2208,24 +2247,43 @@ export default function ResourceExplorer({
                           {item.name ? item.name : (item.clean_label || item.display_label)}
                         </span>
                       )}
+                      {isResourceTagged(item) ? (
+                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/20" title="Resource is tagged">
+                          <Tag className="w-2.5 h-2.5" />
+                          <span>Tagged</span>
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-500/15 text-amber-800 dark:text-amber-300 border border-amber-500/30" title="Untagged resource (Dark Cost)">
+                          <span>Untagged</span>
+                        </span>
+                      )}
                       {item.active_days === 1 && item.first_seen && (
                         <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-zorvex-forest/10 text-zorvex-forest dark:text-zorvex-forest-highlight border border-zorvex-forest/20" title={`Charged on ${item.first_seen}`}>
                           {item.first_seen}
                         </span>
                       )}
                       {item.lifecycle_status === 'ACTIVE_INSTANCE' ? (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-forest dark:text-zorvex-forest-highlight border border-zorvex-border dark:border-zorvex-dark-border">
-                          <span className="w-1.5 h-1.5 rounded-full bg-zorvex-forest animate-pulse" />
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[9px] font-mono font-bold surface-recessed text-emerald-700 dark:text-emerald-400 border border-emerald-500/30" title="Active compute workload currently accumulating usage.">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                           <span>Active</span>
                         </span>
+                      ) : item.lifecycle_status === 'TERMINATED_INSTANCE' ? (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[9px] font-mono font-bold surface-recessed text-slate-500 dark:text-slate-400 border border-slate-400/30 dark:border-slate-600/30" title={`Terminated workload. Compute usage stopped on ${item.last_seen?.split(' ')[0] || item.first_seen}.`}>
+                          <span className="w-1.5 h-1.5 rounded-full bg-slate-400 dark:bg-slate-500" />
+                          <span>Terminated</span>
+                        </span>
                       ) : item.lifecycle_status === 'RETAINED_BACKUP_STORAGE' ? (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-amber-700 dark:text-amber-400 border border-zorvex-border dark:border-zorvex-dark-border" title="Historical automated backup storage. Instance compute has been deleted.">
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[9px] font-mono font-bold surface-recessed text-amber-700 dark:text-amber-400 border border-amber-500/30" title="Historical automated backup storage. Instance compute has been deleted.">
                           <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
                           <span>Retained Backup</span>
                         </span>
                       ) : item.lifecycle_status === 'SNAPSHOT_STORAGE' ? (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary border border-zorvex-border dark:border-zorvex-dark-border">
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[9px] font-mono font-bold surface-recessed text-slate-600 dark:text-slate-400 border border-slate-500/30">
                           <span>Snapshot</span>
+                        </span>
+                      ) : item.lifecycle_status === 'DELETED_STORAGE' ? (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[9px] font-mono font-bold surface-recessed text-slate-500 dark:text-slate-400 border border-slate-400/30" title="Deleted EBS volume">
+                          <span>Deleted</span>
                         </span>
                       ) : null}
                     </div>
@@ -2248,6 +2306,7 @@ export default function ResourceExplorer({
                   {/* 2. Service & Category */}
                   <td className="py-3 px-4">
                     <div className="font-bold text-xs text-zorvex-text dark:text-zorvex-dark-text flex items-center gap-1.5 flex-wrap">
+                      <AwsServiceIcon service={item.service} category={item.category || item.category_label} assetType={item.asset_type} resourceId={item.resource_id} size="xs" className="w-3.5 h-3.5 flex-shrink-0" />
                       <span>{item.service}</span>
                       {item.instance_type && (
                         <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-zorvex-forest-soft text-zorvex-forest dark:bg-zorvex-forest-dark-soft dark:text-zorvex-forest-highlight border border-zorvex-forest/20">
@@ -2346,17 +2405,38 @@ export default function ResourceExplorer({
                 </tr>
               )}
 
-              {/* Loading State */}
-              {loading && (
-                <tr>
-                  <td colSpan={6} className="py-12 text-center text-xs text-zorvex-text-muted dark:text-zorvex-dark-text-muted">
-                    <div className="flex items-center justify-center gap-2">
-                      <RefreshCw className="w-4 h-4 animate-spin text-zorvex-forest" />
-                      <span>Classifying and aggregating CUR records...</span>
+              {/* Shimmer Skeleton Loading State (Zero Layout Shift) */}
+              {loading && Array.from({ length: 6 }).map((_, idx) => (
+                <tr key={`res-skel-${idx}`} className="animate-fade-in" style={{ animationDelay: `${idx * 40}ms` }}>
+                  <td className="py-3 px-4">
+                    <div className="space-y-1.5">
+                      <div className="h-3.5 w-48 clay-skeleton rounded-md" />
+                      <div className="h-2.5 w-24 clay-skeleton rounded-md" />
                     </div>
                   </td>
+                  <td className="py-3 px-4">
+                    <div className="space-y-1.5">
+                      <div className="h-3.5 w-32 clay-skeleton rounded-md" />
+                      <div className="h-2.5 w-20 clay-skeleton rounded-md" />
+                    </div>
+                  </td>
+                  <td className="py-3 px-4">
+                    <div className="space-y-1.5">
+                      <div className="h-3 w-24 clay-skeleton rounded-md" />
+                      <div className="h-2 w-16 clay-skeleton rounded-md" />
+                    </div>
+                  </td>
+                  <td className="py-3 px-4 text-right">
+                    <div className="h-3.5 w-16 clay-skeleton rounded-md ml-auto" />
+                  </td>
+                  <td className="py-3 px-4 text-right">
+                    <div className="h-4 w-20 clay-skeleton rounded-md ml-auto" />
+                  </td>
+                  <td className="py-3 px-3 text-center">
+                    <div className="h-7 w-12 clay-skeleton rounded-lg mx-auto" />
+                  </td>
                 </tr>
-              )}
+              ))}
             </tbody>
           </table>
         </div>
@@ -2428,8 +2508,9 @@ export default function ResourceExplorer({
             <div className="p-6 border-b border-zorvex-border dark:border-zorvex-dark-border flex items-start justify-between bg-zorvex-secondary/40 dark:bg-zorvex-dark-secondary">
               <div className="pr-4">
                 <div className="flex items-center gap-2 mb-1.5 flex-wrap">
-                  <span className="clay-pill px-2.5 py-0.5 text-[10px] font-black bg-zorvex-forest text-white">
-                    {selectedResource.service}
+                  <span className="clay-pill px-2.5 py-0.5 text-[10px] font-black bg-zorvex-forest text-white inline-flex items-center gap-1.5">
+                    <AwsServiceIcon service={selectedResource.service} category={selectedResource.category || selectedResource.category_label} assetType={selectedResource.asset_type} resourceId={selectedResource.resource_id} size="xs" className="w-3 h-3 flex-shrink-0" />
+                    <span>{selectedResource.service}</span>
                   </span>
                   <span className="clay-pill px-2.5 py-0.5 text-[10px] font-bold bg-zorvex-secondary dark:bg-zorvex-dark-secondary text-zorvex-text">
                     {selectedResource.category_label}
@@ -2497,7 +2578,11 @@ export default function ResourceExplorer({
 
                 <div className="p-3 rounded-xl bg-zorvex-secondary/40 dark:bg-zorvex-dark-secondary border border-zorvex-border/50">
                   <span className="text-zorvex-text-muted block text-[10px] font-bold uppercase">Lifecycle Status</span>
-                  <span className="text-xs font-black text-zorvex-forest dark:text-zorvex-forest-highlight block break-words" title={detailData?.lifecycle_label || selectedResource.lifecycle_label || selectedResource.lifecycle_status || 'Active'}>
+                  <span className={`text-xs font-black block break-words ${
+                    (detailData?.lifecycle_status || selectedResource.lifecycle_status || '').includes('TERMINATED') || (detailData?.lifecycle_status || selectedResource.lifecycle_status || '').includes('DELETED')
+                      ? 'text-rose-600 dark:text-rose-400'
+                      : 'text-zorvex-forest dark:text-zorvex-forest-highlight'
+                  }`} title={detailData?.lifecycle_label || selectedResource.lifecycle_label || selectedResource.lifecycle_status || 'Active'}>
                     {detailData?.lifecycle_label || selectedResource.lifecycle_label || selectedResource.lifecycle_status || 'Active'}
                   </span>
                 </div>

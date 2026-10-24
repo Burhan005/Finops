@@ -38,10 +38,19 @@ from .core.state import cache_put_parsed, org_dataset_put
 logger = logging.getLogger("zorvex.s3_service")
 
 
-def generate_least_privilege_iam_policy(bucket_name: str, prefix: str = "") -> Dict[str, Any]:
+def get_tenant_external_id(org_id: Optional[int] = None) -> str:
+    """Generates deterministic, cryptographically keyed external ID for AWS STS assume_role against Confused Deputy attacks."""
+    if not org_id:
+        return "zorvex-finops-tenant-external-id"
+    secret_salt = os.getenv("SECRET_KEY", "zorvex-finops-salt-2026")
+    token_suffix = hashlib.sha256(f"{org_id}:{secret_salt}".encode()).hexdigest()[:12]
+    return f"zorvex-tenant-{org_id}-{token_suffix}"
+
+
+def generate_least_privilege_iam_policy(bucket_name: str, prefix: str = "", external_id: Optional[str] = None) -> Dict[str, Any]:
     """
     Generates an exact least-privilege AWS IAM Policy document for S3 CUR read access.
-    Restricts read access strictly to the configured bucket and CUR report prefix.
+    Restricts read access strictly to the configured bucket and CUR report prefix, with optional STS ExternalId trust condition.
     """
     clean_prefix = prefix.strip().lstrip("/")
     if clean_prefix and not clean_prefix.endswith("*"):
@@ -85,7 +94,8 @@ def generate_least_privilege_iam_policy(bucket_name: str, prefix: str = "") -> D
 def resolve_aws_session(
     region: str = "ap-south-1",
     profile_name: Optional[str] = None,
-    role_arn: Optional[str] = None
+    role_arn: Optional[str] = None,
+    external_id: Optional[str] = None
 ) -> Tuple[Optional[Any], str, Optional[str]]:
     """
     Resolves a boto3 Session using the standard AWS credential chain:
@@ -145,11 +155,14 @@ def resolve_aws_session(
                 if f":assumed-role/{role_name}/" in current_arn or current_arn.endswith(f":role/{role_name}"):
                     return session, "AUTHENTICATED", None
 
-                assumed = sts_client.assume_role(
-                    RoleArn=role_arn,
-                    RoleSessionName="ZorvexFinOpsCurSyncSession",
-                    DurationSeconds=3600
-                )
+                assume_kwargs = {
+                    "RoleArn": role_arn,
+                    "RoleSessionName": "ZorvexFinOpsCurSyncSession",
+                    "DurationSeconds": 3600
+                }
+                if external_id:
+                    assume_kwargs["ExternalId"] = external_id
+                assumed = sts_client.assume_role(**assume_kwargs)
                 creds = assumed["Credentials"]
                 session = boto3.Session(
                     aws_access_key_id=creds["AccessKeyId"],
@@ -280,10 +293,12 @@ def download_and_ingest_cur_from_s3(
     region = s3_config.region or "ap-south-1"
     prefix = s3_config.prefix or ""
 
-    # 1. Resolve AWS Session
+    # 1. Resolve AWS Session with Tenant-Scoped ExternalId (Protects against Confused Deputy attacks)
+    tenant_ext_id = get_tenant_external_id(org_id)
     session, auth_status, auth_err = resolve_aws_session(
         region=region,
-        role_arn=s3_config.role_arn
+        role_arn=s3_config.role_arn,
+        external_id=tenant_ext_id
     )
 
     if auth_status != "AUTHENTICATED" or not session:

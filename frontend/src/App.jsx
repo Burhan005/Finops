@@ -1,4 +1,4 @@
-import React, { useState, useEffect, Suspense, lazy } from 'react';
+import React, { useState, useEffect, useRef, Suspense, lazy } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import Navbar from './components/Navbar';
 import KpiCards from './components/KpiCards';
@@ -7,6 +7,7 @@ import GlobalFilterBar from './components/common/GlobalFilterBar';
 import AmbientBackground from './components/common/AmbientBackground';
 import UnitEconomicsCard from './components/common/UnitEconomicsCard';
 import ExecutiveSpendPulse from './components/ExecutiveSpendPulse';
+import ErrorBoundary from './components/common/ErrorBoundary';
 import { api } from './services/api';
 import { Activity, GitCompare, ArrowRight, AlertCircle, RefreshCw } from 'lucide-react';
 
@@ -26,17 +27,16 @@ const ForgotPasswordView = lazy(() => import('./components/auth/ForgotPasswordVi
 const ResetPasswordView = lazy(() => import('./components/auth/ResetPasswordView'));
 const LandingPageView = lazy(() => import('./components/landing/LandingPageView'));
 const NotFoundView = lazy(() => import('./components/NotFoundView'));
+const PrivacyPolicyView = lazy(() => import('./components/legal/PrivacyPolicyView'));
+const TermsOfServiceView = lazy(() => import('./components/legal/TermsOfServiceView'));
+import CookieConsentBanner from './components/common/CookieConsentBanner';
+import { DashboardSkeleton, ViewLoadingFallback } from './components/common/DashboardSkeleton';
+import CommandPalette from './components/common/CommandPalette';
+import FloatingScopeCapsule from './components/common/FloatingScopeCapsule';
+import { ToastProvider, useToast } from './context/ToastContext';
+import useSpecularGlow from './hooks/useSpecularGlow';
 
-const ViewLoadingFallback = () => (
-  <div className="flex flex-col items-center justify-center py-20 space-y-3">
-    <div className="w-10 h-10 rounded-2xl bg-zorvex-forest-soft dark:bg-zorvex-forest-dark-soft flex items-center justify-center animate-pulse text-zorvex-forest dark:text-zorvex-forest-highlight shadow-inner">
-      <Activity className="w-5 h-5 stroke-[2.5]" />
-    </div>
-    <span className="text-xs font-bold text-zorvex-text-muted dark:text-zorvex-dark-text-muted tracking-wide">
-      Loading module...
-    </span>
-  </div>
-);
+
 
 function DashboardLayout({
   overview,
@@ -68,6 +68,63 @@ function DashboardLayout({
 }) {
   const location = useLocation();
   const navigate = useNavigate();
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  
+  const [currency, setCurrency] = useState(() => {
+    try {
+      return localStorage.getItem('zorvex_preferred_currency') || 'USD';
+    } catch {
+      return 'USD';
+    }
+  });
+
+  const handleSelectCurrency = (c) => {
+    setCurrency(c);
+    try {
+      localStorage.setItem('zorvex_preferred_currency', c);
+    } catch {}
+  };
+
+  const toggleCurrency = () => {
+    handleSelectCurrency(currency === 'USD' ? 'INR' : 'USD');
+  };
+
+  const toast = useToast();
+  const hasAlertedSpike = useRef(false);
+
+  useEffect(() => {
+    if (overview && !hasAlertedSpike.current) {
+      const defComp = overview.default_comparison || (overview.comparison_defaults ? {
+        delta_cost: overview.comparison_defaults.delta?.delta_cost || 0,
+        target_date: overview.comparison_defaults.target_date || ''
+      } : {});
+      const deltaCost = defComp.delta_cost || 0;
+      if (deltaCost > 15) {
+        hasAlertedSpike.current = true;
+        const targetDate = defComp.target_date || '';
+        const timer = setTimeout(() => {
+          toast.spikeAlert({
+            date: targetDate,
+            cost: deltaCost,
+            service: 'Telemetry Spike Detected',
+            onAction: () => navigate('/app/comparison')
+          });
+        }, 1600);
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [overview, toast, navigate]);
+
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setCommandPaletteOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   useEffect(() => {
     const path = location.pathname;
@@ -88,18 +145,27 @@ function DashboardLayout({
   return (
     <div className="min-h-screen w-full bg-transparent text-zorvex-text dark:text-zorvex-dark-text flex flex-col transition-colors duration-200">
       
-      {/* Navbar with Clean FinOps Clay identity */}
-      <Navbar
-        datasets={datasets}
-        activeDataset={activeDataset}
-        onSelectDataset={onSelectDataset}
-        onRefreshDatasets={onRefreshDatasets}
-        onOpenUpload={onOpenUpload}
-        darkMode={darkMode}
-        onToggleDarkMode={onToggleDarkMode}
-        currentUser={currentUser}
-        onLogout={onLogout}
-      />
+      {/* Navbar with Clean FinOps Clay identity shielded by ErrorBoundary */}
+      <ErrorBoundary 
+        title="Navigation Shell Exception"
+        message="A rendering anomaly occurred in the navigation bar. Your active cloud telemetry session is completely safe."
+        onReset={() => window.location.reload()}
+      >
+        <Navbar
+          datasets={datasets}
+          activeDataset={activeDataset}
+          onSelectDataset={onSelectDataset}
+          onRefreshDatasets={onRefreshDatasets}
+          onOpenUpload={onOpenUpload}
+          darkMode={darkMode}
+          onToggleDarkMode={onToggleDarkMode}
+          currentUser={currentUser}
+          onLogout={onLogout}
+          currency={currency}
+          onSelectCurrency={handleSelectCurrency}
+          onOpenCommandPalette={() => setCommandPaletteOpen(true)}
+        />
+      </ErrorBoundary>
 
       {/* Main App Content */}
       <main className="flex-1 max-w-7xl xl:max-w-[1400px] 2xl:max-w-[1600px] w-full mx-auto px-4 sm:px-6 py-6 sm:py-8">
@@ -123,7 +189,7 @@ function DashboardLayout({
 
         {/* Global Filter Bar */}
         {(location.pathname.includes('overview') || location.pathname.includes('resources') || location.pathname.includes('services')) && overview && (
-          <div className="mb-6">
+          <div className="mb-6 relative z-30">
             <GlobalFilterBar
               startDate={filterStartDate}
               endDate={filterEndDate}
@@ -140,130 +206,148 @@ function DashboardLayout({
           </div>
         )}
 
-        {/* Loading Skeleton */}
+        {/* Claymorphism 3.0 Dashboard Skeleton */}
         {loading && !overview && (
-          <div className="flex flex-col items-center justify-center py-24 space-y-4">
-            <div className="w-14 h-14 rounded-clay-sm bg-clay-card shadow-surface-raised flex items-center justify-center animate-pulse">
-              <Activity className="w-7 h-7 text-zorvex-forest dark:text-zorvex-dark-forest" />
-            </div>
-            <p className="text-xs font-extrabold text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">
-              Loading FinOps Telemetry Engine...
-            </p>
-          </div>
+          <DashboardSkeleton />
         )}
 
         {/* Nested Route Views */}
         {!loading && overview && (
           <Suspense fallback={<ViewLoadingFallback />}>
-            <Routes>
-              <Route
-                path="overview"
-                element={
-                  <div className="page-transition space-y-8">
-                    <KpiCards overview={overview} forexData={forexData} />
-                    <UnitEconomicsCard totalCost={overview.total_cost} />
-                    <SpendingCharts overview={overview} trends={trends} />
-                    <ExecutiveSpendPulse overview={overview} recommendations={recommendations} forexData={forexData} />
-                    
-                    {/* Action Banner to Cost Comparison */}
-                    <div className="clay-card p-6 flex flex-col md:flex-row items-center justify-between gap-4 bg-gradient-to-r from-clay-card via-zorvex-surface-secondary/40 to-clay-surface border border-zorvex-border dark:border-zorvex-dark-border">
-                      <div className="flex items-center gap-4">
-                        <div className="w-12 h-12 rounded-2xl bg-zorvex-forest-soft dark:bg-zorvex-dark-forest-soft flex items-center justify-center text-zorvex-forest dark:text-zorvex-dark-forest shadow-inner">
-                          <GitCompare className="w-6 h-6 stroke-[2.5]" />
+            <ErrorBoundary>
+              <Routes>
+                <Route
+                  path="overview"
+                  element={
+                    <div className="page-transition space-y-8">
+                      <KpiCards overview={overview} recommendations={recommendations} forexData={forexData} currency={currency} />
+                      <UnitEconomicsCard 
+                        totalCost={overview.total_cost}
+                        overview={overview}
+                        filterStartDate={filterStartDate}
+                        filterEndDate={filterEndDate}
+                        onDateRangeChange={onDateRangeChange}
+                        filterService={filterService}
+                        onServiceChange={onServiceChange}
+                        availableServices={masterServices}
+                        onResetFilters={onResetFilters}
+                        forexData={forexData}
+                        currency={currency}
+                        onToggleCurrency={toggleCurrency}
+                      />
+                      <SpendingCharts 
+                        overview={overview} 
+                        trends={trends} 
+                        currency={currency} 
+                        forexData={forexData}
+                        filterService={filterService}
+                        onServiceChange={onServiceChange}
+                        onDateRangeChange={onDateRangeChange}
+                      />
+                      <ExecutiveSpendPulse overview={overview} recommendations={recommendations} forexData={forexData} currency={currency} />
+                      
+                      {/* Action Banner to Cost Comparison */}
+                      <div className="clay-card p-6 flex flex-col md:flex-row items-center justify-between gap-4 bg-gradient-to-r from-clay-card via-zorvex-surface-secondary/40 to-clay-surface border border-zorvex-border dark:border-zorvex-dark-border">
+                        <div className="flex items-center gap-4">
+                          <div className="w-12 h-12 rounded-2xl bg-zorvex-forest-soft dark:bg-zorvex-dark-forest-soft flex items-center justify-center text-zorvex-forest dark:text-zorvex-dark-forest shadow-inner">
+                            <GitCompare className="w-6 h-6 stroke-[2.5]" />
+                          </div>
+                          <div>
+                            <h4 className="text-sm font-extrabold text-zorvex-text dark:text-zorvex-dark-text">
+                              Pinpoint Why Cloud Costs Shifted
+                            </h4>
+                            <p className="text-xs text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary mt-0.5">
+                              Launch our Daily Delta and Monthly Comparison analyzer to isolate exact resource-level spikes.
+                            </p>
+                          </div>
                         </div>
-                        <div>
-                          <h4 className="text-sm font-extrabold text-zorvex-text dark:text-zorvex-dark-text">
-                            Pinpoint Why Cloud Costs Shifted
-                          </h4>
-                          <p className="text-xs text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary mt-0.5">
-                            Launch our Daily Delta and Monthly Comparison analyzer to isolate exact resource-level spikes.
-                          </p>
-                        </div>
+                        <button
+                          onClick={() => navigate('/app/comparison')}
+                          className="flex items-center gap-2 px-5 py-2.5 clay-button-primary text-xs font-extrabold flex-shrink-0"
+                        >
+                          <span>Launch Cost Comparison</span>
+                          <ArrowRight className="w-4 h-4" />
+                        </button>
                       </div>
-                      <button
-                        onClick={() => navigate('/app/comparison')}
-                        className="flex items-center gap-2 px-5 py-2.5 clay-button-primary text-xs font-extrabold flex-shrink-0"
-                      >
-                        <span>Launch Cost Comparison</span>
-                        <ArrowRight className="w-4 h-4" />
-                      </button>
                     </div>
-                  </div>
-                }
-              />
+                  }
+                />
 
-              <Route
-                path="services"
-                element={
-                  <div className="page-transition">
-                    <ServiceExplorer
-                      overview={overview}
-                      trends={trends}
-                      selectedAccount={filterAccount}
-                      selectedService={filterService}
-                      onServiceChange={onServiceChange}
-                      masterServices={masterServices.length > 0 ? masterServices : rawServices}
-                      masterServiceCosts={masterServiceCosts}
-                      activeDataset={activeDataset}
-                      forexData={forexData}
-                    />
-                  </div>
-                }
-              />
-              <Route
-                path="services/:serviceId"
-                element={
-                  <div className="page-transition">
-                    <ServiceExplorer
-                      overview={overview}
-                      trends={trends}
-                      selectedAccount={filterAccount}
-                      selectedService={filterService}
-                      onServiceChange={onServiceChange}
-                      masterServices={masterServices.length > 0 ? masterServices : rawServices}
-                      masterServiceCosts={masterServiceCosts}
-                      activeDataset={activeDataset}
-                      forexData={forexData}
-                    />
-                  </div>
-                }
-              />
+                <Route
+                  path="services"
+                  element={
+                    <div className="page-transition">
+                      <ServiceExplorer
+                        key={activeDataset || 'empty'}
+                        overview={overview}
+                        trends={trends}
+                        selectedAccount={filterAccount}
+                        selectedService={filterService}
+                        onServiceChange={onServiceChange}
+                        masterServices={masterServices.length > 0 ? masterServices : rawServices}
+                        masterServiceCosts={masterServiceCosts}
+                        activeDataset={activeDataset}
+                        forexData={forexData}
+                      />
+                    </div>
+                  }
+                />
+                <Route
+                  path="services/:serviceId"
+                  element={
+                    <div className="page-transition">
+                      <ServiceExplorer
+                        key={activeDataset || 'empty'}
+                        overview={overview}
+                        trends={trends}
+                        selectedAccount={filterAccount}
+                        selectedService={filterService}
+                        onServiceChange={onServiceChange}
+                        masterServices={masterServices.length > 0 ? masterServices : rawServices}
+                        masterServiceCosts={masterServiceCosts}
+                        activeDataset={activeDataset}
+                        forexData={forexData}
+                      />
+                    </div>
+                  }
+                />
 
-              <Route path="anomalies" element={<div className="page-transition"><AnomaliesBudgetsView overview={overview} /></div>} />
-              <Route path="recommendations" element={<div className="page-transition"><RecommendationsView recommendations={recommendations} /></div>} />
-              <Route path="ledger" element={<div className="page-transition"><SavingsLedgerView /></div>} />
-              <Route path="comparison" element={<div className="page-transition"><ComparisonView overview={overview} selectedAccount={filterAccount} forexData={forexData} /></div>} />
-              <Route
-                path="resources"
-                element={
-                  <div className="page-transition">
-                    <ResourceExplorer
-                      overview={overview}
-                      selectedAccount={filterAccount}
-                      selectedService={filterService}
-                      onServiceChange={onServiceChange}
-                      activeDataset={activeDataset}
-                      forexData={forexData}
-                    />
-                  </div>
-                }
-              />
-              <Route path="ai" element={<div className="page-transition"><AskZorvexView /></div>} />
-              <Route
-                path="settings"
-                element={
-                  <div className="page-transition">
-                    <SettingsView
-                      activeDataset={activeDataset}
-                      currentUser={currentUser}
-                      onRefreshDatasets={onRefreshDatasets}
-                      onSelectDataset={onSelectDataset}
-                    />
-                  </div>
-                }
-              />
-              <Route path="*" element={<Navigate to="overview" replace />} />
-            </Routes>
+                <Route path="anomalies" element={<div className="page-transition"><AnomaliesBudgetsView overview={overview} /></div>} />
+                <Route path="recommendations" element={<div className="page-transition"><RecommendationsView recommendations={recommendations} /></div>} />
+                <Route path="ledger" element={<div className="page-transition"><SavingsLedgerView /></div>} />
+                <Route path="comparison" element={<div className="page-transition"><ComparisonView overview={overview} selectedAccount={filterAccount} forexData={forexData} /></div>} />
+                <Route
+                  path="resources"
+                  element={
+                    <div className="page-transition">
+                      <ResourceExplorer
+                        overview={overview}
+                        selectedAccount={filterAccount}
+                        selectedService={filterService}
+                        onServiceChange={onServiceChange}
+                        activeDataset={activeDataset}
+                        forexData={forexData}
+                      />
+                    </div>
+                  }
+                />
+                <Route path="ai" element={<div className="page-transition"><AskZorvexView /></div>} />
+                <Route
+                  path="settings"
+                  element={
+                    <div className="page-transition">
+                      <SettingsView
+                        activeDataset={activeDataset}
+                        currentUser={currentUser}
+                        onRefreshDatasets={onRefreshDatasets}
+                        onSelectDataset={onSelectDataset}
+                      />
+                    </div>
+                  }
+                />
+                <Route path="*" element={<Navigate to="overview" replace />} />
+              </Routes>
+            </ErrorBoundary>
           </Suspense>
         )}
 
@@ -283,11 +367,45 @@ function DashboardLayout({
         </div>
       </footer>
 
+      {/* Sticky Floating Scope Capsule when scrolling past 320px */}
+      <FloatingScopeCapsule
+        activeDatasetName={
+          [...(datasets?.samples || []), ...(datasets?.uploads || [])].find((d) => (d.filename || d.id) === activeDataset)?.alias ||
+          [...(datasets?.samples || []), ...(datasets?.uploads || [])].find((d) => (d.filename || d.id) === activeDataset)?.name ||
+          activeDataset ||
+          'Enterprise CUR Benchmark'
+        }
+        totalCost={overview?.total_cost || 0}
+        currency={currency}
+        forexRate={forexData?.rate || 95.32}
+        servicesCount={rawServices.length}
+      />
+
+      {/* Global ⌘K Command Palette Spotlight */}
+      <CommandPalette
+        isOpen={commandPaletteOpen}
+        onClose={() => setCommandPaletteOpen(false)}
+        datasets={[...(datasets?.samples || []), ...(datasets?.uploads || [])]}
+        activeDataset={activeDataset}
+        onSelectDataset={onSelectDataset}
+        currency={currency}
+        onToggleCurrency={toggleCurrency}
+        darkMode={darkMode}
+        onToggleDarkMode={onToggleDarkMode}
+        availableServices={masterServices.length > 0 ? masterServices : rawServices}
+        onSelectService={(svc) => {
+          onServiceChange(svc);
+          navigate('/app/services');
+        }}
+        onResetFilters={onResetFilters}
+      />
+
     </div>
   );
 }
 
 export default function App() {
+  useSpecularGlow();
   const [overview, setOverview] = useState(null);
   const [trends, setTrends] = useState(null);
   const [recommendations, setRecommendations] = useState(null);
@@ -402,6 +520,7 @@ export default function App() {
     }
     localStorage.removeItem('finops_token');
     localStorage.removeItem('finops_user');
+    localStorage.removeItem('zorvex_preferred_dataset');
     setCurrentUser(null);
     setActiveDataset('aws_cur_production_exact.csv');
     window.location.href = '/';
@@ -436,36 +555,81 @@ export default function App() {
       const ov = results[0];
       const tr = results[1];
       const dsets = results[2];
+      const recs = results[3] || recommendations;
+
+      if (needsRecs && results[3]) {
+        setRecommendations(results[3]);
+      }
+
+      if (ov) {
+        // Defensive enrichment: guarantee potential_savings, total_resources, and default_comparison
+        if ((ov.potential_savings === undefined || ov.potential_savings === 0) && recs?.total_potential_savings) {
+          ov.potential_savings = recs.total_potential_savings;
+        }
+        if (!ov.total_resources) {
+          ov.total_resources = ov.matching_resources_count || ov.total_rows || 0;
+        }
+        if (!ov.default_comparison && ov.comparison_defaults) {
+          ov.default_comparison = {
+            baseline_date: ov.comparison_defaults.baseline_date || '',
+            target_date: ov.comparison_defaults.target_date || '',
+            delta_cost: ov.comparison_defaults.delta?.delta_cost || 0,
+            pct_change: ov.comparison_defaults.delta?.pct_change || 0,
+            pct_display: ov.comparison_defaults.delta?.pct_display || '0.0%'
+          };
+        }
+      }
       setOverview(ov);
       setTrends(tr);
 
       if (dsets) {
         setDatasets(dsets);
         let rawActive = dsets.active_dataset || dsets.active || ov?.filename || '';
+        const savedPref = localStorage.getItem('zorvex_preferred_dataset');
+        if (savedPref && savedPref !== rawActive) {
+          try {
+            await api.selectDataset(savedPref);
+            rawActive = savedPref;
+          } catch (e) {
+            console.warn('Auto-sync preferred dataset notice:', e);
+          }
+        }
         if (!currentUser && (rawActive.includes('cur_org_') || !rawActive)) {
-          rawActive = 'aws_cur_production_exact.csv';
+          rawActive = savedPref || 'aws_cur_production_exact.csv';
         }
         setActiveDataset(rawActive);
       } else if (ov?.filename && !activeDataset) {
         let rawActive = ov.filename;
-        if (!currentUser && (rawActive.includes('cur_org_') || !rawActive)) {
+        const savedPref = localStorage.getItem('zorvex_preferred_dataset');
+        if (savedPref) {
+          rawActive = savedPref;
+        } else if (!currentUser && (rawActive.includes('cur_org_') || !rawActive)) {
           rawActive = 'aws_cur_production_exact.csv';
         }
         setActiveDataset(rawActive);
       }
 
-      if (needsRecs && results[3]) {
-        setRecommendations(results[3]);
-      }
-
+      // Master services catalog preservation: never truncate the global services dropdown
+      // when filtering down to a single service!
       if (ov?.services) {
         const sKeys = Object.keys(ov.services);
-        if (sKeys.length > 1) {
+        const isAllServices = !service || service === 'All';
+        const isFullScope = isAllServices && !start && !end && (!account || account === 'all');
+
+        if (isFullScope) {
           setMasterServices(sKeys);
           setMasterServiceCosts(ov.services);
-        } else {
-          setMasterServices((prev) => (prev.length === 0 ? sKeys : prev));
-          setMasterServiceCosts((prev) => (Object.keys(prev).length === 0 ? ov.services : prev));
+        } else if (isAllServices && masterServices.length <= 1) {
+          setMasterServices(sKeys);
+          setMasterServiceCosts(ov.services);
+        } else if (!isAllServices && masterServices.length <= 1) {
+          // If loaded with a service filter before master services were cataloged, fetch complete catalog
+          api.getOverview('', '', 'all', 'All').then(allOv => {
+            if (allOv?.services) {
+              setMasterServices(Object.keys(allOv.services));
+              setMasterServiceCosts(allOv.services);
+            }
+          }).catch(console.warn);
         }
       }
     } catch (err) {
@@ -476,12 +640,27 @@ export default function App() {
     }
   };
 
+  const hasMountedRef = useRef(false);
+
   useEffect(() => {
-    loadData();
+    const init = async () => {
+      const savedPref = localStorage.getItem('zorvex_preferred_dataset');
+      if (savedPref) {
+        try {
+          await api.selectDataset(savedPref);
+          setActiveDataset(savedPref);
+        } catch (e) {
+          console.warn('Initial select dataset notice:', e);
+        }
+      }
+      await loadData(filterStartDate, filterEndDate, filterAccount, filterService, true);
+      hasMountedRef.current = true;
+    };
+    init();
   }, []);
 
   useEffect(() => {
-    if (currentUser) {
+    if (hasMountedRef.current && currentUser) {
       loadData(filterStartDate, filterEndDate, filterAccount, filterService, true);
     }
   }, [currentUser?.id]);
@@ -489,6 +668,14 @@ export default function App() {
   const handleSelectDataset = async (filename) => {
     setLoading(true);
     try {
+      localStorage.setItem('zorvex_preferred_dataset', filename);
+      setActiveDataset(filename);
+      // Immediately reset analytical state to prevent old dataset's services/clusters leaking
+      setOverview(null);
+      setMasterServices([]);
+      setMasterServiceCosts({});
+      setRecommendations(null);
+
       await api.selectDataset(filename);
       setFilterStartDate('');
       setFilterEndDate('');
@@ -536,8 +723,9 @@ export default function App() {
 
   return (
     <BrowserRouter>
-      {/* Living Atmospheric Ambient Lighting (Zero Grids/Checks) */}
-      <AmbientBackground darkMode={darkMode} />
+      <ToastProvider>
+        {/* Living Atmospheric Ambient Lighting (Zero Grids/Checks) */}
+        <AmbientBackground darkMode={darkMode} />
 
       <div className="relative z-10">
         <Suspense fallback={<ViewLoadingFallback />}>
@@ -547,13 +735,21 @@ export default function App() {
             <Route path="/register" element={<RegisterView onRegisterSuccess={handleAuthSuccess} darkMode={darkMode} onToggleDarkMode={toggleDarkMode} />} />
             <Route path="/forgot-password" element={<ForgotPasswordView darkMode={darkMode} onToggleDarkMode={toggleDarkMode} />} />
             <Route path="/reset-password" element={<ResetPasswordView darkMode={darkMode} onToggleDarkMode={toggleDarkMode} />} />
+            <Route path="/privacy" element={<PrivacyPolicyView />} />
+            <Route path="/terms" element={<TermsOfServiceView />} />
+            <Route path="/terms-of-service" element={<Navigate to="/terms" replace />} />
             <Route
               path="/app/*"
               element={
                 authLoading ? (
                   <ViewLoadingFallback />
                 ) : currentUser ? (
-                  <DashboardLayout
+                  <ErrorBoundary
+                    title="FinOps Dashboard Exception"
+                    message="A rendering anomaly occurred in the workspace. Your data and session are safely preserved."
+                    onReset={() => window.location.reload()}
+                  >
+                    <DashboardLayout
                     overview={overview}
                     trends={trends}
                     recommendations={recommendations}
@@ -581,6 +777,7 @@ export default function App() {
                     masterServices={masterServices}
                     masterServiceCosts={masterServiceCosts}
                   />
+                  </ErrorBoundary>
                 ) : (
                   <Navigate to="/login" replace />
                 )
@@ -607,6 +804,8 @@ export default function App() {
           />
         </Suspense>
       )}
+          <CookieConsentBanner />
+      </ToastProvider>
     </BrowserRouter>
   );
 }

@@ -89,3 +89,4 @@ class ExportTicketRequest(BaseModel):
     baseline_date: Optional[str] = None
     target_date: Optional[str] = None
     account_id: Optional[str] = None
+    currency: Optional[str] = "USD"

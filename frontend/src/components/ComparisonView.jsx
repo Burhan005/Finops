@@ -50,6 +50,7 @@ import {
 } from 'lucide-react';
 import { api } from '../services/api';
 import ClayDropdown from './common/ClayDropdown';
+import AwsServiceIcon from './common/AwsServiceIcon';
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -738,8 +739,8 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
   // Daily Timeline Chart Data Preparation
   const timelineData = rootCauseData?.daily_timeline || [];
   const isDark = typeof document !== 'undefined' && document.documentElement.classList.contains('dark');
-  const forestColor = isDark ? '#AFC69B' : '#49664D';
-  const baselineColor = isDark ? '#8A9E8D' : '#656B5F';
+  const forestColor = isDark ? '#FF9900' : '#EC7211';
+  const baselineColor = isDark ? '#94A3B8' : '#64748B';
 
   const chartData = useMemo(() => {
     if (!timelineData.length) return null;
@@ -758,7 +759,7 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
         fill: true,
         tension: 0.3,
         pointBackgroundColor: forestColor,
-        pointBorderColor: isDark ? '#141F16' : '#FFFFFF',
+        pointBorderColor: isDark ? '#0E0F12' : '#FFFFFF',
         pointRadius: 4,
         pointHoverRadius: 6
       }
@@ -774,7 +775,7 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
         fill: false,
         tension: 0.3,
         pointBackgroundColor: baselineColor,
-        pointBorderColor: isDark ? '#252E26' : '#FFFCF5',
+        pointBorderColor: isDark ? '#16171B' : '#FFFFFF',
         pointRadius: 3,
         pointHoverRadius: 5
       });
@@ -786,17 +787,19 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
   const chartOptions = {
     responsive: true,
     maintainAspectRatio: false,
+    devicePixelRatio: Math.min(typeof window !== "undefined" ? (window.devicePixelRatio || 1) : 1, 2),
+    animation: { duration: 350 },
     plugins: {
       legend: {
         display: true,
         position: 'top',
         labels: {
-          color: isDark ? '#F0EEE4' : '#292E28',
+          color: isDark ? '#F8FAFC' : '#0F172A',
           font: { family: 'Plus Jakarta Sans', size: 11, weight: '700' }
         }
       },
       tooltip: {
-        backgroundColor: isDark ? '#252E26' : '#292E28',
+        backgroundColor: isDark ? '#16171B' : '#0F172A',
         titleColor: '#FFFCF5',
         bodyColor: '#FFFCF5',
         padding: 10,
@@ -1259,7 +1262,7 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
                   </span>
                 </div>
                 <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">
-                  {rootCauseData.financial_reconciliation.is_reconciled ? '✓ Zero Double-Counting Verified' : 'Reconciliation Pending'}
+                  {rootCauseData.financial_reconciliation.is_reconciled ? 'Reconciled' : 'Reconciliation Pending'}
                 </span>
               </div>
             )}
@@ -1417,8 +1420,8 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
           {selectedServiceFilter !== 'ALL' ? (
             <div className="clay-card p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-l-4 border-l-zorvex-forest bg-zorvex-forest-soft/30 dark:bg-zorvex-forest-dark-soft/20">
               <div className="flex items-center gap-3">
-                <div className="p-2 rounded-xl bg-zorvex-forest text-white flex-shrink-0">
-                  <BarChart3 className="w-4 h-4" />
+                <div className="p-1.5 rounded-xl bg-white dark:bg-black/30 border border-zorvex-border/40 dark:border-zorvex-dark-border/40 flex-shrink-0 flex items-center justify-center">
+                  <AwsServiceIcon service={selectedServiceFilter} size={20} />
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
@@ -1574,10 +1577,8 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
                           }`}
                         >
                           <td className="py-3 px-4 font-sans font-bold text-zorvex-text dark:text-zorvex-dark-text flex items-center gap-2.5">
-                            <span className={`p-1.5 rounded-lg flex-shrink-0 ${
-                              isSelected ? 'bg-zorvex-forest text-white' : 'bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary'
-                            }`}>
-                              <Icon className="w-3.5 h-3.5" />
+                            <span className="p-1 rounded-lg flex-shrink-0 bg-white/80 dark:bg-black/30 shadow-xs border border-zorvex-border/40 dark:border-zorvex-dark-border/40 flex items-center justify-center">
+                              <AwsServiceIcon service={svc.service} size={18} />
                             </span>
                             <span className="truncate">{svc.service}</span>
                           </td>
@@ -1846,7 +1847,10 @@ export default function ComparisonView({ overview, selectedAccount = 'all', fore
 
                           {/* Service & Region */}
                           <td className="py-3 px-4 font-sans text-xs">
-                            <div className="font-semibold text-zorvex-text dark:text-zorvex-dark-text">{res.service}</div>
+                            <div className="flex items-center gap-1.5 font-semibold text-zorvex-text dark:text-zorvex-dark-text">
+                              <AwsServiceIcon service={res.service} size={16} />
+                              <span className="truncate">{res.service}</span>
+                            </div>
                             <div className="text-[10px] text-zorvex-text-secondary font-mono">{res.region || 'global'}</div>
                           </td>
 

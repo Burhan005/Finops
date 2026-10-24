@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ZORVEX - EKS & ECS Cluster Lifecycle & Overtime Tracker</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            clay: {
+              ivory: '#F3F0E7',
+              card: '#FFFCF5',
+              border: '#E5DFD3',
+              forest: '#233829',
+              sage: '#5E7D63',
+              terracotta: '#C85A32',
+              darkBg: '#181F19',
+              darkCard: '#242D25',
+              darkBorder: '#323E33',
+              darkText: '#ECE7DC'
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    }
+    .clay-surface {
+      background: #FFFCF5;
+      border: 1px solid #E5DFD3;
+      box-shadow: 6px 6px 14px rgba(180, 170, 150, 0.22), -5px -5px 12px rgba(255, 255, 255, 0.95), inset 1px 1px 2px rgba(255, 255, 255, 0.8);
+      border-radius: 1.25rem;
+    }
+    .dark .clay-surface {
+      background: #242D25;
+      border: 1px solid #323E33;
+      box-shadow: 6px 6px 16px rgba(0, 0, 0, 0.45), -3px -3px 8px rgba(50, 65, 52, 0.25), inset 1px 1px 2px rgba(255, 255, 255, 0.05);
+    }
+    .clay-btn {
+      background: #FFFCF5;
+      border: 1px solid #E5DFD3;
+      box-shadow: 3px 3px 7px rgba(180, 170, 150, 0.25), -2px -2px 5px rgba(255, 255, 255, 0.9);
+      transition: all 0.15s ease-in-out;
+    }
+    .clay-btn:active, .clay-btn.active {
+      background: #233829;
+      color: #F3F0E7 !important;
+      border-color: #233829;
+      box-shadow: inset 2px 2px 5px rgba(0, 0, 0, 0.35);
+    }
+    .dark .clay-btn {
+      background: #242D25;
+      border: 1px solid #323E33;
+      box-shadow: 3px 3px 7px rgba(0, 0, 0, 0.35), -2px -2px 5px rgba(50, 65, 52, 0.2);
+    }
+    .dark .clay-btn:active, .dark .clay-btn.active {
+      background: #4E7253;
+      color: #FFFFFF !important;
+      border-color: #5E7D63;
+      box-shadow: inset 2px 2px 5px rgba(0, 0, 0, 0.4);
+    }
+  </style>
+</head>
+<body class="bg-[#F3F0E7] dark:bg-[#181F19] text-[#233829] dark:text-[#ECE7DC] min-h-screen p-4 sm:p-8 transition-colors duration-200">
+
+  <div class="max-w-6xl mx-auto space-y-6">
+
+    <!-- Top Bar with Service Explorer Breadcrumb & Theme Toggle -->
+    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div>
+        <div class="flex items-center gap-2 text-xs font-bold text-clay-sage uppercase tracking-wider">
+          <span>Service Explorer</span>
+          <span>&rsaquo;</span>
+          <span class="text-clay-forest dark:text-emerald-400 font-extrabold">Amazon EKS & ECS Cluster Lifecycle</span>
+        </div>
+        <h1 class="text-2xl sm:text-3xl font-black tracking-tight text-clay-forest dark:text-[#ECE7DC] mt-1">
+          Cluster Compute Intelligence
+        </h1>
+        <p class="text-xs sm:text-sm text-clay-sage dark:text-gray-400 mt-0.5">
+          Correlating EKS/ECS control planes with dynamic EC2 worker nodes, hourly churn, and overtime spend leakage.
+        </p>
+      </div>
+
+      <div class="flex items-center gap-3">
+        <!-- Service Switcher -->
+        <div class="clay-surface p-1 flex gap-1 rounded-xl text-xs font-bold">
+          <button id="tab-eks" onclick="selectServiceType('EKS')" class="clay-btn active px-3.5 py-1.5 rounded-lg">
+            Amazon EKS
+          </button>
+          <button id="tab-ecs" onclick="selectServiceType('ECS')" class="clay-btn px-3.5 py-1.5 rounded-lg text-clay-sage dark:text-gray-300">
+            Amazon ECS
+          </button>
+        </div>
+
+        <!-- Dark Mode Toggle -->
+        <button onclick="toggleDarkMode()" class="clay-surface w-10 h-10 flex items-center justify-center rounded-xl text-sm font-bold text-clay-forest dark:text-yellow-400 hover:scale-105 transition-transform" title="Toggle Theme">
+          <span id="theme-icon">&#9790;</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Cluster Selector Bar -->
+    <div class="clay-surface p-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-xl bg-emerald-600/10 dark:bg-emerald-500/20 flex items-center justify-center font-bold text-emerald-700 dark:text-emerald-400 border border-emerald-600/20">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path>
+          </svg>
+        </div>
+        <div>
+          <span class="text-xs font-bold text-clay-sage uppercase tracking-wider block">Active Cluster Scope</span>
+          <span class="text-sm font-extrabold text-clay-forest dark:text-[#ECE7DC]" id="cluster-header-title">dev-eks-01 (Managed Node Group)</span>
+        </div>
+      </div>
+
+      <!-- Cluster Selector Buttons -->
+      <div class="flex flex-wrap gap-2 text-xs font-bold" id="cluster-buttons-container">
+        <!-- Rendered dynamically -->
+      </div>
+    </div>
+
+    <!-- 4 Key Executive Metrics (Pillars) -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <!-- Pillar 1: True Cluster Cost -->
+      <div class="clay-surface p-5 space-y-2">
+        <span class="text-xs font-bold uppercase tracking-wider text-clay-sage">True Cluster Spend (24h)</span>
+        <div class="text-3xl font-black font-mono text-clay-forest dark:text-[#ECE7DC]" id="metric-true-spend">$44.18</div>
+        <div class="text-xs text-clay-sage font-mono">
+          <span id="metric-cp-split">$2.40 Control Plane</span> + <span id="metric-node-split">$41.78 EC2 Nodes</span>
+        </div>
+      </div>
+
+      <!-- Pillar 2: Active Fleet -->
+      <div class="clay-surface p-5 space-y-2">
+        <span class="text-xs font-bold uppercase tracking-wider text-clay-sage">Peak Fleet Capacity</span>
+        <div class="text-3xl font-black font-mono text-emerald-600 dark:text-emerald-400" id="metric-peak-nodes">6 EC2 Nodes</div>
+        <div class="text-xs text-clay-sage font-medium" id="metric-instance-types">m5.xlarge + c5.2xlarge</div>
+      </div>
+
+      <!-- Pillar 3: Overtime / Extended Schedule Spend -->
+      <div class="clay-surface p-5 space-y-2 border-clay-terracotta/40">
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-bold uppercase tracking-wider text-clay-terracotta">Overtime Schedule Leak</span>
+          <span class="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-rose-500/10 text-rose-600 border border-rose-500/20">ALERT</span>
+        </div>
+        <div class="text-3xl font-black font-mono text-clay-terracotta" id="metric-overtime-cost">+$14.28</div>
+        <div class="text-xs text-clay-terracotta font-semibold" id="metric-overtime-hours">+4.0 hrs past 18:00 cutoff</div>
+      </div>
+
+      <!-- Pillar 4: Daily Churn -->
+      <div class="clay-surface p-5 space-y-2">
+        <span class="text-xs font-bold uppercase tracking-wider text-clay-sage">Daily Node Churn</span>
+        <div class="text-3xl font-black font-mono text-clay-forest dark:text-[#ECE7DC]" id="metric-churn-counts">9 In / 6 Out</div>
+        <div class="text-xs text-clay-sage font-medium" id="metric-churn-details">9 launched · 6 terminated today</div>
+      </div>
+    </div>
+
+    <!-- Overtime Environment Schedule Extension Interactive Bar -->
+    <div class="clay-surface p-5 space-y-4 border-l-4 border-l-clay-terracotta">
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div>
+          <div class="flex items-center gap-2">
+            <span class="w-2.5 h-2.5 rounded-full bg-clay-terracotta animate-pulse"></span>
+            <h2 class="text-base font-extrabold text-clay-forest dark:text-[#ECE7DC]">Environment Overtime & Extension Simulator</h2>
+          </div>
+          <p class="text-xs text-clay-sage dark:text-gray-400 mt-0.5">
+            Slide to simulate what happens when engineers extend environment execution beyond standard 18:00 cutoff:
+          </p>
+        </div>
+
+        <div class="text-right">
+          <span class="text-xs font-bold text-clay-terracotta block">Simulated Extension:</span>
+          <span class="text-lg font-black font-mono text-clay-terracotta" id="slider-display-hours">+4 Hours (Until 22:00)</span>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-4">
+        <span class="text-xs font-extrabold text-clay-sage">0h (18:00 Off)</span>
+        <input type="range" id="overtime-slider" min="0" max="6" value="4" step="1" oninput="updateOvertimeSlider(this.value)" class="flex-1 accent-clay-terracotta h-2 bg-clay-border dark:bg-clay-darkBorder rounded-lg cursor-pointer">
+        <span class="text-xs font-extrabold text-clay-terracotta">+6h (24:00 Off)</span>
+      </div>
+    </div>
+
+    <!-- 24-Hour Timeline Bar Chart -->
+    <div class="clay-surface p-6 space-y-4">
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-clay-border dark:border-clay-darkBorder">
+        <div>
+          <h2 class="text-base font-extrabold text-clay-forest dark:text-[#ECE7DC]">
+            24-Hour Active Node Count Timeline
+          </h2>
+          <p class="text-xs text-clay-sage dark:text-gray-400 mt-0.5">
+            Click on any hour bar to inspect physical running instance IDs and exact hourly spend.
+          </p>
+        </div>
+
+        <div class="flex items-center gap-4 text-xs font-bold">
+          <div class="flex items-center gap-1.5">
+            <span class="w-3 h-3 rounded-md bg-emerald-600 dark:bg-emerald-500"></span>
+            <span class="text-clay-sage dark:text-gray-300">Scheduled Hours (09:00 - 18:00)</span>
+          </div>
+          <div class="flex items-center gap-1.5">
+            <span class="w-3 h-3 rounded-md bg-clay-terracotta"></span>
+            <span class="text-clay-terracotta">Overtime / Extended Leak</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Timeline Bar Chart Canvas -->
+      <div class="h-48 flex items-end gap-1.5 sm:gap-2 pt-6 pb-2 border-b border-clay-border dark:border-clay-darkBorder" id="timeline-bars-container">
+        <!-- Bars dynamically injected -->
+      </div>
+
+      <!-- Timeline Hour Labels -->
+      <div class="flex justify-between text-[10px] font-mono text-clay-sage px-1">
+        <span>00:00</span>
+        <span>04:00</span>
+        <span>08:00</span>
+        <span class="font-extrabold text-emerald-600 dark:text-emerald-400">09:00 (Env Start)</span>
+        <span>12:00</span>
+        <span class="font-extrabold text-clay-terracotta">18:00 (Target Stop)</span>
+        <span>20:00</span>
+        <span>23:00</span>
+      </div>
+    </div>
+
+    <!-- Active vs Terminated Nodes Telemetry Drawer -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      
+      <!-- Box 1: Terminated Nodes Today -->
+      <div class="clay-surface p-5 space-y-3">
+        <div class="flex items-center justify-between pb-2 border-b border-clay-border dark:border-clay-darkBorder">
+          <div class="flex items-center gap-2">
+            <span class="w-2.5 h-2.5 rounded-full bg-rose-500"></span>
+            <h3 class="text-sm font-extrabold text-clay-forest dark:text-[#ECE7DC]">Terminated Worker Nodes (Today)</h3>
+          </div>
+          <span class="text-xs font-mono font-bold text-rose-600" id="terminated-count-badge">6 Terminated</span>
+        </div>
+
+        <div class="space-y-2 text-xs font-mono max-h-56 overflow-y-auto pr-1" id="terminated-nodes-list">
+          <!-- Dynamically populated -->
+        </div>
+      </div>
+
+      <!-- Box 2: Newly Spawned Active Nodes -->
+      <div class="clay-surface p-5 space-y-3">
+        <div class="flex items-center justify-between pb-2 border-b border-clay-border dark:border-clay-darkBorder">
+          <div class="flex items-center gap-2">
+            <span class="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
+            <h3 class="text-sm font-extrabold text-clay-forest dark:text-[#ECE7DC]">Currently Active / Newly Launched Nodes</h3>
+          </div>
+          <span class="text-xs font-mono font-bold text-emerald-600" id="active-count-badge">3 Active</span>
+        </div>
+
+        <div class="space-y-2 text-xs font-mono max-h-56 overflow-y-auto pr-1" id="active-nodes-list">
+          <!-- Dynamically populated -->
+        </div>
+      </div>
+
+    </div>
+
+  </div>
+
+  <script>
+    // State
+    let currentService = 'EKS';
+    let currentClusterKey = 'dev';
+    let simulatedOvertimeHours = 4;
+
+    const CLUSTER_DATA = {
+      EKS: {
+        dev: {
+          name: 'dev-eks-01 (Managed Node Group)',
+          controlPlaneSpend: 2.40,
+          hourlyRatePerNode: 0.096, // m5.large
+          instanceType: 'm5.large (2 vCPU · 8 GiB)',
+          scheduleStart: 9,
+          scheduleEnd: 18,
+          activeHoursPattern: [0,0,0,0,0,0,0,0,0, 3,3,4,4,5,5,4,3,3, 3,3,3,2, 0,0],
+          churnIn: 8,
+          churnOut: 6,
+          terminatedNodes: [
+            { id: 'i-09df18a2bc417e', launch: '09:00', term: '14:30', hrs: 5.5, cost: '$0.53', reason: 'Cluster Autoscaler Scaled Down' },
+            { id: 'i-0aa43b819f72c0', launch: '09:00', term: '15:10', hrs: 6.2, cost: '$0.60', reason: 'Spot Interruption / Replaced' },
+            { id: 'i-011e4f93ca00bb', launch: '11:15', term: '17:00', hrs: 5.75, cost: '$0.55', reason: 'Build Job Pods Completed' },
+            { id: 'i-078a9c21ef45da', launch: '09:00', term: '18:00', hrs: 9.0, cost: '$0.86', reason: 'Scheduled Node Group Shrink' },
+            { id: 'i-033d8a1766ff31', launch: '13:00', term: '18:15', hrs: 5.25, cost: '$0.50', reason: 'Scale In Policy Triggered' },
+            { id: 'i-055f10bb87cc92', launch: '14:00', term: '19:00', hrs: 5.0, cost: '$0.48', reason: 'Idle Node Drained' }
+          ],
+          activeNodes: [
+            { id: 'i-0c91ba42ef9901', launched: '09:00', age: '11h 15m', cost: '$1.08', ip: '10.0.12.45' },
+            { id: 'i-088f21ca6633dd', launched: '14:30', age: '5h 45m', cost: '$0.55', ip: '10.0.12.89' },
+            { id: 'i-0ee4189ac3710b', launched: '15:10', age: '5h 05m', cost: '$0.49', ip: '10.0.12.112' }
+          ]
+        },
+        staging: {
+          name: 'staging-eks-02 (QA & Automation)',
+          controlPlaneSpend: 2.40,
+          hourlyRatePerNode: 0.192, // m5.xlarge
+          instanceType: 'm5.xlarge (4 vCPU · 16 GiB)',
+          scheduleStart: 8,
+          scheduleEnd: 19,
+          activeHoursPattern: [0,0,0,0,0,0,0,0, 4,4,4,6,6,6,5,4,4,4,4,4, 0,0,0,0],
+          churnIn: 6,
+          churnOut: 6,
+          terminatedNodes: [
+            { id: 'i-0stg18a2bc417e', launch: '08:00', term: '19:00', hrs: 11.0, cost: '$2.11', reason: 'Automated Nightly Shutdown' },
+            { id: 'i-0stg43b819f72c', launch: '11:00', term: '16:00', hrs: 5.0, cost: '$0.96', reason: 'E2E Cypress Test Suite Complete' },
+            { id: 'i-0stg9c21ef45da', launch: '08:00', term: '19:00', hrs: 11.0, cost: '$2.11', reason: 'Automated Nightly Shutdown' }
+          ],
+          activeNodes: [
+            { id: 'i-0stg99active01', launched: '08:00', age: '12h 10m', cost: '$2.33', ip: '10.0.24.11' },
+            { id: 'i-0stg99active02', launched: '08:00', age: '12h 10m', cost: '$2.33', ip: '10.0.24.12' },
+            { id: 'i-0stg99active03', launched: '08:00', age: '12h 10m', cost: '$2.33', ip: '10.0.24.13' },
+            { id: 'i-0stg99active04', launched: '08:00', age: '12h 10m', cost: '$2.33', ip: '10.0.24.14' }
+          ]
+        },
+        prod: {
+          name: 'prod-eks-03 (High Availability 24/7)',
+          controlPlaneSpend: 2.40,
+          hourlyRatePerNode: 0.192,
+          instanceType: 'c5.2xlarge + r5.xlarge',
+          scheduleStart: 0,
+          scheduleEnd: 24,
+          activeHoursPattern: [10,10,10,10,10,11,12,12, 14,15,16,16,16,15,15,14, 13,13,12,12, 11,10,10,10],
+          churnIn: 18,
+          churnOut: 16,
+          terminatedNodes: [
+            { id: 'i-0prd01termin88', launch: '02:00', term: '08:00', hrs: 6.0, cost: '$1.15', reason: 'Karpenter Bin-Packing Consolidation' },
+            { id: 'i-0prd02termin99', launch: '06:00', term: '14:00', hrs: 8.0, cost: '$1.54', reason: 'Spot 2-Minute Termination Warning' }
+          ],
+          activeNodes: [
+            { id: 'i-0prdactive901', launched: '00:00', age: '20h 30m', cost: '$3.94', ip: '10.0.100.22' },
+            { id: 'i-0prdactive902', launched: '00:00', age: '20h 30m', cost: '$3.94', ip: '10.0.100.23' },
+            { id: 'i-0prdactive903', launched: '04:00', age: '16h 30m', cost: '$3.17', ip: '10.0.100.24' }
+          ]
+        }
+      },
+      ECS: {
+        dev: {
+          name: 'checkout-ecs-cluster (EC2 Launch Type)',
+          controlPlaneSpend: 0.00,
+          hourlyRatePerNode: 0.083,
+          instanceType: 't3.xlarge Container Instances',
+          scheduleStart: 9,
+          scheduleEnd: 18,
+          activeHoursPattern: [0,0,0,0,0,0,0,0,0, 2,2,3,3,4,4,3,2,2, 2,2,1,0, 0,0],
+          churnIn: 5,
+          churnOut: 4,
+          terminatedNodes: [
+            { id: 'i-0ecsdev9911', launch: '09:00', term: '17:00', hrs: 8.0, cost: '$0.66', reason: 'ECS Capacity Provider Scale-In' }
+          ],
+          activeNodes: [
+            { id: 'i-0ecsactv881', launched: '09:00', age: '11h 00m', cost: '$0.91', ip: '10.2.1.8' },
+            { id: 'i-0ecsactv882', launched: '11:00', age: '9h 00m', cost: '$0.75', ip: '10.2.1.9' }
+          ]
+        },
+        prod: {
+          name: 'payment-gateway-ecs (Fargate Serverless)',
+          controlPlaneSpend: 0.00,
+          hourlyRatePerNode: 0.052,
+          instanceType: 'Fargate vCPU: 1.0 · RAM: 2GB',
+          scheduleStart: 0,
+          scheduleEnd: 24,
+          activeHoursPattern: [8,8,8,8,9,11,14,16, 18,19,20,20,18,17,16,15, 14,13,12,11, 10,9,8,8],
+          churnIn: 24,
+          churnOut: 22,
+          terminatedNodes: [
+            { id: 'task/pay-gw-task-9182', launch: '08:00', term: '14:00', hrs: 6.0, cost: '$0.31', reason: 'Task Completed & De-registered' }
+          ],
+          activeNodes: [
+            { id: 'task/pay-gw-task-1001', launched: '00:00', age: '22h 10m', cost: '$1.15', ip: '172.16.8.21' },
+            { id: 'task/pay-gw-task-1002', launched: '06:00', age: '16h 10m', cost: '$0.84', ip: '172.16.8.22' }
+          ]
+        }
+      }
+    };
+
+    function selectServiceType(type) {
+      currentService = type;
+      document.getElementById('tab-eks').classList.toggle('active', type === 'EKS');
+      document.getElementById('tab-ecs').classList.toggle('active', type === 'ECS');
+      
+      const clusters = Object.keys(CLUSTER_DATA[type]);
+      currentClusterKey = clusters[0];
+      renderClusterButtons();
+      renderAll();
+    }
+
+    function selectCluster(key) {
+      currentClusterKey = key;
+      renderClusterButtons();
+      renderAll();
+    }
+
+    function renderClusterButtons() {
+      const container = document.getElementById('cluster-buttons-container');
+      container.innerHTML = '';
+      const clusters = CLUSTER_DATA[currentService];
+
+      for (const [key, c] of Object.entries(clusters)) {
+        const btn = document.createElement('button');
+        btn.className = `clay-btn px-3 py-1.5 rounded-lg ${key === currentClusterKey ? 'active' : 'text-clay-sage dark:text-gray-300'}`;
+        btn.textContent = key.toUpperCase() + ': ' + c.name.split(' ')[0];
+        btn.onclick = () => selectCluster(key);
+        container.appendChild(btn);
+      }
+    }
+
+    function updateOvertimeSlider(val) {
+      simulatedOvertimeHours = parseInt(val, 10);
+      const stopHour = 18 + simulatedOvertimeHours;
+      document.getElementById('slider-display-hours').textContent = `+${simulatedOvertimeHours} Hours (Until ${stopHour}:00)`;
+      renderAll();
+    }
+
+    function renderAll() {
+      const c = CLUSTER_DATA[currentService][currentClusterKey];
+      if (!c) return;
+
+      document.getElementById('cluster-header-title').textContent = c.name;
+
+      // Adjust hours pattern based on overtime slider for dev/staging
+      let effectivePattern = [...c.activeHoursPattern];
+      if (c.scheduleEnd < 24) {
+        for (let h = 18; h < 18 + simulatedOvertimeHours && h < 24; h++) {
+          effectivePattern[h] = 3;
+        }
+        for (let h = 18 + simulatedOvertimeHours; h < 24; h++) {
+          effectivePattern[h] = 0;
+        }
+      }
+
+      // Calculate compute spend
+      const totalNodeHours = effectivePattern.reduce((a, b) => a + b, 0);
+      const totalComputeSpend = totalNodeHours * c.hourlyRatePerNode;
+      const trueTotalSpend = c.controlPlaneSpend + totalComputeSpend;
+
+      // Calculate Overtime cost
+      let overtimeHours = 0;
+      let overtimeNodeHours = 0;
+      if (c.scheduleEnd < 24) {
+        overtimeHours = simulatedOvertimeHours;
+        for (let h = 18; h < 18 + simulatedOvertimeHours && h < 24; h++) {
+          overtimeNodeHours += effectivePattern[h];
+        }
+      }
+      const overtimeCost = overtimeNodeHours * c.hourlyRatePerNode;
+
+      // Update Pillars
+      document.getElementById('metric-true-spend').textContent = '$' + trueTotalSpend.toFixed(2);
+      document.getElementById('metric-cp-split').textContent = '$' + c.controlPlaneSpend.toFixed(2) + ' Control Plane';
+      document.getElementById('metric-node-split').textContent = '$' + totalComputeSpend.toFixed(2) + ' Worker Nodes';
+
+      const peakNodes = Math.max(...effectivePattern);
+      document.getElementById('metric-peak-nodes').textContent = `${peakNodes} ${currentService === 'ECS' && c.name.includes('Fargate') ? 'Tasks' : 'Nodes'}`;
+      document.getElementById('metric-instance-types').textContent = c.instanceType;
+
+      document.getElementById('metric-overtime-cost').textContent = overtimeHours > 0 ? `+$${overtimeCost.toFixed(2)}` : '$0.00';
+      document.getElementById('metric-overtime-hours').textContent = overtimeHours > 0 ? `⚠️ +${overtimeHours}.0 hrs past 18:00 cutoff` : '● On Schedule (Zero Overtime)';
+
+      document.getElementById('metric-churn-counts').textContent = `${c.churnIn} In / ${c.churnOut} Out`;
+      document.getElementById('metric-churn-details').textContent = `${c.churnIn} spawned · ${c.churnOut} terminated today`;
+
+      // Render 24-Hour Timeline Bars
+      const barsContainer = document.getElementById('timeline-bars-container');
+      barsContainer.innerHTML = '';
+      const maxH = Math.max(1, peakNodes);
+
+      effectivePattern.forEach((nodes, hour) => {
+        const barWrap = document.createElement('div');
+        barWrap.className = 'flex-1 flex flex-col items-center justify-end h-full group relative cursor-pointer';
+
+        const isOvertime = (c.scheduleEnd < 24 && hour >= 18 && hour < 18 + simulatedOvertimeHours && nodes > 0);
+        const isScheduled = (nodes > 0 && !isOvertime);
+
+        const heightPct = (nodes / maxH) * 100;
+
+        const bar = document.createElement('div');
+        bar.style.height = `${Math.max(4, heightPct)}%`;
+        bar.className = `w-full rounded-md transition-all duration-200 ${
+          isOvertime 
+            ? 'bg-clay-terracotta hover:brightness-110 shadow-sm' 
+            : (isScheduled ? 'bg-emerald-600 dark:bg-emerald-500 hover:brightness-110' : 'bg-clay-border/40 dark:bg-clay-darkBorder/40')
+        }`;
+
+        // Tooltip
+        const tip = document.createElement('div');
+        tip.className = 'absolute bottom-full mb-2 hidden group-hover:flex flex-col items-center z-30 pointer-events-none whitespace-nowrap';
+        tip.innerHTML = `
+          <div class="px-2.5 py-1.5 rounded-lg bg-[#233829] text-[#F3F0E7] text-[10px] font-mono shadow-xl border border-white/10">
+            <div class="font-extrabold">${String(hour).padStart(2, '0')}:00 - ${nodes} Nodes Active</div>
+            <div class="text-clay-sage">${isOvertime ? '⚠️ Overtime Leak (+$' + (nodes * c.hourlyRatePerNode).toFixed(3) + ')' : (nodes > 0 ? 'Normal Runtime' : 'Fleet Off')}</div>
+          </div>
+        `;
+
+        barWrap.appendChild(tip);
+        barWrap.appendChild(bar);
+        barsContainer.appendChild(barWrap);
+      });
+
+      // Render Terminated Nodes List
+      const termList = document.getElementById('terminated-nodes-list');
+      termList.innerHTML = '';
+      document.getElementById('terminated-count-badge').textContent = `${c.terminatedNodes.length} Terminated`;
+      c.terminatedNodes.forEach(node => {
+        const item = document.createElement('div');
+        item.className = 'p-2.5 rounded-xl bg-[#F3F0E7]/60 dark:bg-[#181F19]/60 border border-clay-border dark:border-clay-darkBorder flex items-center justify-between gap-2';
+        item.innerHTML = `
+          <div>
+            <div class="font-extrabold text-clay-forest dark:text-[#ECE7DC]">${node.id}</div>
+            <div class="text-[10px] text-clay-sage">${node.launch} → ${node.term} (${node.hrs} hrs) · ${node.reason}</div>
+          </div>
+          <div class="font-extrabold text-rose-600 dark:text-rose-400 text-right">${node.cost}</div>
+        `;
+        termList.appendChild(item);
+      });
+
+      // Render Active Nodes List
+      const actList = document.getElementById('active-nodes-list');
+      actList.innerHTML = '';
+      document.getElementById('active-count-badge').textContent = `${c.activeNodes.length} Active`;
+      c.activeNodes.forEach(node => {
+        const item = document.createElement('div');
+        item.className = 'p-2.5 rounded-xl bg-[#F3F0E7]/60 dark:bg-[#181F19]/60 border border-clay-border dark:border-clay-darkBorder flex items-center justify-between gap-2';
+        item.innerHTML = `
+          <div>
+            <div class="font-extrabold text-clay-forest dark:text-[#ECE7DC] flex items-center gap-1.5">
+              <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+              ${node.id}
+            </div>
+            <div class="text-[10px] text-clay-sage">IP: ${node.ip} · Launched: ${node.launched} (Running ${node.age})</div>
+          </div>
+          <div class="font-extrabold text-emerald-600 dark:text-emerald-400 text-right">${node.cost}</div>
+        `;
+        actList.appendChild(item);
+      });
+    }
+
+    function toggleDarkMode() {
+      const isDark = document.documentElement.classList.toggle('dark');
+      document.getElementById('theme-icon').innerHTML = isDark ? '&#9728;' : '&#9790;';
+    }
+
+    // Initialize
+    renderClusterButtons();
+    renderAll();
+  </script>
+</body>
+</html>

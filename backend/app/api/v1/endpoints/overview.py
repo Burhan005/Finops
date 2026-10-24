@@ -53,7 +53,7 @@ def get_overview(
     ds_key = get_dataset_cache_key(dataset, repo)
     org_id = org.id if org else 1
     cache_key = global_cache.build_key(
-        org_id, ds_key, "overview",
+        org_id, ds_key, "overview_v3",
         s=start_date, e=end_date, svc=svc_filter, acc=acc_filter
     )
     if repo.has_records():
@@ -67,8 +67,31 @@ def get_overview(
             db_res['data_source'] = 'database'
             data = dataset.get('data') or {}
             recs = get_cached_recommendations(ds_key, data) if data else {}
-            db_res['potential_savings'] = recs.get('total_potential_savings', 0.0) if isinstance(recs, dict) else 0.0
-            db_res['total_resources'] = db_res.get('matching_resources_count') or len(data.get('resources', []))
+            pot_savings = recs.get('total_potential_savings', 0.0) if isinstance(recs, dict) else 0.0
+
+            # If in-memory cur_data had no recommendations, check executive savings ledger
+            if not pot_savings:
+                try:
+                    from ....savings_ledger import get_executive_ledger_summary
+                    exec_ledger = get_executive_ledger_summary(db, org_id=org_id)
+                    pot_savings = exec_ledger.get('realizable_monthly_savings', 0.0) or exec_ledger.get('total_potential_monthly', 0.0) or 0.0
+                except Exception as e:
+                    logger.debug("Executive ledger savings lookup notice: %s", e)
+
+            db_res['potential_savings'] = pot_savings
+            db_res['total_resources'] = db_res.get('total_resources') or db_res.get('matching_resources_count') or len(data.get('resources', []))
+
+            # Guarantee default_comparison is present
+            if not db_res.get('default_comparison') and db_res.get('comparison_defaults'):
+                comp_def = db_res['comparison_defaults']
+                delta_obj = comp_def.get('delta') or {}
+                db_res['default_comparison'] = {
+                    'baseline_date': comp_def.get('baseline_date', ''),
+                    'target_date': comp_def.get('target_date', ''),
+                    'delta_cost': delta_obj.get('delta_cost', 0.0),
+                    'pct_change': delta_obj.get('pct_change', 0.0),
+                    'pct_display': delta_obj.get('pct_display', '0.0%')
+                }
             if dataset.get('filename'):
                 db_res['filename'] = dataset.get('filename')
             return db_res

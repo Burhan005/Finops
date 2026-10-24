@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ZORVEX Apple Spatial & VisionOS Transition Studio</title>
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+  <style>
+    /* -------------------------------------------------------------
+       APPLE CASpringAnimation PHYSICS & SPATIAL ENGINE
+       ------------------------------------------------------------- */
+    :root {
+      /* Apple's proprietary spring physics (smooth, organic overshoot and soft cushion) */
+      --apple-spring: cubic-bezier(0.22, 1.25, 0.36, 1);
+      --apple-smooth: cubic-bezier(0.25, 1, 0.2, 1);
+      --apple-duration: 460ms;
+      --glass-blur: 16px;
+      --tilt-x: 0deg;
+      --tilt-y: 0deg;
+    }
+
+    /* 3D Perspective Stage */
+    .spatial-stage {
+      perspective: 1200px;
+      transform-style: preserve-3d;
+    }
+
+    /* Spatial Tilt Container (Reacts to Mouse / Cursor) */
+    .spatial-mesh {
+      transform: rotateX(var(--tilt-x)) rotateY(var(--tilt-y));
+      transition: transform 120ms ease-out;
+      transform-style: preserve-3d;
+    }
+
+    /* Layer 1: Foreground Z-Plane (Pops Out) */
+    .plane-foreground {
+      transform: translateZ(28px);
+      transition: transform var(--apple-duration) var(--apple-spring);
+    }
+
+    /* Layer 2: Midground Cards */
+    .plane-midground {
+      transform: translateZ(0px);
+      transition: transform var(--apple-duration) var(--apple-spring);
+    }
+
+    /* Layer 3: Deep Background */
+    .plane-background {
+      transform: translateZ(-30px);
+      transition: transform var(--apple-duration) var(--apple-smooth);
+    }
+
+    /* -------------------------------------------------------------
+       MODE A: Apple VisionOS Spatial 3D Parallax
+       ------------------------------------------------------------- */
+    .anim-apple-visionos {
+      animation: visionosEntrance var(--apple-duration) var(--apple-spring) forwards;
+    }
+    @keyframes visionosEntrance {
+      0% {
+        opacity: 0;
+        transform: perspective(1000px) rotateX(8deg) translateY(28px) translateZ(-60px) scale(0.94);
+        filter: blur(12px) brightness(0.9);
+      }
+      70% {
+        transform: perspective(1000px) rotateX(-1deg) translateY(-2px) translateZ(8px) scale(1.006);
+      }
+      100% {
+        opacity: 1;
+        transform: perspective(1000px) rotateX(0deg) translateY(0) translateZ(0) scale(1);
+        filter: blur(0px) brightness(1);
+      }
+    }
+
+    /* -------------------------------------------------------------
+       MODE B: macOS Liquid Glass & Specular Rim Light
+       ------------------------------------------------------------- */
+    .anim-apple-liquidglass {
+      animation: liquidGlassEntrance var(--apple-duration) var(--apple-smooth) forwards;
+      position: relative;
+    }
+    @keyframes liquidGlassEntrance {
+      0% {
+        opacity: 0;
+        transform: scale(0.95) translateY(14px);
+        filter: blur(16px);
+      }
+      100% {
+        opacity: 1;
+        transform: scale(1) translateY(0);
+        filter: blur(0px);
+      }
+    }
+    /* Liquid Specular Rim Light Glow */
+    .glass-card-glow {
+      position: relative;
+    }
+    .glass-card-glow::before {
+      content: '';
+      position: absolute;
+      inset: -1px;
+      border-radius: inherit;
+      padding: 1.5px;
+      background: linear-gradient(135deg, rgba(255,255,255,0.4) 0%, rgba(16,185,129,0.5) 40%, transparent 70%);
+      -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+      -webkit-mask-composite: xor;
+      mask-composite: exclude;
+      opacity: 0;
+      animation: rimLightPass calc(var(--apple-duration) * 1.4) ease-out forwards;
+      pointer-events: none;
+    }
+    @keyframes rimLightPass {
+      0% { opacity: 0; transform: scale(0.98); }
+      30% { opacity: 1; }
+      100% { opacity: 0.6; transform: scale(1); }
+    }
+
+    /* -------------------------------------------------------------
+       MODE C: iOS Fluid Spring & Staggered Bubble
+       ------------------------------------------------------------- */
+    .anim-apple-fluidspring .apple-stagger-1 {
+      animation: springBounce var(--apple-duration) var(--apple-spring) 0ms forwards;
+    }
+    .anim-apple-fluidspring .apple-stagger-2 {
+      animation: springBounce var(--apple-duration) var(--apple-spring) 40ms forwards;
+    }
+    .anim-apple-fluidspring .apple-stagger-3 {
+      animation: springBounce var(--apple-duration) var(--apple-spring) 80ms forwards;
+    }
+    .anim-apple-fluidspring .apple-stagger-4 {
+      animation: springBounce var(--apple-duration) var(--apple-spring) 120ms forwards;
+    }
+    @keyframes springBounce {
+      0% {
+        opacity: 0;
+        transform: translateY(22px) scale(0.92);
+        filter: blur(6px);
+      }
+      65% {
+        transform: translateY(-3px) scale(1.015);
+      }
+      100% {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+        filter: blur(0);
+      }
+    }
+
+    /* Apple Magnetic Capsule Bar */
+    #apple-capsule {
+      transition: transform var(--apple-duration) var(--apple-spring),
+                  width var(--apple-duration) var(--apple-smooth);
+    }
+  </style>
+</head>
+<body class="bg-transparent text-[var(--foreground)] antialiased p-3 sm:p-6 font-sans select-none">
+
+  <!-- Main Container -->
+  <div class="bg-[var(--card)] text-[var(--foreground)] border border-[var(--border)] rounded-3xl p-6 shadow-2xl max-w-4xl mx-auto backdrop-blur-2xl">
+    
+    <!-- Header -->
+    <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-5 border-b border-[var(--border)]">
+      <div>
+        <div class="flex items-center gap-2.5">
+          <span class="inline-flex items-center justify-center w-7 h-7 rounded-xl bg-gradient-to-tr from-emerald-500 to-teal-400 text-white font-black text-sm shadow-md">
+            
+          </span>
+          <h2 class="text-base sm:text-lg font-black tracking-tight">Apple Spatial & VisionOS Studio</h2>
+          <span class="px-2.5 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-[10px] font-extrabold text-emerald-400">
+            VisionOS 2.0 • Ultra-Refined
+          </span>
+        </div>
+        <p class="text-[var(--muted-foreground)] text-xs mt-1">
+          Multi-plane Z-axis depth parallax, 3D cursor tilt tracking, and frosted liquid glass refraction.
+        </p>
+      </div>
+
+      <!-- Controls: Cursor Tilt & Slow-Mo -->
+      <div class="flex items-center gap-2">
+        <button onclick="toggleTilt()" id="btn-tilt" class="px-3 py-1.5 rounded-xl border border-emerald-500/40 bg-emerald-500/10 text-emerald-400 text-xs font-bold transition flex items-center gap-1.5 shadow-sm">
+          <span>🕶️</span> <span id="tilt-text">3D Mouse Tilt: ON</span>
+        </button>
+        <button onclick="toggleSlowMo()" id="btn-slowmo" class="px-3 py-1.5 rounded-xl border border-[var(--border)] bg-[var(--background)] hover:bg-[var(--card)] text-xs font-bold transition flex items-center gap-1.5">
+          <span>⏱️</span> <span id="slowmo-text">Slow-Mo: OFF</span>
+        </button>
+        <button onclick="replayCurrent()" class="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-md">
+          <span>🔄</span> Re-play
+        </button>
+      </div>
+    </div>
+
+    <!-- 3 Apple Variation Selectors -->
+    <div class="pt-5 pb-4">
+      <div class="text-xs font-bold text-[var(--muted-foreground)] uppercase tracking-wider mb-3">
+        Choose Apple Design Architecture:
+      </div>
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        
+        <!-- Apple Mode 1: VisionOS Spatial 3D -->
+        <button onclick="selectAppleMode('visionos', this)" class="mode-card active-mode p-4 rounded-2xl border text-left transition flex flex-col justify-between bg-emerald-600/10 border-emerald-500 shadow-md">
+          <div>
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-black text-emerald-400 flex items-center gap-1.5">
+                <span>🥽</span> VisionOS Spatial 3D
+              </span>
+              <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+            </div>
+            <div class="text-xs font-extrabold text-[var(--foreground)] mt-2">Multi-Plane Z-Depth Parallax</div>
+            <p class="text-[11px] text-[var(--muted-foreground)] mt-1 leading-snug">
+              Cards rotate in 3D perspective (<code class="text-emerald-400 font-mono">8° ➔ 0°</code>) with Z-axis depth decompression and spring cushion.
+            </p>
+          </div>
+          <div class="mt-3 text-[10px] text-emerald-400 font-black">
+            ★ Most Immersive & Futuristic
+          </div>
+        </button>
+
+        <!-- Apple Mode 2: macOS Liquid Glass -->
+        <button onclick="selectAppleMode('liquidglass', this)" class="mode-card p-4 rounded-2xl border border-[var(--border)] text-left hover:border-[var(--muted-foreground)] transition flex flex-col justify-between">
+          <div>
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-black text-[var(--foreground)] flex items-center gap-1.5">
+                <span>💎</span> macOS Liquid Glass
+              </span>
+            </div>
+            <div class="text-xs font-extrabold text-[var(--foreground)] mt-2">Specular Rim Light & De-blur</div>
+            <p class="text-[11px] text-[var(--muted-foreground)] mt-1 leading-snug">
+              Frosted glass (16px blur) clears up while an ethereal luminous rim-light highlights card contours.
+            </p>
+          </div>
+          <div class="mt-3 text-[10px] text-[var(--muted-foreground)] font-bold">
+            Refined & Elegant
+          </div>
+        </button>
+
+        <!-- Apple Mode 3: iOS Fluid Spring -->
+        <button onclick="selectAppleMode('fluidspring', this)" class="mode-card p-4 rounded-2xl border border-[var(--border)] text-left hover:border-[var(--muted-foreground)] transition flex flex-col justify-between">
+          <div>
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-black text-[var(--foreground)] flex items-center gap-1.5">
+                <span>📱</span> iOS Fluid Spring
+              </span>
+            </div>
+            <div class="text-xs font-extrabold text-[var(--foreground)] mt-2">Organic CASpring Ripple</div>
+            <p class="text-[11px] text-[var(--muted-foreground)] mt-1 leading-snug">
+              Cards bounce in with Apple's harmonic spring overshoot (<code class="text-emerald-400 font-mono">scale: 0.92 ➔ 1.015 ➔ 1.0</code>).
+            </p>
+          </div>
+          <div class="mt-3 text-[10px] text-[var(--muted-foreground)] font-bold">
+            Tactile & Bouncy
+          </div>
+        </button>
+
+      </div>
+    </div>
+
+    <!-- Apple Spatial Viewport (Interactive 3D Stage) -->
+    <div id="spatial-viewport" class="spatial-stage mt-3 rounded-2xl border border-[var(--border)] bg-[var(--background)] p-6 relative overflow-hidden shadow-inner cursor-default">
+      
+      <!-- Apple Glass Floating Nav -->
+      <div class="relative pb-4 mb-6 border-b border-[var(--border)]">
+        <div class="relative flex items-center gap-1.5 overflow-x-auto text-xs font-semibold" id="tabs-bar">
+          
+          <!-- Moving Apple Fluid Capsule -->
+          <div id="apple-capsule" class="absolute top-0 bottom-0 left-0 bg-gradient-to-r from-emerald-600 to-teal-600 rounded-xl shadow-lg pointer-events-none z-0"></div>
+
+          <!-- Tab Items -->
+          <button onclick="switchTab(0, 'overview', this)" class="tab-item relative z-10 px-4 py-2 rounded-xl text-white font-black flex items-center gap-1.5 transition-colors">
+            <span>📊</span> Overview
+          </button>
+          <button onclick="switchTab(1, 'services', this)" class="tab-item relative z-10 px-4 py-2 rounded-xl text-[var(--muted-foreground)] hover:text-[var(--foreground)] font-bold flex items-center gap-1.5 transition-colors">
+            <span>☁️</span> Service Explorer
+          </button>
+          <button onclick="switchTab(2, 'comparison', this)" class="tab-item relative z-10 px-4 py-2 rounded-xl text-[var(--muted-foreground)] hover:text-[var(--foreground)] font-bold flex items-center gap-1.5 transition-colors">
+            <span>⚖️</span> Cost Variance
+          </button>
+          <button onclick="switchTab(3, 'ledger', this)" class="tab-item relative z-10 px-4 py-2 rounded-xl text-[var(--muted-foreground)] hover:text-[var(--foreground)] font-bold flex items-center gap-1.5 transition-colors">
+            <span>💰</span> Savings Ledger
+          </button>
+          <button onclick="switchTab(4, 'ai', this)" class="tab-item relative z-10 px-4 py-2 rounded-xl text-[var(--muted-foreground)] hover:text-[var(--foreground)] font-bold flex items-center gap-1.5 transition-colors">
+            <span>✨</span> Ask AI
+          </button>
+        </div>
+      </div>
+
+      <!-- Spatial Mesh (3D Multi-Plane Canvas) -->
+      <div id="spatial-mesh-container" class="spatial-mesh min-h-[310px]">
+        
+        <!-- Tab 1: Overview View -->
+        <div id="view-overview" class="view-panel anim-apple-visionos space-y-4">
+          
+          <!-- Plane: Foreground Header -->
+          <div class="plane-foreground apple-stagger-1 flex items-center justify-between">
+            <div>
+              <div class="text-[11px] font-black uppercase tracking-widest text-emerald-400">Spatial Intelligence Core</div>
+              <h3 class="text-base font-black text-[var(--foreground)]">Cloud FinOps Executive Cockpit</h3>
+            </div>
+            <div class="flex items-center gap-2">
+              <span class="inline-block w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+              <span class="text-[11px] font-mono text-[var(--muted-foreground)]">45,095 CUR Records</span>
+            </div>
+          </div>
+
+          <!-- Plane: Midground 3D Cards with Specular Glow -->
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+            
+            <div class="plane-midground apple-stagger-2 glass-card-glow bg-[var(--card)]/90 backdrop-blur-xl p-4 rounded-2xl border border-[var(--border)] shadow-lg hover:shadow-emerald-500/10 transition">
+              <div class="flex items-center justify-between text-[11px] text-[var(--muted-foreground)] font-bold uppercase tracking-wider">
+                <span>Gross Spend</span>
+                <span class="text-emerald-400 text-xs">▲ Active</span>
+              </div>
+              <div class="text-2xl font-black text-[var(--foreground)] mt-2 tracking-tight">$14,892.40</div>
+              <div class="text-[11px] text-emerald-400 font-extrabold mt-2 flex items-center gap-1">
+                <span>↓ 3.4%</span> <span class="text-[var(--muted-foreground)] font-normal">vs prev cycle</span>
+              </div>
+            </div>
+
+            <div class="plane-midground apple-stagger-3 glass-card-glow bg-[var(--card)]/90 backdrop-blur-xl p-4 rounded-2xl border border-[var(--border)] shadow-lg hover:shadow-amber-500/10 transition">
+              <div class="flex items-center justify-between text-[11px] text-[var(--muted-foreground)] font-bold uppercase tracking-wider">
+                <span>Waste Identified</span>
+                <span class="text-amber-400 text-xs">● 8 Alerts</span>
+              </div>
+              <div class="text-2xl font-black text-amber-400 mt-2 tracking-tight">$2,140.00</div>
+              <div class="text-[11px] text-[var(--muted-foreground)] mt-2">
+                Unattached EBS + Idle RDS
+              </div>
+            </div>
+
+            <div class="plane-midground apple-stagger-4 glass-card-glow bg-[var(--card)]/90 backdrop-blur-xl p-4 rounded-2xl border border-[var(--border)] shadow-lg hover:shadow-teal-500/10 transition">
+              <div class="flex items-center justify-between text-[11px] text-[var(--muted-foreground)] font-bold uppercase tracking-wider">
+                <span>Unit Economics</span>
+                <span class="text-teal-400 text-xs">★ Optimal</span>
+              </div>
+              <div class="text-2xl font-black text-teal-400 mt-2 tracking-tight">$0.042</div>
+              <div class="text-[11px] text-emerald-400 font-extrabold mt-2">
+                Beat Target: $0.050 / MAU
+              </div>
+            </div>
+
+          </div>
+
+          <!-- Plane: Deep Background Chart -->
+          <div class="plane-background apple-stagger-4 bg-[var(--card)]/70 backdrop-blur-md p-4 rounded-2xl border border-[var(--border)] shadow-md">
+            <div class="flex items-center justify-between text-xs font-bold pb-2.5 border-b border-[var(--border)]">
+              <span class="flex items-center gap-1.5">
+                <span>📈</span> Spend Velocity Run-Rate (MTD Horizon)
+              </span>
+              <span class="font-mono text-emerald-400 text-[11px]">$496.41/day avg</span>
+            </div>
+            <div class="h-20 flex items-end gap-2.5 pt-3">
+              <div class="flex-1 bg-emerald-600/30 hover:bg-emerald-400 rounded-t-lg h-[40%] transition-all"></div>
+              <div class="flex-1 bg-emerald-600/30 hover:bg-emerald-400 rounded-t-lg h-[55%] transition-all"></div>
+              <div class="flex-1 bg-emerald-600/30 hover:bg-emerald-400 rounded-t-lg h-[48%] transition-all"></div>
+              <div class="flex-1 bg-emerald-600/40 hover:bg-emerald-400 rounded-t-lg h-[75%] transition-all"></div>
+              <div class="flex-1 bg-emerald-600/40 hover:bg-emerald-400 rounded-t-lg h-[62%] transition-all"></div>
+              <div class="flex-1 bg-emerald-600/40 hover:bg-emerald-400 rounded-t-lg h-[88%] transition-all relative">
+                <span class="absolute -top-4 left-1/2 -translate-x-1/2 text-[9px] font-black text-amber-400">PEAK</span>
+              </div>
+              <div class="flex-1 bg-emerald-600/50 hover:bg-emerald-400 rounded-t-lg h-[58%] transition-all"></div>
+              <div class="flex-1 bg-emerald-500 rounded-t-lg h-[45%] shadow-md transition-all"></div>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- Tab 2: Services View -->
+        <div id="view-services" class="view-panel hidden space-y-3">
+          <div class="plane-foreground apple-stagger-1">
+            <div class="text-[11px] font-black uppercase tracking-widest text-emerald-400">Infrastructure Inventory</div>
+            <h3 class="text-base font-black text-[var(--foreground)]">Active Cloud Services Matrix</h3>
+          </div>
+          <div class="space-y-2.5">
+            <div class="plane-midground apple-stagger-2 glass-card-glow bg-[var(--card)]/90 backdrop-blur-xl p-3.5 rounded-2xl border border-[var(--border)] flex items-center justify-between">
+              <div class="flex items-center gap-3">
+                <span class="w-9 h-9 rounded-xl bg-orange-500/20 text-orange-400 font-black flex items-center justify-center text-xs shadow-inner">EC2</span>
+                <div>
+                  <div class="text-xs font-black">Amazon Elastic Compute Cloud</div>
+                  <div class="text-[11px] text-[var(--muted-foreground)]">62 Workloads (42 Savings Plan Covered)</div>
+                </div>
+              </div>
+              <span class="text-sm font-black font-mono tracking-tight">$8,450.20</span>
+            </div>
+            <div class="plane-midground apple-stagger-3 glass-card-glow bg-[var(--card)]/90 backdrop-blur-xl p-3.5 rounded-2xl border border-[var(--border)] flex items-center justify-between">
+              <div class="flex items-center gap-3">
+                <span class="w-9 h-9 rounded-xl bg-blue-500/20 text-blue-400 font-black flex items-center justify-center text-xs shadow-inner">RDS</span>
+                <div>
+                  <div class="text-xs font-black">Amazon Relational Database Service</div>
+                  <div class="text-[11px] text-[var(--muted-foreground)]">Multi-AZ PostgreSQL cluster with Read Replica</div>
+                </div>
+              </div>
+              <span class="text-sm font-black font-mono tracking-tight">$3,120.40</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 3: Comparison View -->
+        <div id="view-comparison" class="view-panel hidden space-y-3">
+          <div class="plane-foreground apple-stagger-1">
+            <div class="text-[11px] font-black uppercase tracking-widest text-emerald-400">Algorithmic Variance Engine</div>
+            <h3 class="text-base font-black text-[var(--foreground)]">Daily Delta & Root Cause Attribution</h3>
+          </div>
+          <div class="plane-midground apple-stagger-2 glass-card-glow bg-[var(--card)]/90 backdrop-blur-xl p-4 rounded-2xl border border-emerald-500/30 bg-emerald-500/5 space-y-2">
+            <div class="flex items-center justify-between text-xs font-black text-emerald-400">
+              <span>Net Variance: -$340.20 (-2.4%)</span>
+              <span class="px-2 py-0.5 rounded-full bg-emerald-500/20 text-[10px]">ZERO-DRIFT CONFIRMED</span>
+            </div>
+            <p class="text-xs text-[var(--foreground)] leading-relaxed">
+              Cost reduction driven by decommissioning of 14 unattached EBS volumes (<code class="bg-[var(--background)] px-1.5 py-0.5 rounded text-emerald-400 font-mono">vol-0a812</code>) and release of 3 idle Elastic IPs.
+            </p>
+          </div>
+        </div>
+
+        <!-- Tab 4: Ledger View -->
+        <div id="view-ledger" class="view-panel hidden space-y-3">
+          <div class="plane-foreground apple-stagger-1">
+            <div class="text-[11px] font-black uppercase tracking-widest text-emerald-400">Verified FinOps Ledger</div>
+            <h3 class="text-base font-black text-[var(--foreground)]">Executive Savings Audit Trail</h3>
+          </div>
+          <div class="grid grid-cols-2 gap-3.5">
+            <div class="plane-midground apple-stagger-2 glass-card-glow bg-[var(--card)]/90 backdrop-blur-xl p-4 rounded-2xl border border-[var(--border)]">
+              <div class="text-[11px] text-[var(--muted-foreground)] font-bold uppercase">Realized Annual Run-Rate</div>
+              <div class="text-2xl font-black text-emerald-400 mt-1">$220,800</div>
+              <div class="text-[11px] text-[var(--muted-foreground)] mt-1.5">14 closed actions verified</div>
+            </div>
+            <div class="plane-midground apple-stagger-3 glass-card-glow bg-[var(--card)]/90 backdrop-blur-xl p-4 rounded-2xl border border-[var(--border)]">
+              <div class="text-[11px] text-[var(--muted-foreground)] font-bold uppercase">In-Pipeline Approvals</div>
+              <div class="text-2xl font-black text-amber-400 mt-1">$4,120/mo</div>
+              <div class="text-[11px] text-[var(--muted-foreground)] mt-1.5">6 rightsizings queued</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 5: AI View -->
+        <div id="view-ai" class="view-panel hidden space-y-3">
+          <div class="plane-foreground apple-stagger-1">
+            <div class="text-[11px] font-black uppercase tracking-widest text-emerald-400">Autonomous Intelligence</div>
+            <h3 class="text-base font-black text-[var(--foreground)]">Ask ZORVEX FinOps Advisor</h3>
+          </div>
+          <div class="plane-midground apple-stagger-2 glass-card-glow bg-[var(--card)]/90 backdrop-blur-xl p-4 rounded-2xl border border-purple-500/30 bg-purple-500/5 space-y-2">
+            <div class="text-xs font-black text-purple-400 flex items-center gap-1.5">
+              <span>✨</span> Deterministic Cost Query Result
+            </div>
+            <p class="text-xs text-[var(--foreground)] leading-relaxed">
+              "Switching your 4 remaining On-Demand <code class="bg-[var(--background)] px-1.5 py-0.5 rounded text-purple-400 font-mono">c5.2xlarge</code> workers in Mumbai (<code class="text-purple-400 font-mono">ap-south-1</code>) to 3-year EC2 Instance Savings Plans will instantly reduce your monthly invoice by <strong class="text-emerald-400">$648.00/month</strong> with 99.8% confidence."
+            </p>
+          </div>
+        </div>
+
+      </div>
+
+    </div>
+
+    <!-- Apple VisionOS Interaction Banner -->
+    <div class="mt-4 p-4 rounded-2xl border border-emerald-500/30 bg-emerald-500/5 text-xs flex flex-col sm:flex-row items-center justify-between gap-3">
+      <div class="flex items-center gap-2.5">
+        <span class="text-base">🥽</span>
+        <span class="text-[var(--foreground)] font-medium">
+          <strong class="text-emerald-400">VisionOS Effect:</strong> Move your mouse over the cards to feel the 3D Gyro Parallax, then switch tabs to see multi-plane Z-axis depth decompression.
+        </span>
+      </div>
+      <div class="text-emerald-400 font-mono text-[11px] font-black">
+        1200px Perspective • Z-Plane Layers
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    let currentAppleMode = 'visionos';
+    let currentTabIndex = 0;
+    let currentTabName = 'overview';
+    let isSlowMo = false;
+    let isTiltEnabled = true;
+
+    window.addEventListener('DOMContentLoaded', () => {
+      initCapsule();
+      setupMouseTracking();
+      replayCurrent();
+    });
+
+    function initCapsule() {
+      const firstTab = document.querySelectorAll('.tab-item')[0];
+      if (firstTab) {
+        updateCapsule(firstTab);
+      }
+    }
+
+    function updateCapsule(tabEl) {
+      const capsule = document.getElementById('apple-capsule');
+      if (capsule && tabEl) {
+        capsule.style.transform = `translateX(${tabEl.offsetLeft}px)`;
+        capsule.style.width = `${tabEl.offsetWidth}px`;
+      }
+    }
+
+    function toggleTilt() {
+      isTiltEnabled = !isTiltEnabled;
+      const btn = document.getElementById('btn-tilt');
+      const txt = document.getElementById('tilt-text');
+      if (isTiltEnabled) {
+        btn.className = 'px-3 py-1.5 rounded-xl border border-emerald-500/40 bg-emerald-500/10 text-emerald-400 text-xs font-bold transition flex items-center gap-1.5 shadow-sm';
+        txt.textContent = '3D Mouse Tilt: ON';
+      } else {
+        btn.className = 'px-3 py-1.5 rounded-xl border border-[var(--border)] bg-[var(--background)] hover:bg-[var(--card)] text-xs font-bold transition flex items-center gap-1.5 text-[var(--muted-foreground)]';
+        txt.textContent = '3D Mouse Tilt: OFF';
+        document.documentElement.style.setProperty('--tilt-x', '0deg');
+        document.documentElement.style.setProperty('--tilt-y', '0deg');
+      }
+    }
+
+    function setupMouseTracking() {
+      const viewport = document.getElementById('spatial-viewport');
+      if (!viewport) return;
+
+      viewport.addEventListener('mousemove', (e) => {
+        if (!isTiltEnabled) return;
+        const rect = viewport.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        
+        // Normalize (-1 to +1)
+        const normX = (x / rect.width) * 2 - 1;
+        const normY = (y / rect.height) * 2 - 1;
+
+        // Subtle 3D tilt (max 4.5deg)
+        const tiltX = (-normY * 4.5).toFixed(2);
+        const tiltY = (normX * 4.5).toFixed(2);
+
+        document.documentElement.style.setProperty('--tilt-x', `${tiltX}deg`);
+        document.documentElement.style.setProperty('--tilt-y', `${tiltY}deg`);
+      });
+
+      viewport.addEventListener('mouseleave', () => {
+        document.documentElement.style.setProperty('--tilt-x', '0deg');
+        document.documentElement.style.setProperty('--tilt-y', '0deg');
+      });
+    }
+
+    function toggleSlowMo() {
+      isSlowMo = !isSlowMo;
+      const duration = isSlowMo ? '1400ms' : '460ms';
+      document.documentElement.style.setProperty('--apple-duration', duration);
+      
+      const btn = document.getElementById('btn-slowmo');
+      const txt = document.getElementById('slowmo-text');
+      if (isSlowMo) {
+        btn.className = 'px-3 py-1.5 rounded-xl border border-amber-500/50 bg-amber-500/20 text-amber-400 text-xs font-bold transition flex items-center gap-1.5 shadow-sm';
+        txt.textContent = 'Slow-Mo: 0.3x (Physics Inspection)';
+      } else {
+        btn.className = 'px-3 py-1.5 rounded-xl border border-[var(--border)] bg-[var(--background)] hover:bg-[var(--card)] text-xs font-bold transition flex items-center gap-1.5';
+        txt.textContent = 'Slow-Mo: OFF';
+      }
+      replayCurrent();
+    }
+
+    function selectAppleMode(modeKey, btn) {
+      currentAppleMode = modeKey;
+      
+      document.querySelectorAll('.mode-card').forEach(b => {
+        b.className = 'mode-card p-4 rounded-2xl border border-[var(--border)] text-left hover:border-[var(--muted-foreground)] transition flex flex-col justify-between';
+      });
+      btn.className = 'mode-card active-mode p-4 rounded-2xl border text-left transition flex flex-col justify-between bg-emerald-600/10 border-emerald-500 shadow-md';
+
+      replayCurrent();
+    }
+
+    function switchTab(newIndex, tabName, btn) {
+      currentTabIndex = newIndex;
+      currentTabName = tabName;
+
+      // Update magnetic capsule
+      updateCapsule(btn);
+
+      // Update tab active texts
+      document.querySelectorAll('.tab-item').forEach(b => {
+        b.className = 'tab-item relative z-10 px-4 py-2 rounded-xl text-[var(--muted-foreground)] hover:text-[var(--foreground)] font-bold flex items-center gap-1.5 transition-colors';
+      });
+      btn.className = 'tab-item relative z-10 px-4 py-2 rounded-xl text-white font-black flex items-center gap-1.5 transition-colors';
+
+      // Hide all panels
+      document.querySelectorAll('.view-panel').forEach(p => {
+        p.classList.add('hidden');
+        p.className = 'view-panel hidden';
+      });
+
+      // Show and animate selected panel
+      const targetPanel = document.getElementById('view-' + tabName);
+      if (targetPanel) {
+        targetPanel.classList.remove('hidden');
+
+        if (currentAppleMode === 'visionos') {
+          targetPanel.className = 'view-panel anim-apple-visionos space-y-4';
+        } else if (currentAppleMode === 'liquidglass') {
+          targetPanel.className = 'view-panel anim-apple-liquidglass space-y-4';
+        } else if (currentAppleMode === 'fluidspring') {
+          targetPanel.className = 'view-panel anim-apple-fluidspring space-y-4';
+        }
+      }
+    }
+
+    function replayCurrent() {
+      const activeTabBtn = document.querySelectorAll('.tab-item')[currentTabIndex];
+      if (activeTabBtn) {
+        switchTab(currentTabIndex, currentTabName, activeTabBtn);
+      }
+    }
+  </script>
+</body>
+</html>

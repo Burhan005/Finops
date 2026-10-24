@@ -11,19 +11,24 @@ import asyncio
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any, Tuple
 
-from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, status
+from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, Request, status
 from sqlalchemy.orm import Session
+
+from ....core.rate_limit import enforce_rate_limit
 
 from ....core.config import SAMPLES_DIR, UPLOADS_DIR, MAX_UPLOAD_BYTES
 from ....core.state import (
     CURRENT_DATASET,
     org_dataset_put,
+    cache_get_parsed,
     cache_put_parsed,
+    _LEDGER_SYNCED_SETS,
     get_upload_semaphore
 )
 from ....cache import global_cache
 from ....database import get_db, SessionLocal
 from ....models import User, Organization, DatasetRecord, BillingRecord, AuditEvent
+from ....db_ingestion import fast_bulk_insert_billing_records, populate_dataset_rollups
 from ....parser import (
     parse_cur_file,
     parse_cur_manifest,
@@ -92,57 +97,96 @@ def _ingest_dataset_sync(
                 logger.info("Replay detected for org %s: re-activated dataset %s without inserting duplicate rows", org_id, existing_dataset.id)
                 return existing_dataset.id
 
-        # 2. REVISION LINEAGE TRACKING
+        # 2. REVISION & RE-SYNC DEDUPLICATION
         billing_period_start = parsed.get('billing_period_start')
         billing_period_end = parsed.get('billing_period_end')
         payer_account_id = parsed.get('payer_account_id')
         usage_account_id = parsed.get('usage_account_id')
         assembly_id = parsed.get('assembly_id') or (manifest_metadata.get('assembly_id') if manifest_metadata else None)
 
-        revision_version = 1
-        superseded_dataset_id = None
+        # Check if an existing dataset with the exact same filename exists for this org (in-place re-sync)
+        existing_by_name = sync_db.query(DatasetRecord).filter(
+            DatasetRecord.organization_id == org_id,
+            DatasetRecord.filename == final_filename
+        ).first()
 
-        if billing_period_start and billing_period_end:
-            prev_rev = sync_db.query(DatasetRecord).filter(
-                DatasetRecord.organization_id == org_id,
-                DatasetRecord.billing_period_start == billing_period_start,
-                DatasetRecord.billing_period_end == billing_period_end
-            ).order_by(DatasetRecord.revision_version.desc()).first()
+        if existing_by_name:
+            # Overwrite/sync existing dataset: remove old billing records and update in-place
+            sync_db.query(BillingRecord).filter(
+                BillingRecord.organization_id == org_id,
+                BillingRecord.dataset_id == existing_by_name.id
+            ).delete(synchronize_session=False)
 
-            if prev_rev:
-                revision_version = (prev_rev.revision_version or 1) + 1
-                superseded_dataset_id = prev_rev.id
+            sync_db.query(DatasetRecord).filter(
+                DatasetRecord.organization_id == org_id
+            ).update({DatasetRecord.is_active: 0})
 
-        sync_db.query(DatasetRecord).filter(
-            DatasetRecord.organization_id == org_id
-        ).update({DatasetRecord.is_active: 0})
+            existing_by_name.filepath = final_filepath
+            existing_by_name.checksum_sha256 = checksum_sha256
+            existing_by_name.billing_period_start = billing_period_start
+            existing_by_name.billing_period_end = billing_period_end
+            existing_by_name.payer_account_id = payer_account_id
+            existing_by_name.usage_account_id = usage_account_id
+            if account_name:
+                existing_by_name.account_name = account_name
+            existing_by_name.assembly_id = assembly_id
+            existing_by_name.manifest_metadata = json.dumps(manifest_metadata) if manifest_metadata else None
+            existing_by_name.total_cost = parsed['gross_cost']
+            existing_by_name.net_cost = parsed['net_cost']
+            existing_by_name.credits_total = parsed['credits_total']
+            existing_by_name.refunds_total = parsed['refunds_total']
+            existing_by_name.taxes_total = parsed['taxes_total']
+            existing_by_name.total_rows = parsed['total_rows']
+            existing_by_name.is_active = 1
+            existing_by_name.uploaded_at = datetime.now(timezone.utc)
+            dataset_rec = existing_by_name
+            revision_version = getattr(existing_by_name, 'revision_version', 1) or 1
+            superseded_dataset_id = getattr(existing_by_name, 'superseded_dataset_id', None)
+        else:
+            revision_version = 1
+            superseded_dataset_id = None
 
-        dataset_rec = DatasetRecord(
-            organization_id=org_id,
-            filename=final_filename,
-            filepath=final_filepath,
-            file_type='upload',
-            checksum_sha256=checksum_sha256,
-            billing_period_start=billing_period_start,
-            billing_period_end=billing_period_end,
-            payer_account_id=payer_account_id,
-            usage_account_id=usage_account_id,
-            account_name=account_name,
-            assembly_id=assembly_id,
-            manifest_metadata=json.dumps(manifest_metadata) if manifest_metadata else None,
-            revision_version=revision_version,
-            superseded_dataset_id=superseded_dataset_id,
-            total_cost=parsed['gross_cost'],
-            net_cost=parsed['net_cost'],
-            credits_total=parsed['credits_total'],
-            refunds_total=parsed['refunds_total'],
-            taxes_total=parsed['taxes_total'],
-            total_rows=parsed['total_rows'],
-            is_active=1,
-            uploaded_at=datetime.now(timezone.utc)
-        )
-        sync_db.add(dataset_rec)
-        sync_db.flush()
+            if billing_period_start and billing_period_end:
+                prev_rev = sync_db.query(DatasetRecord).filter(
+                    DatasetRecord.organization_id == org_id,
+                    DatasetRecord.billing_period_start == billing_period_start,
+                    DatasetRecord.billing_period_end == billing_period_end
+                ).order_by(DatasetRecord.revision_version.desc()).first()
+
+                if prev_rev:
+                    revision_version = (prev_rev.revision_version or 1) + 1
+                    superseded_dataset_id = prev_rev.id
+
+            sync_db.query(DatasetRecord).filter(
+                DatasetRecord.organization_id == org_id
+            ).update({DatasetRecord.is_active: 0})
+
+            dataset_rec = DatasetRecord(
+                organization_id=org_id,
+                filename=final_filename,
+                filepath=final_filepath,
+                file_type='upload',
+                checksum_sha256=checksum_sha256,
+                billing_period_start=billing_period_start,
+                billing_period_end=billing_period_end,
+                payer_account_id=payer_account_id,
+                usage_account_id=usage_account_id,
+                account_name=account_name,
+                assembly_id=assembly_id,
+                manifest_metadata=json.dumps(manifest_metadata) if manifest_metadata else None,
+                revision_version=revision_version,
+                superseded_dataset_id=superseded_dataset_id,
+                total_cost=parsed['gross_cost'],
+                net_cost=parsed['net_cost'],
+                credits_total=parsed['credits_total'],
+                refunds_total=parsed['refunds_total'],
+                taxes_total=parsed['taxes_total'],
+                total_rows=parsed['total_rows'],
+                is_active=1,
+                uploaded_at=datetime.now(timezone.utc)
+            )
+            sync_db.add(dataset_rec)
+            sync_db.flush()
 
         now_utc = datetime.now(timezone.utc)
         ds_id = dataset_rec.id
@@ -173,10 +217,16 @@ def _ingest_dataset_sync(
                 'created_at': now_utc
             })
             if len(billing_dicts) >= 2000:
-                sync_db.bulk_insert_mappings(BillingRecord, billing_dicts)
+                fast_bulk_insert_billing_records(sync_db, billing_dicts)
                 billing_dicts = []
         if billing_dicts:
-            sync_db.bulk_insert_mappings(BillingRecord, billing_dicts)
+            fast_bulk_insert_billing_records(sync_db, billing_dicts)
+
+        # Optimization B: Populate Materialized Rollup Tables for instant sub-millisecond overview
+        try:
+            populate_dataset_rollups(sync_db, org_id, ds_id, parsed_data=parsed)
+        except Exception as rollup_err:
+            logger.warning("Materialized rollup generation notice: %s", rollup_err)
 
         audit_msg = f"Uploaded and ingested {final_filename} ({parsed['total_rows']} rows, gross ${parsed['gross_cost']}, net ${parsed['net_cost']})"
         if revision_version > 1:
@@ -300,10 +350,12 @@ def select_dataset(
     rec = None
     if upload_rec and upload_rec.filepath and os.path.exists(upload_rec.filepath):
         canonical_uploads_dir = os.path.realpath(UPLOADS_DIR)
+        canonical_samples_dir = os.path.realpath(SAMPLES_DIR)
         canonical_rec_path = os.path.realpath(upload_rec.filepath)
         try:
-            upload_common = os.path.commonpath([canonical_uploads_dir, canonical_rec_path])
-            if upload_common != canonical_uploads_dir or not os.path.isfile(canonical_rec_path):
+            in_uploads = (os.path.commonpath([canonical_uploads_dir, canonical_rec_path]) == canonical_uploads_dir)
+            in_samples = (os.path.commonpath([canonical_samples_dir, canonical_rec_path]) == canonical_samples_dir)
+            if (not in_uploads and not in_samples) or not os.path.isfile(canonical_rec_path):
                 raise HTTPException(status_code=403, detail="Dataset file location is invalid.")
         except ValueError:
             raise HTTPException(status_code=403, detail="Dataset file location is invalid.")
@@ -332,18 +384,23 @@ def select_dataset(
             raise HTTPException(status_code=404, detail=f"Dataset '{fname}' not found or does not belong to your organization.")
 
     try:
-        parsed = parse_cur_file(target_path)
-        cache_put_parsed(target_path, parsed)
+        norm_target = os.path.realpath(target_path)
+        try:
+            mtime = os.path.getmtime(target_path)
+            cache_key = f"{norm_target}_{mtime}"
+        except OSError:
+            mtime = 0
+            cache_key = norm_target
+
+        parsed = cache_get_parsed(cache_key) or cache_get_parsed(norm_target) or cache_get_parsed(target_path)
+        if not parsed:
+            parsed = parse_cur_file(target_path)
+            cache_put_parsed(target_path, parsed)
+            cache_put_parsed(norm_target, parsed)
+            cache_put_parsed(cache_key, parsed)
+
         target_org = org or db.query(Organization).first()
         if target_org:
-            org_dataset_put(target_org.id, {
-                'filename': fname,
-                'filepath': target_path,
-                'data': parsed
-            })
-            global_cache.invalidate_org(target_org.id)
-            db.query(DatasetRecord).filter(DatasetRecord.organization_id == target_org.id).update({DatasetRecord.is_active: 0})
-
             target_rec = None
             if not is_sample:
                 if rec:
@@ -376,19 +433,52 @@ def select_dataset(
                     db.add(sample_rec)
                     db.flush()
                     target_rec = sample_rec
+
+            # Mark all other datasets for this org inactive
+            db.query(DatasetRecord).filter(
+                DatasetRecord.organization_id == target_org.id,
+                DatasetRecord.id != (target_rec.id if target_rec else 0)
+            ).update({DatasetRecord.is_active: 0})
             db.commit()
+
+            # CRITICAL ISOLATION: Instantly purge all cached overviews, resources, trends, and hierarchies for this tenant!
+            global_cache.invalidate_org(target_org.id)
+
+            # High-throughput fast path with full metadata
+            org_dataset_put(target_org.id, {
+                'id': target_rec.id if target_rec else None,
+                'filename': fname,
+                'filepath': target_path,
+                'mtime': mtime,
+                'data': parsed
+            })
+
+            # Pre-emptively warm Redis caches in background daemon thread
+            try:
+                from ....cache_warmer import CacheWarmerService
+                CacheWarmerService.warm_dataset_async(
+                    org_id=target_org.id,
+                    dataset_id=target_rec.id if target_rec else None,
+                    filename=fname
+                )
+            except Exception as e:
+                logger.debug("Failed to dispatch CacheWarmer after dataset selection: %s", e)
 
             if target_rec:
                 repo = BillingRepository(db, org_id=target_org.id, dataset_id=target_rec.id)
                 if not repo.has_records():
                     repo.ensure_persisted(parsed)
 
-            try:
-                sync_anomalies_to_db(db, parsed, org_id=target_org.id)
-                recs_result = generate_recommendations(parsed)
-                sync_recommendations_to_ledger(db, recs_result.get('recommendations', []), org_id=target_org.id)
-            except Exception as e:
-                logger.warning("Dataset selection synchronization warning for org %s: %s", target_org.id, e)
+            # Deduplicated synchronization: only calculate once per dataset
+            synced_key = f"{target_org.id}_{target_rec.id if target_rec else fname}"
+            if synced_key not in _LEDGER_SYNCED_SETS:
+                try:
+                    sync_anomalies_to_db(db, parsed, org_id=target_org.id)
+                    recs_result = generate_recommendations(parsed)
+                    sync_recommendations_to_ledger(db, recs_result.get('recommendations', []), org_id=target_org.id)
+                    _LEDGER_SYNCED_SETS.add(synced_key)
+                except Exception as e:
+                    logger.warning("Dataset selection synchronization warning for org %s: %s", target_org.id, e)
 
         if is_sample:
             CURRENT_DATASET['filename'] = fname
@@ -465,14 +555,90 @@ def rename_dataset_account(
     }
 
 
+@router.delete("/datasets/{dataset_id}")
+def delete_dataset(
+    dataset_id: int,
+    auth: Tuple[User, Organization] = Depends(require_auth),
+    db: Session = Depends(get_db)
+):
+    user, org = auth
+    rec = db.query(DatasetRecord).filter(
+        DatasetRecord.id == dataset_id,
+        DatasetRecord.organization_id == org.id
+    ).first()
+
+    if not rec:
+        raise HTTPException(status_code=404, detail="Dataset not found or access denied.")
+
+    was_active = bool(rec.is_active)
+    target_filepath = rec.filepath
+    dataset_name = rec.filename
+
+    # 1. Cascade delete all persisted billing records for this dataset
+    db.query(BillingRecord).filter(
+        BillingRecord.organization_id == org.id,
+        BillingRecord.dataset_id == dataset_id
+    ).delete(synchronize_session=False)
+
+    # 2. Delete Dataset Record
+    db.delete(rec)
+    db.commit()
+
+    # 3. If the deleted dataset was active, activate the most recent remaining dataset
+    if was_active:
+        remaining_ds = db.query(DatasetRecord).filter(
+            DatasetRecord.organization_id == org.id
+        ).order_by(DatasetRecord.id.desc()).first()
+        if remaining_ds:
+            remaining_ds.is_active = 1
+            db.commit()
+
+    # 4. Safely clean up physical upload file if no other dataset record references it
+    if target_filepath and os.path.exists(target_filepath):
+        other_ref = db.query(DatasetRecord.id).filter(
+            DatasetRecord.filepath == target_filepath
+        ).first()
+        if not other_ref and "uploads" in target_filepath:
+            try:
+                os.remove(target_filepath)
+            except Exception:
+                pass
+
+    db.add(AuditEvent(
+        organization_id=org.id,
+        user_id=user.id,
+        action="DATASET_DELETE",
+        details=f"Deleted dataset '{dataset_name}' (ID: {dataset_id}, was_active: {was_active})."
+    ))
+    db.commit()
+
+    global_cache.invalidate_org(org.id)
+
+    # Pre-emptively warm Redis caches in background daemon thread
+    try:
+        from ....cache_warmer import CacheWarmerService
+        CacheWarmerService.warm_dataset_async(org_id=org.id, dataset_id=ds_id, filename=final_filename)
+    except Exception as e:
+        logger.debug("Failed to dispatch CacheWarmer after upload: %s", e)
+
+    return {
+        "success": True,
+        "deleted_id": dataset_id,
+        "was_active": was_active,
+        "message": f"Successfully deleted dataset '{dataset_name}'."
+    }
+
+
 @router.post("/upload")
 async def upload_cur_file(
+    request: Request,
     file: Optional[UploadFile] = File(None),
     files: Optional[List[UploadFile]] = File(None),
     account_name: Optional[str] = Form(None),
     auth: Tuple[User, Organization] = Depends(require_auth),
     db: Session = Depends(get_db)
 ):
+    enforce_rate_limit(request, "dataset_upload", max_requests=15, window_seconds=60)
     user, org = auth
     incoming_files: List[UploadFile] = []
     if files:
@@ -662,6 +828,13 @@ async def upload_cur_file(
         'data': parsed
     })
     global_cache.invalidate_org(org.id)
+
+    # Pre-emptively warm Redis caches in background daemon thread
+    try:
+        from ....cache_warmer import CacheWarmerService
+        CacheWarmerService.warm_dataset_async(org_id=org.id, dataset_id=ds_id, filename=final_filename)
+    except Exception as e:
+        logger.debug("Failed to dispatch CacheWarmer after upload: %s", e)
 
     return {
         "success": True,

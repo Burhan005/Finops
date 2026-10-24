@@ -111,6 +111,8 @@ class DatasetRecord(Base):
     superseded_dataset_id = Column(Integer, ForeignKey("datasets.id", ondelete="SET NULL"), nullable=True)
 
     billing_records = relationship("BillingRecord", back_populates="dataset", cascade="all, delete-orphan")
+    service_rollups = relationship("DatasetServiceRollup", back_populates="dataset", cascade="all, delete-orphan")
+    daily_rollups = relationship("DatasetDailyRollup", back_populates="dataset", cascade="all, delete-orphan")
 
     __table_args__ = (
         Index("ix_datasets_org_active", "organization_id", "is_active"),
@@ -128,15 +130,15 @@ class BillingRecord(Base):
     usage_date = Column(String(16), index=True, nullable=False)      # YYYY-MM-DD
     usage_month = Column(String(16), index=True, nullable=False)     # YYYY-MM
     usage_hour = Column(String(8), default="00:00")
-    service = Column(String(64), index=True, nullable=False)
+    service = Column(String(128), index=True, nullable=False)
     resource_id = Column(String(255), index=True, nullable=False)
-    short_id = Column(String(128), default="")
+    short_id = Column(String(255), default="")
     account_id = Column(String(64), index=True, nullable=False)
     region = Column(String(64), index=True, nullable=False)
     cost = Column(Float, nullable=False, default=0.0)               # Effective operational cost
     unblended_cost = Column(Float, nullable=False, default=0.0)     # Raw unblended cost
-    line_item_type = Column(String(32), index=True, nullable=False) # Usage, Credit, Refund, Tax, RIFee, Fee
-    usage_type = Column(String(128), default="")
+    line_item_type = Column(String(64), index=True, nullable=False) # Usage, Credit, Refund, Tax, RIFee, Fee
+    usage_type = Column(String(255), default="")
     pricing_term = Column(String(32), default="OnDemand")
     resource_name = Column(String(255), default="")
     sp_arn = Column(String(255), default="")
@@ -150,6 +152,55 @@ class BillingRecord(Base):
         Index("ix_billing_records_dataset_date", "dataset_id", "usage_date", "cost"),
         Index("ix_billing_records_dataset_resource", "dataset_id", "resource_id", "cost"),
         Index("ix_billing_records_dataset_line_item", "dataset_id", "line_item_id"),
+        Index("ix_billing_records_org_dataset", "organization_id", "dataset_id"),
+        Index("ix_billing_records_org_dataset_service", "organization_id", "dataset_id", "service"),
+        Index("ix_billing_records_org_dataset_date", "organization_id", "dataset_id", "usage_date"),
+        Index("ix_billing_records_org_ds_linetype", "organization_id", "dataset_id", "line_item_type", "cost"),
+        Index("ix_billing_records_org_ds_resource", "organization_id", "dataset_id", "resource_id", "cost"),
+        Index("ix_billing_records_org_ds_account", "organization_id", "dataset_id", "account_id", "cost"),
+    )
+
+
+class DatasetServiceRollup(Base):
+    __tablename__ = "dataset_service_rollups"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), index=True, nullable=False)
+    dataset_id = Column(Integer, ForeignKey("datasets.id", ondelete="CASCADE"), index=True, nullable=False)
+    service = Column(String(128), index=True, nullable=False)
+    total_cost = Column(Float, nullable=False, default=0.0)
+    record_count = Column(Integer, nullable=False, default=0)
+    resource_count = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, default=utc_now)
+
+    dataset = relationship("DatasetRecord", back_populates="service_rollups")
+
+    __table_args__ = (
+        Index("ix_ds_svc_rollup_org_ds", "organization_id", "dataset_id"),
+        Index("ix_ds_svc_rollup_ds_svc", "dataset_id", "service"),
+    )
+
+
+class DatasetDailyRollup(Base):
+    __tablename__ = "dataset_daily_rollups"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), index=True, nullable=False)
+    dataset_id = Column(Integer, ForeignKey("datasets.id", ondelete="CASCADE"), index=True, nullable=False)
+    usage_date = Column(String(16), index=True, nullable=False)
+    gross_cost = Column(Float, nullable=False, default=0.0)
+    net_cost = Column(Float, nullable=False, default=0.0)
+    credits_cost = Column(Float, nullable=False, default=0.0)
+    refunds_cost = Column(Float, nullable=False, default=0.0)
+    taxes_cost = Column(Float, nullable=False, default=0.0)
+    record_count = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, default=utc_now)
+
+    dataset = relationship("DatasetRecord", back_populates="daily_rollups")
+
+    __table_args__ = (
+        Index("ix_ds_daily_rollup_org_ds", "organization_id", "dataset_id"),
+        Index("ix_ds_daily_rollup_ds_date", "dataset_id", "usage_date"),
     )
 
 

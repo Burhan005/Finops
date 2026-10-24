@@ -243,16 +243,13 @@ def generate_recommendations(cur_data: Dict[str, Any]) -> Dict[str, Any]:
     total_ebs_spend = sum(res['total_cost'] for res in ebs_resources)
     monthly_ebs_cost = round(total_ebs_spend * monthly_mult, 2)
 
-    # Detect unattached / available test & partition volumes (idle disks detached from instances)
-    # Generic FinOps Heuristic across ANY AWS Account / CUR dataset:
-    # 1. Volumes explicitly tagged with test/dev/swap/tmp/orphan or lacking instance attachment
-    # 2. Small detached utility disks (<= 5 GiB) that have baseline storage fees without IOPS/burst surcharges
+    # Detect genuinely unattached / orphaned volumes with explicit detached markers or tags
+    # Never flag normal unnamed active volumes as unattached false-positives
     unattached_vols = [
         res for res in ebs_resources 
-        if res.get('total_cost', 0) <= 0.25 and (
-            any(k in (res.get('name') or '').lower() for k in ['test', 'disk', 'swap', 'partition', 'tmp', 'unattached', 'backup', 'orphan'])
-            or not res.get('name') or res.get('name') == 'Untagged'
-        )
+        if any(k in (res.get('name') or '').lower() for k in ['unattached', 'detached', 'orphan', 'unused', 'abandoned'])
+        or 'available' in (res.get('state') or '').lower()
+        or 'unattached' in (res.get('status') or '').lower()
     ]
     if unattached_vols:
         unattached_cost = sum(v['total_cost'] for v in unattached_vols) * monthly_mult
@@ -262,7 +259,7 @@ def generate_recommendations(cur_data: Dict[str, Any]) -> Dict[str, Any]:
             'id': 'rec-ebs-unattached',
             'category': 'Storage Optimization',
             'title': 'Delete Orphaned / Unattached (Available) EBS Volumes',
-            'description': f'{len(unattached_vols)} EBS volumes are in "Available" (detached) state with zero EC2 instances mounted. These legacy disks (swap, tmp, test) have been idling since 2020-2022.',
+            'description': f'{len(unattached_vols)} EBS volumes have detached or orphaned status markers. Inactive detached disks continue to incur baseline storage fees until removed.',
             'severity': 'MEDIUM',
             'monthly_savings': monthly_saving,
             'annual_savings': round(monthly_saving * 12, 2),

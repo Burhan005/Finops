@@ -112,6 +112,9 @@ def ensure_schema_compatibility(target_engine):
     Safely adds missing Phase 1 columns to existing SQLite tables if not present.
     Executes in a safe inspection pass without resetting or vacuuming database.
     """
+    if target_engine.dialect.name != "sqlite":
+        return
+
     with target_engine.connect() as conn:
         def _get_cols(tbl):
             res = conn.exec_driver_sql(f"PRAGMA table_info({tbl})").fetchall()
@@ -158,7 +161,41 @@ def ensure_schema_compatibility(target_engine):
 
         conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_billing_records_line_item ON billing_records(line_item_id)")
         conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_datasets_org_period ON datasets(organization_id, billing_period_start, billing_period_end)")
-        conn.commit()
+        conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_billing_records_org_ds_resource ON billing_records(organization_id, dataset_id, resource_id, cost)")
+        conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_billing_records_org_ds_account ON billing_records(organization_id, dataset_id, account_id, cost)")
+        # 8. Create dataset_service_rollups and dataset_daily_rollups for instant O(1) Overview performance
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS dataset_service_rollups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    dataset_id INTEGER NOT NULL REFERENCES datasets(id) ON DELETE CASCADE,
+    service VARCHAR(128) NOT NULL,
+    total_cost FLOAT NOT NULL DEFAULT 0.0,
+    record_count INTEGER NOT NULL DEFAULT 0,
+    resource_count INTEGER NOT NULL DEFAULT 0,
+    created_at DATETIME
+)""")
+cursor.execute("CREATE INDEX IF NOT EXISTS ix_ds_svc_rollup_org_ds ON dataset_service_rollups(organization_id, dataset_id)")
+cursor.execute("CREATE INDEX IF NOT EXISTS ix_ds_svc_rollup_ds_svc ON dataset_service_rollups(dataset_id, service)")
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS dataset_daily_rollups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    dataset_id INTEGER NOT NULL REFERENCES datasets(id) ON DELETE CASCADE,
+    usage_date VARCHAR(16) NOT NULL,
+    gross_cost FLOAT NOT NULL DEFAULT 0.0,
+    net_cost FLOAT NOT NULL DEFAULT 0.0,
+    credits_cost FLOAT NOT NULL DEFAULT 0.0,
+    refunds_cost FLOAT NOT NULL DEFAULT 0.0,
+    taxes_cost FLOAT NOT NULL DEFAULT 0.0,
+    record_count INTEGER NOT NULL DEFAULT 0,
+    created_at DATETIME
+)""")
+cursor.execute("CREATE INDEX IF NOT EXISTS ix_ds_daily_rollup_org_ds ON dataset_daily_rollups(organization_id, dataset_id)")
+cursor.execute("CREATE INDEX IF NOT EXISTS ix_ds_daily_rollup_ds_date ON dataset_daily_rollups(dataset_id, usage_date)")
+
+conn.commit()
 
 # 5. Create export_tickets table if not exists
 cursor.execute("""

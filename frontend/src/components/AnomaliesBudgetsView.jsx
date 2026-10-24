@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { 
   AlertTriangle, CheckCircle, ShieldAlert, TrendingUp, DollarSign, 
-  Target, Calendar, Plus, Trash2, ArrowUpRight, Check, X, Clock, HelpCircle
+  Target, Calendar, Plus, Trash2, ArrowUpRight, Check, X, Clock, HelpCircle, Copy
 } from 'lucide-react';
 import { api } from '../services/api';
 
@@ -21,6 +22,18 @@ export default function AnomaliesBudgetsView({ overview }) {
   const [newBudgetThreshold, setNewBudgetThreshold] = useState(80);
 
   const [actionSuccess, setActionSuccess] = useState('');
+  const [copiedId, setCopiedId] = useState('');
+
+  const copyId = (id) => {
+    if (!id) return;
+    try {
+      navigator.clipboard?.writeText(id);
+      setCopiedId(id);
+      setTimeout(() => setCopiedId(''), 2000);
+    } catch (e) {
+      console.warn('Clipboard write failed:', e);
+    }
+  };
 
   const loadData = async () => {
     setLoading(true);
@@ -103,11 +116,20 @@ export default function AnomaliesBudgetsView({ overview }) {
   const openAnomalies = anomalies.filter(a => a.status === 'OPEN');
   const criticalCount = anomalies.filter(a => a.severity === 'CRITICAL' && a.status === 'OPEN').length;
 
+  useEffect(() => {
+    if (!showAddBudget) return;
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') setShowAddBudget(false);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showAddBudget]);
+
   return (
     <div className="space-y-8 animate-fade-in">
       
       {/* Header Banner */}
-      <div className="clay-card p-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border border-zorvex-forest/20">
+      <div className="clay-card p-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border border-zorvex-border dark:border-zorvex-dark-border">
         <div>
           <div className="flex items-center gap-2">
             <span className="p-1.5 rounded-lg bg-zorvex-forest-soft dark:bg-zorvex-forest-dark-soft text-zorvex-forest dark:text-zorvex-forest-highlight">
@@ -290,9 +312,21 @@ export default function AnomaliesBudgetsView({ overview }) {
                       <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px] text-zorvex-text-muted dark:text-zorvex-dark-text-muted">
                         <span className="font-bold text-zorvex-text dark:text-zorvex-dark-text">Top Drivers:</span>
                         {anom.evidence.top_drivers.map((d, i) => (
-                          <span key={i} className="px-2 py-0.5 rounded-md bg-zorvex-surface dark:bg-zorvex-dark-surface border border-zorvex-border dark:border-zorvex-dark-border font-mono text-[10px]">
-                            {d.resource_id} (+${d.day_spend_usd})
-                          </span>
+                          <button
+                            key={i}
+                            type="button"
+                            onClick={() => copyId(d.resource_id)}
+                            title={`Click to copy AWS Resource ID: ${d.resource_id}`}
+                            className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-zorvex-surface dark:bg-zorvex-dark-surface hover:bg-zorvex-secondary dark:hover:bg-zorvex-dark-secondary border border-zorvex-border dark:border-zorvex-dark-border font-mono text-[10px] text-zorvex-text dark:text-zorvex-dark-text transition-all cursor-pointer shadow-sm active:scale-95 group"
+                          >
+                            <span>{d.resource_id}</span>
+                            <span className="text-rose-500 font-bold">(+${d.day_spend_usd})</span>
+                            {copiedId === d.resource_id ? (
+                              <Check className="w-3 h-3 text-emerald-500 animate-in fade-in" />
+                            ) : (
+                              <Copy className="w-2.5 h-2.5 opacity-40 group-hover:opacity-100 transition-opacity" />
+                            )}
+                          </button>
                         ))}
                       </div>
                     )}
@@ -302,10 +336,10 @@ export default function AnomaliesBudgetsView({ overview }) {
                   <div className="flex items-center gap-6">
                     <div className="text-right">
                       <div className="text-sm font-black font-mono text-rose-600 dark:text-rose-400">
-                        +${anom.delta_usd.toFixed(2)} (+{anom.delta_pct}%)
+                        +${(Number(anom.delta_usd) || 0).toFixed(2)} (+{Number(anom.delta_pct) || 0}%)
                       </div>
                       <div className="text-[10px] text-zorvex-text-muted dark:text-zorvex-dark-text-muted font-mono">
-                        Base: ${anom.baseline_spend_usd.toFixed(2)} ➔ Actual: ${anom.actual_spend_usd.toFixed(2)}
+                        Base: ${(Number(anom.baseline_spend_usd) || 0).toFixed(2)} ➔ Actual: ${(Number(anom.actual_spend_usd) || 0).toFixed(2)}
                       </div>
                     </div>
 
@@ -435,10 +469,18 @@ export default function AnomaliesBudgetsView({ overview }) {
         )}
       </div>
 
-      {/* Add Budget Modal */}
-      {showAddBudget && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="clay-card max-w-md w-full p-6 space-y-4 bg-zorvex-surface dark:bg-zorvex-dark-surface border border-zorvex-border dark:border-zorvex-dark-border shadow-2xl animate-fade-in">
+      {/* Add Budget Modal Mounted via Portal for Precise Viewport Centering */}
+      {showAddBudget && typeof document !== 'undefined' && createPortal(
+        <div 
+          className="fixed inset-0 z-[9999] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowAddBudget(false);
+          }}
+        >
+          <div 
+            className="clay-card max-w-md w-full p-6 my-auto space-y-4 bg-zorvex-surface dark:bg-zorvex-dark-surface border border-zorvex-border dark:border-zorvex-dark-border shadow-2xl animate-fade-in relative"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="flex items-center justify-between pb-3 border-b border-zorvex-border dark:border-zorvex-dark-border">
               <div className="flex items-center gap-2">
                 <Target className="w-5 h-5 text-zorvex-forest dark:text-zorvex-forest-highlight" />
@@ -516,7 +558,8 @@ export default function AnomaliesBudgetsView({ overview }) {
               </div>
             </form>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
     </div>

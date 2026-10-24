@@ -34,12 +34,7 @@ export default function ForgotPasswordView({ darkMode, onToggleDarkMode }) {
 
     try {
       const res = await api.forgotPassword(email);
-      setSuccess(res.message || 'Password reset instructions generated.');
-      if (res.reset_token) {
-        setTimeout(() => {
-          navigate(`/reset-password?email=${encodeURIComponent(email)}&token=${encodeURIComponent(res.reset_token)}`);
-        }, 1500);
-      }
+      setSuccess(res.message || 'Password recovery instructions have been dispatched securely.');
     } catch (err) {
       setError(err.message || 'Failed to initiate password reset.');
     } finally {
@@ -95,9 +90,20 @@ export default function ForgotPasswordView({ darkMode, onToggleDarkMode }) {
           )}
 
           {success && (
-            <div className="mb-5 p-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-xs text-emerald-700 dark:text-emerald-400 font-bold flex items-center gap-2">
-              <CheckCircle className="w-4 h-4 flex-shrink-0" />
-              <span>{success}</span>
+            <div className="mb-5 p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-xs text-emerald-700 dark:text-emerald-400 font-bold space-y-2">
+              <div className="flex items-center gap-2">
+                <CheckCircle className="w-4 h-4 flex-shrink-0" />
+                <span>{success}</span>
+              </div>
+              <div className="pt-1">
+                <Link
+                  to={`/reset-password?email=${encodeURIComponent(email)}`}
+                  className="inline-flex items-center gap-1.5 text-zorvex-forest dark:text-zorvex-forest-highlight hover:underline font-extrabold text-[11px]"
+                >
+                  <span>Already have your recovery token? Enter it here</span>
+                  <ArrowRight className="w-3 h-3" />
+                </Link>
+              </div>
             </div>
           )}
 

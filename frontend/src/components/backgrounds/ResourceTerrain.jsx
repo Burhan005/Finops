@@ -73,23 +73,23 @@ export default function ResourceTerrain({
     const getColors = () => {
       if (darkMode) {
         return {
-          bg: '#19211B',
-          strataBase: [37, 46, 38], // #252E26
-          strataValley: [29, 38, 31], // #1D261F
-          edgeHighlight: 'rgba(175, 198, 155, 0.75)',
-          edgeSubtle: 'rgba(175, 198, 155, 0.25)',
+          bg: '#0E0F12',
+          strataBase: [22, 23, 27], // #16171B
+          strataValley: [18, 19, 22], // #121316
+          edgeHighlight: 'rgba(236, 114, 17, 0.45)',
+          edgeSubtle: 'rgba(236, 114, 17, 0.15)',
           ambientShadow: 'rgba(0, 0, 0, 0.45)',
-          crestDot: 'rgba(240, 238, 228, 0.9)'
+          crestDot: 'rgba(255, 153, 0, 0.9)'
         };
       } else {
         return {
-          bg: '#F3F0E7',
-          strataBase: [255, 252, 245], // #FFFCF5
-          strataValley: [230, 233, 221], // #E6E9DD
-          edgeHighlight: 'rgba(73, 102, 77, 0.65)',
-          edgeSubtle: 'rgba(73, 102, 77, 0.2)',
-          ambientShadow: 'rgba(41, 46, 40, 0.1)',
-          crestDot: 'rgba(73, 102, 77, 0.85)'
+          bg: '#F4F6F9',
+          strataBase: [255, 255, 255], // #FFFFFF
+          strataValley: [238, 242, 246], // #EEF2F6
+          edgeHighlight: 'rgba(236, 114, 17, 0.35)',
+          edgeSubtle: 'rgba(236, 114, 17, 0.1)',
+          ambientShadow: 'rgba(15, 23, 42, 0.05)',
+          crestDot: 'rgba(236, 114, 17, 0.85)'
         };
       }
     };

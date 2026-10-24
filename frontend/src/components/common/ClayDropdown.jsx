@@ -1,5 +1,19 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { ChevronDown, Check, Search, X } from 'lucide-react';
+import { ChevronDown, Check, Search, X, Trash2 } from 'lucide-react';
+
+function renderDropdownIcon(iconItem) {
+  if (!iconItem) return null;
+  if (React.isValidElement(iconItem)) return iconItem;
+  if (
+    typeof iconItem === 'function' ||
+    (typeof iconItem === 'object' && iconItem !== null && (iconItem.$$typeof || iconItem.render))
+  ) {
+    const Component = iconItem;
+    return <Component className="w-3.5 h-3.5 text-zorvex-forest dark:text-zorvex-dark-forest flex-shrink-0" />;
+  }
+  return null;
+}
+
 
 export default function ClayDropdown({
   options = [],
@@ -28,7 +42,10 @@ export default function ClayDropdown({
       value: String(opt.value),
       label: String(opt.label || opt.value),
       subtext: opt.subtext || '',
-      icon: opt.icon || null
+      icon: opt.icon || null,
+      id: opt.id,
+      type: opt.type,
+      onDelete: opt.onDelete || null
     };
   });
 
@@ -97,7 +114,7 @@ export default function ClayDropdown({
   return (
     <div
       ref={dropdownRef}
-      className={`relative inline-block text-left ${className}`}
+      className={`relative inline-block text-left ${className} ${isOpen ? 'z-50' : ''}`}
       onKeyDown={handleKeyDown}
     >
       {label && (
@@ -118,11 +135,7 @@ export default function ClayDropdown({
         aria-expanded={isOpen}
       >
         <div className="flex items-center gap-2 truncate">
-          {LeadingIcon ? (
-            <LeadingIcon className="w-3.5 h-3.5 text-zorvex-forest dark:text-zorvex-dark-forest flex-shrink-0" />
-          ) : selectedOption?.icon ? (
-            <selectedOption.icon className="w-3.5 h-3.5 text-zorvex-forest dark:text-zorvex-dark-forest flex-shrink-0" />
-          ) : null}
+          {renderDropdownIcon(LeadingIcon || selectedOption?.icon)}
           <span className="truncate">
             {selectedOption ? selectedOption.label : placeholder}
           </span>
@@ -138,7 +151,7 @@ export default function ClayDropdown({
       {/* Floating Dropdown Menu */}
       {isOpen && (
         <div
-          className={`absolute left-0 mt-2 ${width} min-w-[280px] rounded-2xl surface-floating z-50 p-2 animate-fade-in border border-zorvex-border dark:border-zorvex-dark-border`}
+          className={`absolute left-0 mt-2 ${width} min-w-[200px] max-w-[calc(100vw-32px)] rounded-2xl surface-floating z-50 p-2 animate-fade-in border border-zorvex-border dark:border-zorvex-dark-border shadow-surface-floating`}
           role="listbox"
         >
           {searchable && (
@@ -194,7 +207,7 @@ export default function ClayDropdown({
                   >
                     <div className="truncate mr-2">
                       <div className="flex items-center gap-2">
-                        {opt.icon && <opt.icon className="w-3.5 h-3.5 text-zorvex-forest dark:text-zorvex-dark-forest" />}
+                        {renderDropdownIcon(opt.icon)}
                         <span className="truncate">{opt.label}</span>
                       </div>
                       {opt.subtext && (
@@ -204,9 +217,25 @@ export default function ClayDropdown({
                       )}
                     </div>
 
-                    {isSelected && (
-                      <Check className="w-3.5 h-3.5 text-zorvex-forest dark:text-zorvex-dark-forest flex-shrink-0" />
-                    )}
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                      {opt.onDelete && (
+                        <span
+                          role="button"
+                          tabIndex={0}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            opt.onDelete(opt);
+                          }}
+                          className="p-1 rounded-lg text-zorvex-text-secondary hover:text-red-500 hover:bg-red-500/10 transition-colors cursor-pointer"
+                          title="Delete Dataset"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </span>
+                      )}
+                      {isSelected && (
+                        <Check className="w-3.5 h-3.5 text-zorvex-forest dark:text-zorvex-dark-forest" />
+                      )}
+                    </div>
                   </button>
                 );
               })

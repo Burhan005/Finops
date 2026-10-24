@@ -13,7 +13,9 @@ import {
   ShieldCheck,
   Clock,
   Layers,
-  Compass
+  Compass,
+  Copy,
+  Check
 } from 'lucide-react';
 
 const SavingsPlanSimulator = lazy(() => import('./SavingsPlanSimulator'));
@@ -21,6 +23,18 @@ const SavingsPlanSimulator = lazy(() => import('./SavingsPlanSimulator'));
 export default function RecommendationsView({ recommendations }) {
   const [expandedId, setExpandedId] = useState('');
   const [activeTab, setActiveTab] = useState('waste'); // 'waste' | 'simulator'
+  const [copiedId, setCopiedId] = useState('');
+
+  const copyId = (id) => {
+    if (!id) return;
+    try {
+      navigator.clipboard?.writeText(id);
+      setCopiedId(id);
+      setTimeout(() => setCopiedId(''), 2000);
+    } catch (e) {
+      console.warn('Clipboard write failed:', e);
+    }
+  };
 
   if (!recommendations) return null;
 
@@ -153,7 +167,7 @@ export default function RecommendationsView({ recommendations }) {
                     <div className="text-left lg:text-right">
                       <span className="text-[10px] font-bold uppercase text-zorvex-text-muted dark:text-zorvex-dark-text-muted">Potential Savings</span>
                       <div className="text-xl font-extrabold text-zorvex-forest dark:text-zorvex-forest-highlight font-mono">
-                        ${rec.monthly_savings.toFixed(2)}
+                        ${(Number(rec.monthly_savings) || 0).toFixed(2)}
                         <span className="text-xs font-normal text-zorvex-text-muted dark:text-zorvex-dark-text-muted ml-0.5">/mo</span>
                       </div>
                     </div>
@@ -171,7 +185,7 @@ export default function RecommendationsView({ recommendations }) {
                       {/* ROI Annual Savings Badge */}
                       <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-[11px] font-black text-emerald-600 dark:text-emerald-400">
                         <TrendingUp className="w-3.5 h-3.5" />
-                        <span>Annual ROI: ${(rec.annual_savings ?? (rec.monthly_savings * 12)).toFixed(2)}/yr</span>
+                        <span>Annual ROI: ${(Number(rec.annual_savings ?? (rec.monthly_savings * 12)) || 0).toFixed(2)}/yr</span>
                       </span>
 
                       {/* Risk Level Badge */}
@@ -226,10 +240,22 @@ export default function RecommendationsView({ recommendations }) {
                     <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
                       {rec.resources.map((item, idx) => (
                         <div key={idx} className="p-2.5 rounded-xl bg-zorvex-secondary/80 dark:bg-zorvex-dark-secondary/80 border border-zorvex-border dark:border-zorvex-dark-border text-xs">
-                          <div className="font-mono font-bold text-zorvex-text dark:text-zorvex-dark-text truncate">
-                            {item.resource_id}
-                          </div>
-                          <div className="flex items-center justify-between text-[11px] text-zorvex-text-muted dark:text-zorvex-dark-text-muted mt-1">
+                          <button
+                            type="button"
+                            onClick={() => copyId(item.resource_id)}
+                            title={`Click to copy AWS Resource ID: ${item.resource_id}`}
+                            className="w-full flex items-center justify-between font-mono font-bold text-zorvex-text dark:text-zorvex-dark-text hover:text-zorvex-forest dark:hover:text-zorvex-forest-highlight transition-colors cursor-pointer text-left group"
+                          >
+                            <span className="truncate">{item.resource_id}</span>
+                            {copiedId === item.resource_id ? (
+                              <span className="flex items-center gap-1 text-[10px] text-emerald-500 font-sans font-bold flex-shrink-0">
+                                <Check className="w-3 h-3" /> Copied
+                              </span>
+                            ) : (
+                              <Copy className="w-3 h-3 opacity-40 group-hover:opacity-100 transition-opacity flex-shrink-0 ml-1" />
+                            )}
+                          </button>
+                          <div className="flex items-center justify-between text-[11px] text-zorvex-text-muted dark:text-zorvex-dark-text-muted mt-1.5 pt-1.5 border-t border-zorvex-border/40 dark:border-zorvex-dark-border/40">
                             <span>{item.name || 'unnamed'}</span>
                             <span className="font-mono font-bold text-zorvex-spike">${(item.cost || 0).toFixed(2)}</span>
                           </div>

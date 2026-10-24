@@ -12,6 +12,20 @@ class TestPhase6ServiceExplorerAndDashboard:
     - Trends service_series verification
     """
 
+    @classmethod
+    def setup_class(cls):
+        import os
+        from app.core.config import SAMPLES_DIR
+        from app.core.state import CURRENT_DATASET
+        from app.parser import parse_cur_file
+
+        sample_file = os.path.join(SAMPLES_DIR, "CUR-Report-Daily-00001.csv.gz")
+        if os.path.exists(sample_file):
+            parsed = parse_cur_file(sample_file)
+            CURRENT_DATASET['filename'] = "CUR-Report-Daily-00001.csv.gz"
+            CURRENT_DATASET['filepath'] = sample_file
+            CURRENT_DATASET['data'] = parsed
+
     @pytest.fixture(autouse=True)
     def setup_client(self):
         self.client = TestClient(app)
@@ -147,3 +161,119 @@ class TestPhase6ServiceExplorerAndDashboard:
         assert cn['compute_nodes']['instance_type'] == 'ra3.xlplus'
         assert cn['storage']['unit'] == 'GB-Mo'
 
+
+
+    def test_cluster_telemetry_live_cur_data(self):
+        """Verifies 100% dynamic, non-hardcoded EKS/EC2 cluster lifecycle telemetry from actual CUR records."""
+        from app.database import SessionLocal
+        from app.models import User, UserSession, DatasetRecord, BillingRecord
+        import secrets
+        from datetime import datetime, timezone, timedelta
+
+        db = SessionLocal()
+        user = db.query(User).filter(User.email == 'cloudops@finopsclay.io').first()
+        if not user:
+            from app.models import Organization
+            org = Organization(name="Test Org")
+            db.add(org)
+            db.commit()
+            user = User(email="cloudops@finopsclay.io", hashed_password="pw", organization_id=org.id)
+            db.add(user)
+            db.commit()
+
+        tok = 'test_token_' + secrets.token_hex(16)
+        session = UserSession(
+            token=tok,
+            user_id=user.id,
+            organization_id=user.organization_id,
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=1)
+        )
+        db.add(session)
+
+        # Seed realistic CUR records into test DB
+        ds = DatasetRecord(organization_id=user.organization_id, filename="test_cur.csv.gz", is_active=0)
+        db.add(ds)
+        db.commit()
+
+        rec1 = BillingRecord(
+            organization_id=user.organization_id,
+            dataset_id=ds.id,
+            service='Amazon EC2',
+            resource_id='i-0123456789abcdef0',
+            resource_name='Prod-Master-Node',
+            usage_date='2026-10-15',
+            usage_month='2026-10',
+            usage_hour='00:00',
+            account_id='123456789012',
+            region='ap-south-1',
+            line_item_type='Usage',
+            cost=1.5,
+            unblended_cost=1.5
+        )
+        rec2 = BillingRecord(
+            organization_id=user.organization_id,
+            dataset_id=ds.id,
+            service='Amazon EC2',
+            resource_id='i-0123456789abcdef1',
+            resource_name='Worker-Node-Overtime',
+            usage_date='2026-10-15',
+            usage_month='2026-10',
+            usage_hour='19:00',
+            account_id='123456789012',
+            region='ap-south-1',
+            line_item_type='Usage',
+            cost=2.0,
+            unblended_cost=2.0
+        )
+        db.add_all([rec1, rec2])
+        db.commit()
+
+        try:
+            res = self.client.get(
+                '/api/analytics/clusters/telemetry',
+                params={'service': 'Amazon EC2', 'target_date': '2026-10-15', 'cutoff_hour': '18:00', 'dataset_id': ds.id},
+                headers={'Authorization': f'Bearer {tok}'}
+            )
+            assert res.status_code == 200
+            data = res.json()
+
+            # Schema & contract validation
+            assert 'kpis' in data
+            assert 'hourly_timeline' in data
+            assert 'nodes' in data
+            assert 'orchestrator' in data
+            assert 'available_dates' in data
+
+            # Verify actual dynamic calculation
+            kpis = data['kpis']
+            assert kpis['total_cluster_nodes'] == 2
+            assert kpis['nodes_active_today'] == 2
+            assert kpis['peak_hourly_nodes'] == 1
+            assert kpis['spend_today'] == 3.5
+            assert kpis['overtime_spend_today'] == 2.0
+            assert kpis['overtime_hours_detected'] == 1
+            assert kpis['overtime_leakage_percentage'] == 57.1
+
+            # 24-hour timeline verification
+            assert len(data['hourly_timeline']) == 24
+            assert data['hourly_timeline'][0]['node_count'] == 1
+            assert data['hourly_timeline'][0]['cost'] == 1.5
+            assert data['hourly_timeline'][0]['is_overtime'] is False
+
+            assert data['hourly_timeline'][19]['node_count'] == 1
+            assert data['hourly_timeline'][19]['cost'] == 2.0
+            assert data['hourly_timeline'][19]['is_overtime'] is True
+
+            # Nodes verification
+            assert len(data['nodes']) == 2
+            top_node = data['nodes'][0]
+            assert top_node['resource_id'] == 'i-0123456789abcdef1'
+            assert top_node['spend_today'] == 2.0
+            assert top_node['overtime_spend_today'] == 2.0
+        finally:
+            db.delete(rec1)
+            db.delete(rec2)
+            db.delete(ds)
+            db.delete(session)
+            db.commit()
+            db.close()

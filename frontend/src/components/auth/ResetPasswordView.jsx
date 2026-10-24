@@ -9,7 +9,9 @@ import {
   CheckCircle, 
   Loader2, 
   ShieldCheck, 
-  KeyRound
+  KeyRound,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import { api } from '../../services/api';
 import ZorvexLogo from '../common/ZorvexLogo';
@@ -22,6 +24,8 @@ export default function ResetPasswordView({ darkMode, onToggleDarkMode }) {
   const [token] = useState(searchParams.get('token') || '');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [loading, setLoading] = useState(false);
@@ -143,17 +147,25 @@ export default function ResetPasswordView({ darkMode, onToggleDarkMode }) {
               </label>
               <div className="relative">
                 <Lock className="w-4 h-4 text-zorvex-text-muted dark:text-zorvex-forest-highlight absolute left-3.5 top-1/2 -translate-y-1/2" />
-                <input
+<input
                   id="reset-password"
                   name="password"
-                  type="password"
+                  type={showPassword ? "text" : "password"}
                   required
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="At least 6 characters"
                   aria-label="New Password"
-                  className="w-full pl-10 pr-4 py-2.5 clay-input text-xs font-semibold text-zorvex-text dark:text-zorvex-dark-text"
+                  className="w-full pl-10 pr-11 py-2.5 clay-input text-xs font-semibold text-zorvex-text dark:text-zorvex-dark-text"
                 />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-zorvex-text-secondary hover:text-zorvex-text dark:text-zorvex-dark-text-secondary dark:hover:text-white transition-colors cursor-pointer"
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                >
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
               </div>
             </div>
 
@@ -163,17 +175,25 @@ export default function ResetPasswordView({ darkMode, onToggleDarkMode }) {
               </label>
               <div className="relative">
                 <Lock className="w-4 h-4 text-zorvex-text-muted dark:text-zorvex-forest-highlight absolute left-3.5 top-1/2 -translate-y-1/2" />
-                <input
+<input
                   id="reset-confirm-password"
                   name="confirmPassword"
-                  type="password"
+                  type={showConfirmPassword ? "text" : "password"}
                   required
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
                   placeholder="Re-enter new password"
                   aria-label="Confirm Password"
-                  className="w-full pl-10 pr-4 py-2.5 clay-input text-xs font-semibold text-zorvex-text dark:text-zorvex-dark-text"
+                  className="w-full pl-10 pr-11 py-2.5 clay-input text-xs font-semibold text-zorvex-text dark:text-zorvex-dark-text"
                 />
+                <button
+                  type="button"
+                  onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-zorvex-text-secondary hover:text-zorvex-text dark:text-zorvex-dark-text-secondary dark:hover:text-white transition-colors cursor-pointer"
+                  aria-label={showConfirmPassword ? "Hide password" : "Show password"}
+                >
+                  {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
               </div>
             </div>
 

@@ -3,11 +3,31 @@ Authentication Router for ZORVEX FinOps Platform.
 Provides registration, login, logout, profile discovery, and cryptographic password reset flows.
 """
 
+import time
+import secrets
+import logging
+from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Tuple
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger("zorvex.auth")
+
+from ....core.rate_limit import enforce_rate_limit
+from ....core.captcha import (
+    get_client_identifier,
+    record_failed_attempt,
+    is_captcha_required,
+    reset_failed_attempts,
+    generate_local_challenge,
+    verify_local_solution,
+    verify_turnstile_token
+)
+
+def _enforce_rate_limit(request: Request, action: str, max_attempts: int, window_sec: int):
+    enforce_rate_limit(request, f"auth_{action}", max_requests=max_attempts, window_seconds=window_sec)
 
 from ....core.config import SESSION_TTL_HOURS
 from ....database import get_db
@@ -26,13 +46,14 @@ from ....schemas.auth import (
     ForgotPasswordRequest,
     ResetPasswordRequest
 )
-from ...deps import get_current_user_and_org
+from ...deps import get_current_user_and_org, require_auth
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 @router.post("/register")
-def register_user(req: RegisterRequest, db: Session = Depends(get_db)):
+def register_user(req: RegisterRequest, request: Request, db: Session = Depends(get_db)):
+    _enforce_rate_limit(request, "register", max_attempts=5, window_sec=60)
     clean_email = req.email.strip().lower()
     if not clean_email or not req.password:
         raise HTTPException(status_code=400, detail="Email and password are required")
@@ -94,19 +115,58 @@ def register_user(req: RegisterRequest, db: Session = Depends(get_db)):
     }
 
 
+@router.get("/captcha")
+def get_captcha_challenge(request: Request):
+    """Provides a fresh stateless security challenge with optional Turnstile key."""
+    import os
+    challenge = generate_local_challenge()
+    turnstile_key = os.getenv("CLOUDFLARE_TURNSTILE_SITE_KEY", "").strip()
+    challenge["turnstile_site_key"] = turnstile_key or None
+    return challenge
+
+
 @router.post("/login")
-def login_user(req: LoginRequest, db: Session = Depends(get_db)):
+def login_user(req: LoginRequest, request: Request, db: Session = Depends(get_db)):
+    _enforce_rate_limit(request, "login", max_attempts=10, window_sec=60)
     clean_email = req.email.strip().lower()
     if not clean_email or not req.password:
         raise HTTPException(status_code=400, detail="Email and password are required")
 
+    client_id = get_client_identifier(request)
+    captcha_needed = is_captcha_required(client_id)
+
+    if captcha_needed:
+        verified = False
+        if req.turnstile_token:
+            verified = verify_turnstile_token(req.turnstile_token, client_id)
+        elif req.captcha_id and req.captcha_solution:
+            verified = verify_local_solution(req.captcha_id, req.captcha_solution)
+
+        if not verified:
+            raise HTTPException(
+                status_code=400,
+                detail="Security verification required. Please solve the challenge to sign in.",
+                headers={"X-Captcha-Required": "true"}
+            )
+
     user = db.query(User).filter(User.email == clean_email).first()
     if not user:
-        raise HTTPException(status_code=401, detail="Invalid email or password")
+        # Constant-Time Protection: Execute dummy Bcrypt verification to prevent timing-based user enumeration
+        verify_and_upgrade_password(req.password, "$2b$12$K1Z3sX2pU3b4c5d6e7f8g9h0i1j2k3l4m5n6o7p8q9r0s1t2u3v4w")
+        cnt = record_failed_attempt(client_id)
+        hdrs = {"X-Captcha-Required": "true"} if cnt >= 2 else {}
+        msg = "Invalid email or password. Security verification now required." if cnt >= 2 else "Invalid email or password"
+        raise HTTPException(status_code=401, detail=msg, headers=hdrs)
 
     is_valid, needs_upgrade = verify_and_upgrade_password(req.password, user.password_hash)
     if not is_valid:
-        raise HTTPException(status_code=401, detail="Invalid email or password")
+        cnt = record_failed_attempt(client_id)
+        hdrs = {"X-Captcha-Required": "true"} if cnt >= 2 else {}
+        msg = "Invalid email or password. Security verification now required." if cnt >= 2 else "Invalid email or password"
+        raise HTTPException(status_code=401, detail=msg, headers=hdrs)
+
+    # Success: reset failed attempt counter
+    reset_failed_attempts(client_id)
 
     # Seamless zero-downtime upgrade from legacy SHA-256 to Bcrypt
     if needs_upgrade:
@@ -189,11 +249,94 @@ def logout_user(
     if auth_token:
         db.query(UserSession).filter(UserSession.token == auth_token).delete()
         db.commit()
+        # Instant Redis Token Blacklist Revocation (Sub-millisecond token neutralization)
+        try:
+            from ....cache import global_cache
+            if global_cache.redis_available and global_cache.redis_client:
+                global_cache.redis_client.setex(f"zorvex:blacklist:token:{auth_token}", 86400, "revoked")
+        except Exception as e:
+            logger.debug("Redis token blacklist notice: %s", e)
     return {"success": True}
 
 
+@router.get("/dpdpa-notice")
+def get_dpdpa_compliance_notice():
+    """
+    Returns official Statutory Privacy & Data Protection Notice under
+    Digital Personal Data Protection Act, 2023 (DPDPA, India).
+    """
+    return {
+        "framework": "Digital Personal Data Protection Act, 2023 (DPDPA)",
+        "jurisdiction": "Republic of India",
+        "data_fiduciary": "ZORVEX FinOps Platform / Cloud FinOps Engineering",
+        "purposes_of_processing": [
+            "Ingestion and automated algorithmic variance analysis of AWS Cost and Usage Reports (CUR)",
+            "Cloud infrastructure waste detection and rightsizing recommendations",
+            "Multi-tenant cost allocation and budget guard telemetry",
+            "Enterprise authentication and cryptographic session lifecycle management"
+        ],
+        "categories_of_personal_data": [
+            "Corporate workspace business email addresses",
+            "Data principal full name and authorized organization name",
+            "Cryptographically hashed authentication credentials (one-way bcrypt salted)",
+            "Audit trail metadata (IP address, action type, timestamp)"
+        ],
+        "data_principal_rights": {
+            "section_11": "Right to Access Information about personal data",
+            "section_12": "Right to Correction and Erasure of personal data",
+            "section_13": "Right of Grievance Redressal"
+        },
+        "grievance_officer": {
+            "title": "Data Protection Officer (DPO)",
+            "email": "dpo@zorvex.io",
+            "response_sla": "72 Hours"
+        },
+        "data_retention_policy": "Session tokens expire within 8 hours. Telemetry audit trails retained according to organization compliance mandate. Users may trigger instant account erasure under Section 12."
+    }
+
+
+@router.post("/dpdpa/erasure")
+def request_dpdpa_data_erasure(
+    auth: Tuple[User, Organization] = Depends(require_auth),
+    db: Session = Depends(get_db)
+):
+    """
+    Fulfills statutory Right to Erasure / Right to be Forgotten under Section 12 of DPDPA 2023.
+    Immediately purges user sessions, reset tokens, and anonymizes user identity.
+    """
+    user, org = auth
+    user_id = user.id
+    email_masked = f"{user.email[:2]}***@{user.email.split('@')[-1]}"
+
+    # Invalidate all active sessions
+    db.query(UserSession).filter(UserSession.user_id == user_id).delete()
+    # Invalidate reset tokens
+    db.query(PasswordResetToken).filter(PasswordResetToken.user_id == user_id).delete()
+
+    # Record compliant audit event
+    db.add(AuditEvent(
+        organization_id=org.id,
+        user_id=None,
+        action="DPDPA_ERASURE_FULFILLED",
+        details=f"Statutory DPDPA 2023 Section 12 erasure executed for user ID {user_id} ({email_masked})."
+    ))
+
+    # Anonymize user profile
+    user.name = "Erased User (DPDPA)"
+    user.email = f"erased_{user_id}_{secrets.token_hex(4)}@privacy.internal"
+    user.password_hash = "$2b$12$erasedAccountDisabledKeyHashPaddingString999999999999"
+    db.commit()
+
+    return {
+        "success": True,
+        "status": "ERASURE_FULFILLED",
+        "message": "DPDPA Section 12 data erasure fulfilled. All active sessions, reset tokens, and personal credentials have been permanently scrubbed."
+    }
+
+
 @router.post("/forgot-password")
-def forgot_password(req: ForgotPasswordRequest, db: Session = Depends(get_db)):
+def forgot_password(req: ForgotPasswordRequest, request: Request, db: Session = Depends(get_db)):
+    _enforce_rate_limit(request, "forgot_password", max_attempts=3, window_sec=300)
     clean_email = req.email.strip().lower()
     if not clean_email:
         raise HTTPException(status_code=400, detail="Email is required")
@@ -226,17 +369,19 @@ def forgot_password(req: ForgotPasswordRequest, db: Session = Depends(get_db)):
         ))
         db.commit()
 
-    resp = {
+        # In non-SMTP development environments, log strictly to secure server-side journal
+        # NEVER return raw reset token in client HTTP payload (eliminates Inspect Network account takeover vulnerability)
+        logger.info("[SECURE DISPATCH] Single-use password reset token for %s: %s (expires in 15 mins)", clean_email, raw_token)
+
+    return {
         "success": True,
-        "message": f"If {clean_email} is registered with a workspace, password recovery instructions and a secure reset token have been generated."
+        "message": f"If {clean_email} is registered with an authorized workspace, password recovery instructions and a secure reset token have been dispatched."
     }
-    if raw_token:
-        resp["reset_token"] = raw_token
-    return resp
 
 
 @router.post("/reset-password")
-def reset_password(req: ResetPasswordRequest, db: Session = Depends(get_db)):
+def reset_password(req: ResetPasswordRequest, request: Request, db: Session = Depends(get_db)):
+    _enforce_rate_limit(request, "reset_password", max_attempts=5, window_sec=300)
     clean_email = req.email.strip().lower()
     if not clean_email or not req.password:
         raise HTTPException(status_code=400, detail="Email and new password are required")

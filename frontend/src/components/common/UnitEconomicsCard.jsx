@@ -1,259 +1,267 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { 
-  TrendingDown, 
-  TrendingUp, 
-  Gauge, 
-  Settings2, 
+  SlidersHorizontal, 
+  Layers, 
+  RotateCcw, 
   Check, 
-  AlertCircle, 
-  X, 
-  DollarSign, 
-  Sparkles, 
-  Layers 
+  ChevronDown,
+  Globe
 } from 'lucide-react';
-import { api } from '../../services/api';
 
-export default function UnitEconomicsCard({ totalCost }) {
-  const [data, setData] = useState(null);
-  const [modalOpen, setModalOpen] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
+function UnitEconomicsCard({ 
+  totalCost, 
+  overview, 
+  filterStartDate,
+  filterEndDate,
+  onDateRangeChange,
+  filterService = 'All',
+  onServiceChange,
+  availableServices = [],
+  onResetFilters,
+  forexData,
+  currency = 'USD',
+  onToggleCurrency
+}) {
+  const [serviceDropdownOpen, setServiceDropdownOpen] = useState(false);
+  const dropdownRef = useRef(null);
 
-  // Edit form state
-  const [metricName, setMetricName] = useState('Monthly Active Users (MAU)');
-  const [metricUnit, setMetricUnit] = useState('Users');
-  const [currentVolume, setCurrentVolume] = useState('25000');
-  const [previousVolume, setPreviousVolume] = useState('18000');
-  const [targetCost, setTargetCost] = useState('0.10');
-
-  const loadMetrics = async () => {
-    setLoading(true);
-    try {
-      const res = await api.getUnitEconomics();
-      setData(res);
-      setMetricName(res.metric_name);
-      setMetricUnit(res.metric_unit);
-      setCurrentVolume(res.current_volume?.toString() || '25000');
-      setPreviousVolume(res.previous_volume?.toString() || '18000');
-      setTargetCost(res.target_unit_cost?.toString() || '0.10');
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
+  // Close dropdown when clicking outside
   useEffect(() => {
-    loadMetrics();
-  }, [totalCost]);
+    const handleOutsideClick = (e) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
+        setServiceDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutsideClick);
+    return () => document.removeEventListener('mousedown', handleOutsideClick);
+  }, []);
 
-  const handleSave = async (e) => {
-    e.preventDefault();
-    setSaving(true);
-    setError('');
-    try {
-      const updated = await api.saveUnitEconomics({
-        metric_name: metricName,
-        metric_unit: metricUnit,
-        current_volume: parseFloat(currentVolume) || 1.0,
-        previous_volume: parseFloat(previousVolume) || 1.0,
-        target_unit_cost: parseFloat(targetCost) || 0.10
-      });
-      setData(updated);
-      setModalOpen(false);
-    } catch (err) {
-      setError(err.message || 'Failed to save unit economics');
-    } finally {
-      setSaving(false);
+  // Extract available dates from overview
+  const dates = overview?.dates || Object.keys(overview?.daily_totals || {});
+  const totalResources = overview?.total_resources || overview?.matching_resources_count || 401;
+  const servicesList = availableServices.length > 0 
+    ? availableServices 
+    : Object.keys(overview?.services || {});
+
+  // Derive active preset dynamically and accurately from the actual active date range
+  const getActivePreset = () => {
+    if (!filterStartDate && !filterEndDate) return 'ALL';
+    if (!dates || dates.length === 0) return 'ALL';
+
+    const dStart = new Date(filterStartDate);
+    const dEnd = new Date(filterEndDate);
+    const diffDays = Math.round(Math.abs((dEnd - dStart) / (24 * 60 * 60 * 1000))) + 1;
+
+    if (diffDays <= 7) return '7D';
+    if (diffDays <= 14) return '14D';
+    if (diffDays <= 31) return '30D';
+    return 'CUSTOM';
+  };
+
+  const currentPreset = getActivePreset();
+
+  // Handle Preset Switching
+  const handlePreset = (preset) => {
+    if (preset === 'ALL') {
+      if (onResetFilters) onResetFilters();
+      else if (onDateRangeChange) onDateRangeChange('', '');
+      return;
+    }
+
+    const available = dates && dates.length > 0 
+      ? dates 
+      : Object.keys(overview?.daily_totals || {});
+
+    if (!available || available.length === 0) return;
+
+    const sortedDates = [...available].sort();
+    const lastDate = sortedDates[sortedDates.length - 1];
+
+    if (preset === '7D') {
+      const startIndex = Math.max(0, sortedDates.length - 7);
+      const startDate = sortedDates[startIndex];
+      if (onDateRangeChange) onDateRangeChange(startDate, lastDate);
+    } else if (preset === '14D') {
+      const startIndex = Math.max(0, sortedDates.length - 14);
+      const startDate = sortedDates[startIndex];
+      if (onDateRangeChange) onDateRangeChange(startDate, lastDate);
+    } else if (preset === '30D') {
+      const startIndex = Math.max(0, sortedDates.length - 30);
+      const startDate = sortedDates[startIndex];
+      if (onDateRangeChange) onDateRangeChange(startDate, lastDate);
     }
   };
 
-  if (!data) return null;
+  const handleServiceSelect = (service) => {
+    if (onServiceChange) {
+      onServiceChange(service);
+    }
+    setServiceDropdownOpen(false);
+  };
+
+  const hasFilter = (filterStartDate && filterEndDate) || (filterService && filterService !== 'All');
+  const usdToInr = forexData?.rate || 95.32;
+
+  // Format date range for badge
+  const displayRange = filterStartDate && filterEndDate 
+    ? `${filterStartDate.slice(5)} to ${filterEndDate.slice(5)}`
+    : dates.length > 0 
+      ? `${dates[0].slice(5)} to ${dates[dates.length - 1].slice(5)}`
+      : 'All Dates';
 
   return (
-    <>
-      {/* Unit Economics Highlight Banner Card */}
-      <div className="clay-card p-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-6 bg-gradient-to-r from-zorvex-surface via-zorvex-surface-secondary/40 to-zorvex-surface border border-zorvex-border dark:border-zorvex-dark-border">
-        
-        {/* Left Info */}
-        <div className="flex items-start gap-4">
-          <div className="w-12 h-12 rounded-2xl bg-zorvex-forest-soft dark:bg-zorvex-dark-forest-soft text-zorvex-forest dark:text-zorvex-dark-forest flex items-center justify-center flex-shrink-0 shadow-inner">
-            <Gauge className="w-6 h-6 stroke-[2.2]" />
-          </div>
-
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="text-[11px] font-extrabold uppercase tracking-wider text-zorvex-forest dark:text-zorvex-dark-forest">
-                Business Unit Economics
-              </span>
-              <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black flex items-center gap-1 ${
-                data.is_improving
-                  ? 'bg-zorvex-savings-soft text-zorvex-savings dark:bg-emerald-950/40 dark:text-emerald-400'
-                  : 'bg-zorvex-spike-soft text-zorvex-spike dark:bg-red-950/40 dark:text-red-400'
-              }`}>
-                {data.is_improving ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-                <span>{data.efficiency_gain_pct > 0 ? `+${data.efficiency_gain_pct}%` : `${data.efficiency_gain_pct}%`} Efficiency</span>
-              </span>
-            </div>
-
-            <div className="flex items-baseline gap-2 mt-1">
-              <span className="text-2xl font-black font-mono text-zorvex-text dark:text-zorvex-dark-text">
-                ${data.current_unit_cost?.toFixed(4)}
-              </span>
-              <span className="text-xs font-bold text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">
-                per {data.metric_unit?.toLowerCase()}
-              </span>
-              <span className="text-[11px] text-zorvex-text-secondary/60 dark:text-zorvex-dark-text-secondary/60 line-through ml-1 font-mono">
-                (was ${data.previous_unit_cost?.toFixed(4)})
-              </span>
-            </div>
-
-            <p className="text-xs text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary mt-1">
-              Tracking <strong className="text-zorvex-text dark:text-zorvex-dark-text">{data.metric_name}</strong>: <span className="font-mono">{data.current_volume?.toLocaleString()}</span> {data.metric_unit?.toLowerCase()} processed against <span className="font-mono">${totalCost?.toFixed(2)}</span> cloud telemetry.
-            </p>
-          </div>
+    <div className="clay-card p-4 sm:p-5 flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4 relative overflow-visible">
+      
+      {/* Left: Scope Summary & Telemetry Indicator */}
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="w-9 h-9 rounded-xl bg-zorvex-forest-soft dark:bg-zorvex-dark-forest-soft text-zorvex-forest dark:text-zorvex-dark-forest flex items-center justify-center flex-shrink-0 shadow-inner">
+          <SlidersHorizontal className="w-4 h-4 stroke-[2.2]" />
         </div>
 
-        {/* Right Action */}
-        <div className="flex items-center gap-3 w-full md:w-auto justify-end">
+        <div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-black uppercase tracking-wider text-zorvex-text dark:text-zorvex-dark-text">
+              Telemetry Scope & Quick Filters
+            </span>
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-zorvex-forest-soft text-zorvex-forest dark:bg-zorvex-dark-forest-soft dark:text-zorvex-dark-forest">
+              <span className="w-1.5 h-1.5 rounded-full bg-zorvex-forest dark:bg-zorvex-dark-forest animate-pulse"></span>
+              <span>{totalResources} Billed Resources</span>
+            </span>
+          </div>
+
+          <p className="text-[11px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary mt-0.5 flex flex-wrap items-center gap-2">
+            <span>Filtering charts across <strong>{servicesList.length || 18} AWS Services</strong></span>
+            <span className="text-zorvex-forest dark:text-zorvex-dark-forest font-bold">
+              • Active Scope: {filterService !== 'All' ? filterService : 'All Services'} ({displayRange})
+            </span>
+          </p>
+        </div>
+      </div>
+
+      {/* Right: Quick Interactive Filter Controls */}
+      <div className="flex flex-wrap items-center gap-2.5 w-full lg:w-auto justify-start lg:justify-end">
+        
+        {/* Time-Range Quick Presets (7D, 14D, 30D, ALL) */}
+        <div className="surface-recessed inline-flex items-center p-1 rounded-2xl gap-1 text-xs font-extrabold">
+          {[
+            { id: '7D', label: '7D' },
+            { id: '14D', label: '14D' },
+            { id: '30D', label: '30D' },
+            { id: 'ALL', label: 'ALL' }
+          ].map((preset) => {
+            const isActive = currentPreset === preset.id;
+            return (
+              <button
+                key={preset.id}
+                type="button"
+                onClick={() => handlePreset(preset.id)}
+                className={`px-3.5 py-1.5 rounded-xl transition-all duration-150 text-[11px] font-black cursor-pointer active:scale-95 ${
+                  isActive
+                    ? 'bg-white dark:bg-[#1E2026] text-[#EC7211] dark:text-[#FF9900] shadow-sm border border-amber-500/25'
+                    : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                {preset.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Quick Service Dropdown */}
+        <div className="relative" ref={dropdownRef}>
           <button
-            onClick={() => setModalOpen(true)}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-clay-pill clay-button text-xs font-extrabold flex-shrink-0"
+            type="button"
+            onClick={() => setServiceDropdownOpen(!serviceDropdownOpen)}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-xl clay-button text-xs font-extrabold border border-zorvex-border dark:border-zorvex-dark-border cursor-pointer hover:border-zorvex-forest/50 transition-colors"
           >
-            <Settings2 className="w-3.5 h-3.5 text-zorvex-forest dark:text-zorvex-dark-forest" />
-            <span>Configure Volume</span>
+            <Layers className="w-3.5 h-3.5 text-zorvex-forest dark:text-zorvex-dark-forest" />
+            <span className="max-w-[130px] truncate">{filterService === 'All' ? 'All Services' : filterService}</span>
+            <ChevronDown className="w-3.5 h-3.5 text-zorvex-text-secondary" />
+          </button>
+
+          {serviceDropdownOpen && (
+            <div className="absolute right-0 top-full mt-1.5 w-60 max-h-64 overflow-y-auto rounded-2xl bg-zorvex-surface dark:bg-zorvex-dark-surface border border-zorvex-border dark:border-zorvex-dark-border shadow-surface-floating z-50 p-1.5 animate-fade-in shadow-2xl">
+              <button
+                type="button"
+                onClick={() => handleServiceSelect('All')}
+                className={`w-full text-left px-3 py-2 rounded-xl text-xs font-bold flex items-center justify-between cursor-pointer ${
+                  filterService === 'All' 
+                    ? 'bg-zorvex-forest-soft text-zorvex-forest dark:bg-zorvex-dark-forest-soft dark:text-zorvex-dark-forest' 
+                    : 'text-zorvex-text dark:text-zorvex-dark-text hover:bg-zorvex-surface-secondary'
+                }`}
+              >
+                <span>All AWS Services</span>
+                {filterService === 'All' && <Check className="w-3.5 h-3.5 text-zorvex-forest" />}
+              </button>
+
+              {servicesList.map((srv) => (
+                <button
+                  key={srv}
+                  type="button"
+                  onClick={() => handleServiceSelect(srv)}
+                  className={`w-full text-left px-3 py-2 rounded-xl text-xs font-bold flex items-center justify-between truncate cursor-pointer ${
+                    filterService === srv
+                      ? 'bg-zorvex-forest-soft text-zorvex-forest dark:bg-zorvex-dark-forest-soft dark:text-zorvex-dark-forest'
+                      : 'text-zorvex-text dark:text-zorvex-dark-text hover:bg-zorvex-surface-secondary'
+                  }`}
+                >
+                  <span className="truncate">{srv}</span>
+                  {filterService === srv && <Check className="w-3.5 h-3.5 text-zorvex-forest flex-shrink-0" />}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Interactive Currency Switcher: USD ($) ⇄ INR (₹) */}
+        <div 
+          className="inline-flex items-center p-1 bg-zorvex-surface-secondary dark:bg-zorvex-dark-surface-secondary rounded-xl border border-zorvex-border dark:border-zorvex-dark-border text-xs font-extrabold shadow-inner"
+          title={`Click to switch between USD ($) and Indian Rupees (₹) at live rate ₹${usdToInr.toFixed(2)}`}
+        >
+          <button
+            type="button"
+            onClick={() => onToggleCurrency && currency !== 'USD' && onToggleCurrency()}
+            className={`px-2.5 py-1 rounded-lg transition-all duration-150 text-[11px] font-extrabold cursor-pointer ${
+              currency === 'USD'
+                ? 'bg-zorvex-surface dark:bg-zorvex-dark-surface text-zorvex-forest dark:text-zorvex-dark-forest shadow-sm'
+                : 'text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary hover:text-zorvex-text'
+            }`}
+          >
+            $ USD
+          </button>
+          <button
+            type="button"
+            onClick={() => onToggleCurrency && currency !== 'INR' && onToggleCurrency()}
+            className={`px-2.5 py-1 rounded-lg transition-all duration-150 text-[11px] font-extrabold cursor-pointer ${
+              currency === 'INR'
+                ? 'bg-zorvex-surface dark:bg-zorvex-dark-surface text-zorvex-forest dark:text-zorvex-dark-forest shadow-sm'
+                : 'text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary hover:text-zorvex-text'
+            }`}
+          >
+            ₹ INR
           </button>
         </div>
 
+        {/* Reset Filter Button (Active when filter is applied) */}
+        {hasFilter && (
+          <button
+            type="button"
+            onClick={() => {
+              if (onResetFilters) onResetFilters();
+            }}
+            className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-zorvex-spike-soft text-zorvex-spike text-xs font-black hover:opacity-85 transition-all shadow-sm border border-zorvex-spike/20 cursor-pointer"
+            title="Reset All Scope Filters"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+            <span>Reset</span>
+          </button>
+        )}
+
       </div>
 
-      {/* Modal Configure Unit Economics */}
-      {modalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
-          <div 
-            className="surface-floating w-full max-w-md bg-zorvex-surface dark:bg-zorvex-dark-surface border border-zorvex-border dark:border-zorvex-dark-border shadow-surface-floating rounded-3xl overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="p-6 border-b border-zorvex-border dark:border-zorvex-dark-border flex items-center justify-between">
-              <div>
-                <h3 className="text-base font-extrabold text-zorvex-text dark:text-zorvex-dark-text">
-                  Configure Business Unit Economics
-                </h3>
-                <p className="text-xs text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary mt-0.5">
-                  Tie cloud infrastructure costs to actual business growth metrics.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setModalOpen(false)}
-                aria-label="Close modal"
-                className="p-1.5 rounded-xl text-zorvex-text-secondary hover:text-zorvex-text dark:text-zorvex-dark-text-secondary dark:hover:text-white"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form onSubmit={handleSave} className="p-6 space-y-4">
-              {error && (
-                <div className="p-3 rounded-xl bg-zorvex-spike-soft border border-zorvex-spike/30 text-xs text-zorvex-spike font-bold flex items-center gap-2">
-                  <AlertCircle className="w-4 h-4 flex-shrink-0" />
-                  <span>{error}</span>
-                </div>
-              )}
-
-              <div>
-                <label htmlFor="business-metric-name" className="block text-[11px] font-bold uppercase tracking-wider text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary mb-1">
-                  Business Metric Name
-                </label>
-                <input
-                  id="business-metric-name"
-                  name="businessMetricName"
-                  type="text"
-                  required
-                  value={metricName}
-                  onChange={(e) => setMetricName(e.target.value)}
-                  placeholder="e.g. Orders, Active Users, API Requests"
-                  aria-label="Business Metric Name"
-                  className="w-full px-3.5 py-2.5 clay-input text-xs font-semibold text-zorvex-text dark:text-zorvex-dark-text"
-                />
-              </div>
-
-              <div>
-                <label htmlFor="single-unit-label" className="block text-[11px] font-bold uppercase tracking-wider text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary mb-1">
-                  Single Unit Label
-                </label>
-                <input
-                  id="single-unit-label"
-                  name="singleUnitLabel"
-                  type="text"
-                  required
-                  value={metricUnit}
-                  onChange={(e) => setMetricUnit(e.target.value)}
-                  placeholder="e.g. Order, User, Call"
-                  aria-label="Single Unit Label"
-                  className="w-full px-3.5 py-2.5 clay-input text-xs font-semibold text-zorvex-text dark:text-zorvex-dark-text"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label htmlFor="current-volume" className="block text-[11px] font-bold uppercase tracking-wider text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary mb-1">
-                    Current Volume
-                  </label>
-                  <input
-                    id="current-volume"
-                    name="currentVolume"
-                    type="number"
-                    required
-                    min="1"
-                    value={currentVolume}
-                    onChange={(e) => setCurrentVolume(e.target.value)}
-                    placeholder="e.g. 50000"
-                    aria-label="Current Volume"
-                    className="w-full px-3.5 py-2.5 clay-input text-xs font-semibold text-zorvex-text dark:text-zorvex-dark-text font-mono"
-                  />
-                </div>
-
-                <div>
-                  <label htmlFor="previous-baseline-volume" className="block text-[11px] font-bold uppercase tracking-wider text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary mb-1">
-                    Previous Baseline
-                  </label>
-                  <input
-                    id="previous-baseline-volume"
-                    name="previousVolume"
-                    type="number"
-                    required
-                    min="1"
-                    value={previousVolume}
-                    onChange={(e) => setPreviousVolume(e.target.value)}
-                    placeholder="e.g. 35000"
-                    aria-label="Previous Baseline Volume"
-                    className="w-full px-3.5 py-2.5 clay-input text-xs font-semibold text-zorvex-text dark:text-zorvex-dark-text font-mono"
-                  />
-                </div>
-              </div>
-
-              <div className="pt-2 flex items-center justify-end gap-3">
-                <button
-                  type="button"
-                  onClick={() => setModalOpen(false)}
-                  className="px-4 py-2 rounded-clay-pill clay-button text-xs font-bold"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={saving}
-                  className="px-5 py-2 rounded-clay-pill clay-button-primary text-xs font-extrabold flex items-center gap-2"
-                >
-                  {saving ? 'Updating...' : 'Save Metrics'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-    </>
+    </div>
   );
 }
+
+
+export default React.memo(UnitEconomicsCard);

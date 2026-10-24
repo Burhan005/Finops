@@ -45,6 +45,15 @@ def get_current_user_and_org(
     if not auth_token:
         return None, None
 
+    # Instant Redis Token Blacklist Check (Sub-millisecond rejection of revoked sessions)
+    if global_cache.redis_available and global_cache.redis_client:
+        try:
+            if global_cache.redis_client.get(f"zorvex:blacklist:token:{auth_token}"):
+                logger.debug("Rejected revoked session token: %s...", auth_token[:8])
+                return None, None
+        except Exception as e:
+            logger.debug("Redis blacklist check notice: %s", e)
+
     sess = (
         db.query(UserSession)
         .options(joinedload(UserSession.user).joinedload(User.organization))
@@ -104,6 +113,11 @@ def get_active_dataset_for_org(org: Optional[Organization], db: Session) -> Dict
             DatasetRecord.organization_id == org.id,
             DatasetRecord.is_active == 1
         ).order_by(DatasetRecord.id.desc()).first()
+
+        # High-throughput fast path: If active dataset is already memory-resident and matches DB active record, return in < 1ms
+        fast_cached = org_dataset_get(org.id)
+        if fast_cached and fast_cached.get('data') and active_rec and fast_cached.get('id') == active_rec.id:
+            return fast_cached
 
         active_filepath = active_rec.filepath if (active_rec and os.path.exists(active_rec.filepath)) else None
 

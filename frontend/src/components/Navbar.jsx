@@ -1,7 +1,8 @@
 import React, { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { NavLink, useLocation } from 'react-router-dom';
-import { 
+import {
+  Search,
   LayoutDashboard, 
   GitCompare, 
   Coins, 
@@ -21,7 +22,9 @@ import {
   Bot,
   Cloud,
   Sparkles,
-  Edit3
+  Edit3,
+  Trash2,
+  Tag
 } from 'lucide-react';
 import ClayDropdown from './common/ClayDropdown';
 import ZorvexLogo from './common/ZorvexLogo';
@@ -49,9 +52,25 @@ export default function Navbar({
   darkMode,
   onToggleDarkMode,
   currentUser,
-  onLogout
+  onLogout,
+  currency = 'USD',
+  onSelectCurrency,
+  onOpenCommandPalette
 }) {
+  const isMac = typeof window !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.userAgent || navigator.platform || '');
+  const shortcutKey = isMac ? '⌘K' : 'Ctrl K';
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [signOutModalOpen, setSignOutModalOpen] = useState(false);
+
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' && signOutModalOpen) {
+        setSignOutModalOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [signOutModalOpen]);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const userMenuRef = useRef(null);
   const location = useLocation();
@@ -143,6 +162,30 @@ export default function Navbar({
   const [renaming, setRenaming] = useState(false);
   const [renameError, setRenameError] = useState('');
 
+  // Delete Dataset Modal State
+  const [deleteConfirmTarget, setDeleteConfirmTarget] = useState(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  const handleDeleteDataset = (file) => {
+    setDeleteConfirmTarget(file);
+  };
+
+  const confirmDeleteDataset = async () => {
+    if (!deleteConfirmTarget || !deleteConfirmTarget.id) return;
+    setIsDeleting(true);
+    try {
+      await api.deleteDataset(deleteConfirmTarget.id);
+      setDeleteConfirmTarget(null);
+      if (onRefreshDatasets) {
+        await onRefreshDatasets();
+      }
+    } catch (err) {
+      alert(err.message || 'Failed to delete dataset');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
   // Dataset Options (Uploads strictly visible only to authenticated users)
   const uploads = currentUser ? (datasets?.uploads || []) : [];
   const uploadedFilenames = new Set(uploads.map((u) => u.filename));
@@ -177,7 +220,8 @@ export default function Navbar({
       account_name: file.account_name || null,
       usage_account_id: usageAcc || null,
       type: file.type || 'upload',
-      id: file.id || null
+      id: file.id || null,
+      onDelete: (file.type === 'upload' && file.id) ? () => handleDeleteDataset(file) : null
     };
   });
 
@@ -242,6 +286,7 @@ export default function Navbar({
   const navContainerRef = useRef(null);
   const itemRefs = useRef({});
   const [orbitStyle, setOrbitStyle] = useState({ left: 0, width: 0, opacity: 0 });
+  const [hoverStyle, setHoverStyle] = useState({ left: 0, width: 0, opacity: 0 });
 
   const updateOrbit = useCallback(() => {
     const container = navContainerRef.current;
@@ -302,10 +347,8 @@ export default function Navbar({
 
   return (
     <header 
-      className={`sticky top-0 z-50 w-full transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] ${
-        isScrolled 
-          ? 'bg-zorvex-surface/92 dark:bg-zorvex-dark-surface/92 backdrop-blur-xl border-b border-zorvex-border dark:border-zorvex-dark-border shadow-md' 
-          : 'bg-zorvex-surface/95 dark:bg-zorvex-dark-surface/95 backdrop-blur-md border-b border-zorvex-border/70 dark:border-zorvex-dark-border/70 shadow-sm'
+      className={`sticky top-0 z-50 w-full transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] bg-zorvex-surface dark:bg-zorvex-dark-surface border-b border-zorvex-border dark:border-zorvex-dark-border ${
+        isScrolled ? 'shadow-md' : 'shadow-xs'
       }`}
     >
       {/* ========================================================================= */}
@@ -314,7 +357,7 @@ export default function Navbar({
       <div className="w-full relative">
         {/* Scroll Progress Indicator Line (Docked to bottom border) */}
         <div 
-          className="absolute bottom-0 left-0 h-[2px] bg-gradient-to-r from-zorvex-forest via-[#5B7A60] to-zorvex-forest transition-all duration-75 ease-out opacity-90 z-20 pointer-events-none"
+          className="absolute bottom-0 left-0 h-[2px] bg-gradient-to-r from-amber-500 via-[#EC7211] to-amber-500 transition-all duration-75 ease-out opacity-90 z-20 pointer-events-none"
           style={{ width: `${scrollProgress}%` }}
         />
         
@@ -340,11 +383,7 @@ export default function Navbar({
                 />
               </NavLink>
 
-              {/* Live Telemetry Pill (Visible on lg+) */}
-              <div className="hidden lg:flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-zorvex-forest-soft dark:bg-zorvex-dark-forest-soft border border-zorvex-forest/20 text-zorvex-forest dark:text-zorvex-dark-forest text-[10px] font-black uppercase tracking-wider select-none">
-                <span className="w-1.5 h-1.5 rounded-full bg-zorvex-forest dark:bg-zorvex-dark-forest animate-pulse" />
-                <span>Live Engine</span>
-              </div>
+
             </div>
 
             {/* Right Action Utilities Bar */}
@@ -371,6 +410,49 @@ export default function Navbar({
                     <Edit3 className="w-3.5 h-3.5" />
                   </button>
                 )}
+              </div>
+
+              {/* Command Palette Spotlight Button (OS Aware: Ctrl K on Windows/Linux, ⌘K on Mac) */}
+              <button
+                type="button"
+                onClick={onOpenCommandPalette}
+                className="hidden xl:flex items-center gap-1.5 px-2.5 py-1.5 rounded-clay-pill surface-recessed border border-zorvex-border/60 dark:border-zorvex-dark-border/60 text-xs text-zorvex-text-muted hover:text-zorvex-text dark:hover:text-zorvex-dark-text transition-all cursor-pointer group active:scale-95"
+                title={`Open Command Palette (${shortcutKey})`}
+              >
+                <Search className="w-3.5 h-3.5 text-zorvex-text-muted group-hover:text-zorvex-forest dark:group-hover:text-zorvex-forest-highlight transition-colors" />
+                <span className="text-[11px] font-bold text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">Search</span>
+                <kbd className="px-1.5 py-0.5 text-[9px] font-mono font-bold rounded surface-raised border border-zorvex-border/80 dark:border-zorvex-dark-border/80 text-zorvex-text-muted shadow-sm">
+                  {shortcutKey}
+                </kbd>
+              </button>
+
+              {/* Tactile Sliding Clay Currency Switcher */}
+              <div 
+                className="flex items-center surface-recessed p-0.5 rounded-clay-pill border border-zorvex-border/60 dark:border-zorvex-dark-border/60 text-[11px] font-black"
+                title="Global Currency: Switch between USD ($) and INR (₹)"
+              >
+                <button
+                  type="button"
+                  onClick={() => onSelectCurrency && onSelectCurrency('USD')}
+                  className={`px-2 py-1 rounded-clay-pill transition-all cursor-pointer active-tactile ${
+                    currency === 'USD'
+                      ? 'surface-raised text-zorvex-forest dark:text-zorvex-forest-highlight shadow-clay-sm font-extrabold'
+                      : 'text-zorvex-text-muted hover:text-zorvex-text dark:hover:text-zorvex-dark-text'
+                  }`}
+                >
+                  $ <span className="hidden sm:inline">USD</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onSelectCurrency && onSelectCurrency('INR')}
+                  className={`px-2 py-1 rounded-clay-pill transition-all cursor-pointer active-tactile ${
+                    currency === 'INR'
+                      ? 'surface-raised text-zorvex-forest dark:text-zorvex-forest-highlight shadow-clay-sm font-extrabold'
+                      : 'text-zorvex-text-muted hover:text-zorvex-text dark:hover:text-zorvex-dark-text'
+                  }`}
+                >
+                  ₹ <span className="hidden sm:inline">INR</span>
+                </button>
               </div>
 
               {/* Tactile Light / Dark Mode Toggle */}
@@ -408,7 +490,7 @@ export default function Navbar({
                     }`}
                     title="User Account & Auth"
                   >
-                    <div className="w-5 h-5 rounded-full bg-gradient-to-tr from-zorvex-forest to-[#5B7A60] text-zorvex-surface flex items-center justify-center text-[10px] font-extrabold shadow-sm flex-shrink-0">
+                    <div className="w-5 h-5 rounded-full bg-gradient-to-tr from-zorvex-forest to-[#D4650D] text-zorvex-surface flex items-center justify-center text-[10px] font-extrabold shadow-sm flex-shrink-0">
                       {userInitials}
                     </div>
                     <span className="hidden xl:inline text-xs font-extrabold whitespace-nowrap">{userName}</span>
@@ -445,7 +527,7 @@ export default function Navbar({
                           type="button"
                           onClick={() => {
                             setUserMenuOpen(false);
-                            if (onLogout) onLogout();
+                            setSignOutModalOpen(true);
                           }}
                           className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold text-zorvex-spike hover:bg-zorvex-spike-soft dark:hover:bg-red-950/30 transition-colors text-left cursor-pointer"
                         >
@@ -495,10 +577,8 @@ export default function Navbar({
         {/* TIER 2: COMMAND NAVIGATION STRIP (Houses Orbit Gliding Capsule)           */}
         {/* ========================================================================= */}
         <div 
-          className={`hidden md:block border-t border-zorvex-border/60 dark:border-zorvex-dark-border/60 px-4 sm:px-6 transition-all duration-300 ${
-            isScrolled 
-              ? 'py-1 bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary/30' 
-              : 'py-1.5 bg-zorvex-surface-secondary/70 dark:bg-zorvex-dark-surface-secondary/50'
+          className={`hidden md:block border-t border-zorvex-border/60 dark:border-zorvex-dark-border/60 px-4 sm:px-6 transition-all duration-300 bg-zorvex-surface-secondary/60 dark:bg-zorvex-dark-surface-secondary/40 ${
+            isScrolled ? 'py-1' : 'py-1.5'
           }`}
         >
           <div className="max-w-7xl xl:max-w-[1400px] 2xl:max-w-[1600px] mx-auto flex items-center justify-between">
@@ -507,20 +587,31 @@ export default function Navbar({
             <div className="relative w-full overflow-x-auto scrollbar-none py-0.5">
               <nav 
                 ref={navContainerRef}
-                className="orbit-track flex items-center gap-1 p-1 w-max min-w-full"
+                onMouseLeave={() => setHoverStyle((prev) => ({ ...prev, opacity: 0 }))}
+                className="orbit-track relative flex items-center gap-1 p-1 w-max min-w-full"
                 aria-label="Module Navigation"
               >
-                {/* Smoothly Gliding Orbit Capsule with Pulsing Satellite Beacon */}
+                {/* Magnetic Translucent Glass Hover Spotlight */}
+                <div 
+                  className="orbit-hover-pill"
+                  style={{
+                    transform: `translate3d(${hoverStyle.left}px, 0, 0)`,
+                    width: `${hoverStyle.width}px`,
+                    opacity: hoverStyle.opacity
+                  }}
+                  aria-hidden="true"
+                />
+
+                {/* Smoothly Gliding Tactile Active Orbit Capsule with Pulsing Satellite Beacon */}
                 <div 
                   className="orbit-capsule"
                   style={{
-                    transform: `translateX(${orbitStyle.left}px)`,
+                    transform: `translate3d(${orbitStyle.left}px, 0, 0)`,
                     width: `${orbitStyle.width}px`,
                     opacity: orbitStyle.opacity
                   }}
                   aria-hidden="true"
                 >
-                  {/* Orbital Micro-Satellite Beacon Dot */}
                   <span className="orbit-beacon" />
                 </div>
 
@@ -534,13 +625,43 @@ export default function Navbar({
                     <NavLink
                       key={item.to}
                       to={item.to}
+                      viewTransition
                       ref={(el) => {
                         if (el) itemRefs.current[item.to] = el;
                       }}
-                      className={`relative z-10 flex items-center gap-1.5 px-3 py-1.5 rounded-clay-pill text-xs whitespace-nowrap flex-shrink-0 select-none transition-colors duration-200 cursor-pointer ${
+                      onMouseEnter={(e) => {
+                        const container = navContainerRef.current;
+                        if (!container) return;
+                        const containerRect = container.getBoundingClientRect();
+                        const itemRect = e.currentTarget.getBoundingClientRect();
+                        const left = Math.round(itemRect.left - containerRect.left + container.scrollLeft);
+                        const width = Math.round(itemRect.width);
+                        const isCurrentActive = Math.abs(left - orbitStyle.left) < 6;
+                        if (!isCurrentActive) {
+                          setHoverStyle({ left, width, opacity: 1 });
+                        } else {
+                          setHoverStyle((prev) => ({ ...prev, opacity: 0 }));
+                        }
+                      }}
+                      onClick={() => {
+                        setHoverStyle((prev) => ({ ...prev, opacity: 0 }));
+                        const el = itemRefs.current[item.to];
+                        const container = navContainerRef.current;
+                        if (el && container) {
+                          const containerRect = container.getBoundingClientRect();
+                          const itemRect = el.getBoundingClientRect();
+                          const left = Math.round(itemRect.left - containerRect.left + container.scrollLeft);
+                          const width = Math.round(itemRect.width);
+                          setOrbitStyle({ left, width, opacity: 1 });
+                          if (typeof el.scrollIntoView === 'function') {
+                            el.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+                          }
+                        }
+                      }}
+                      className={`relative z-10 flex items-center gap-1.5 px-3 py-1.5 rounded-clay-pill text-xs whitespace-nowrap flex-shrink-0 select-none cursor-pointer active:scale-[0.96] transition-colors duration-250 ease-out ${
                         isActive
-                          ? 'font-extrabold text-white dark:text-[#19211B]'
-                          : 'font-bold text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary hover:text-zorvex-text dark:hover:text-zorvex-dark-text hover:bg-zorvex-surface-recessed/40 dark:hover:bg-zorvex-dark-surface-recessed/40'
+                          ? 'font-extrabold text-white dark:text-white drop-shadow-sm'
+                          : 'font-bold text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary hover:text-zorvex-text dark:hover:text-zorvex-dark-text'
                       }`}
                       aria-current={isActive ? 'page' : undefined}
                     >
@@ -637,7 +758,7 @@ export default function Navbar({
                 type="button"
                 onClick={() => {
                   setMobileMenuOpen(false);
-                  if (onLogout) onLogout();
+                  setSignOutModalOpen(true);
                 }}
                 className="w-full flex items-center justify-center gap-2 py-2 rounded-xl text-xs font-bold text-zorvex-spike hover:bg-zorvex-spike-soft dark:hover:bg-red-950/30 transition-colors cursor-pointer"
               >
@@ -741,6 +862,112 @@ export default function Navbar({
                 </button>
               </div>
             </form>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* Delete Dataset Confirmation Modal Portal */}
+      {deleteConfirmTarget && typeof document !== 'undefined' && createPortal(
+        <div 
+          className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in"
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !isDeleting) setDeleteConfirmTarget(null);
+          }}
+        >
+          <div className="surface-floating border border-zorvex-border dark:border-zorvex-dark-border rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4 relative">
+            <div className="flex items-center justify-between pb-3 border-b border-zorvex-border dark:border-zorvex-dark-border">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-red-500/10 text-red-600 dark:text-red-400 flex items-center justify-center">
+                  <Trash2 className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-extrabold text-zorvex-text dark:text-zorvex-dark-text">Delete Dataset</h3>
+                  <p className="text-[11px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">Permanently remove this CUR dataset</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => !isDeleting && setDeleteConfirmTarget(null)}
+                className="p-1 rounded-lg text-zorvex-text-secondary hover:text-zorvex-text transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-red-500/5 border border-red-500/20 text-xs space-y-1.5">
+              <p className="font-bold text-zorvex-text dark:text-zorvex-dark-text">
+                Are you sure you want to delete <span className="font-mono text-red-600 dark:text-red-400 font-extrabold">{deleteConfirmTarget.account_name || deleteConfirmTarget.label || deleteConfirmTarget.filename}</span>?
+              </p>
+              <p className="text-[11px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">
+                This will delete all indexed billing records and analytical data associated with this dataset. This action cannot be undone.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={() => setDeleteConfirmTarget(null)}
+                className="px-4 py-2 rounded-xl clay-button text-xs font-bold text-zorvex-text dark:text-zorvex-dark-text cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={confirmDeleteDataset}
+                className="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-extrabold shadow-sm transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                {isDeleting ? 'Deleting...' : 'Delete Dataset'}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+      {/* Floating Dynamic Island HUD Capsule for Sign Out Confirmation */}
+      {signOutModalOpen && typeof document !== 'undefined' && createPortal(
+        <div 
+          className="fixed inset-0 z-[9999] bg-black/40 backdrop-blur-[2px] transition-opacity duration-200"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setSignOutModalOpen(false);
+          }}
+        >
+          <div 
+            className="fixed top-4 left-1/2 -translate-x-1/2 z-[10000] w-[calc(100vw-24px)] max-w-md flex flex-col sm:flex-row items-center justify-between gap-3 px-4 sm:px-5 py-3 rounded-2xl sm:rounded-clay-pill surface-floating border border-zorvex-border dark:border-white/10 bg-white/95 dark:bg-[#121316]/95 backdrop-blur-xl shadow-surface-floating shadow-rose-500/10 animate-fade-in select-none"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-2.5 w-full sm:w-auto justify-center sm:justify-start">
+              <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse flex-shrink-0" />
+              <span className="text-xs font-extrabold text-zorvex-text dark:text-white tracking-wide">
+                End workspace session?
+              </span>
+            </div>
+
+            <div className="hidden sm:block h-4 w-[1px] bg-zorvex-border dark:bg-white/10" />
+
+            <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+              <button
+                type="button"
+                onClick={() => setSignOutModalOpen(false)}
+                className="flex-1 sm:flex-initial px-3 py-1.5 rounded-clay-pill surface-raised text-[11px] font-bold text-zorvex-text-secondary hover:text-zorvex-text dark:text-zorvex-dark-text-secondary dark:hover:text-white transition-all cursor-pointer text-center active-tactile"
+              >
+                Cancel <span className="opacity-60 text-[10px] font-mono hidden sm:inline">(Esc)</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setSignOutModalOpen(false);
+                  if (onLogout) onLogout();
+                }}
+                className="flex-1 sm:flex-initial px-4 py-1.5 rounded-clay-pill bg-gradient-to-r from-rose-600 to-rose-500 hover:from-rose-500 hover:to-rose-400 text-white text-[11px] font-extrabold flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-sm active-tactile"
+              >
+                <LogOut className="w-3 h-3" />
+                <span>Confirm</span>
+              </button>
+            </div>
           </div>
         </div>,
         document.body

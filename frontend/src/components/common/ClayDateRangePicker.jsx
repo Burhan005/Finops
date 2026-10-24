@@ -172,7 +172,7 @@ export default function ClayDateRangePicker({
 
       {/* Floating Calendar Panel */}
       {isOpen && (
-        <div className="absolute left-0 mt-3 w-84 sm:w-96 rounded-3xl surface-floating p-5 z-50 border border-zorvex-border dark:border-zorvex-dark-border animate-fade-in">
+        <div className="absolute left-0 sm:left-auto mt-3 w-[calc(100vw-32px)] sm:w-96 max-w-sm rounded-3xl surface-floating p-4 sm:p-5 z-50 border border-zorvex-border dark:border-zorvex-dark-border animate-fade-in shadow-surface-floating">
           
           {/* Header & Status */}
           <div className="flex items-center justify-between border-b border-zorvex-border dark:border-zorvex-dark-border pb-3 mb-3">

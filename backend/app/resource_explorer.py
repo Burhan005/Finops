@@ -36,10 +36,13 @@ CATEGORY_LABELS = {
     'ELB_LOAD_BALANCER': 'Elastic Load Balancer',
     'ROUTE53_HOSTED_ZONE': 'Route 53 Hosted Zone',
     'ROUTE53_DNS': 'Route 53 DNS Queries',
+    'EKS_CLUSTER': 'EKS Cluster Control Plane',
+    'ECS_TASK': 'ECS Container Task',
     'GENERIC_RESOURCE': 'Identified Resource',
     'USAGE_LEVEL_COST': 'Usage-Level / Unallocated Cost',
     'TAX_AND_FEES': 'Government Tax & GST',
-    'RI_SUBSCRIPTION_FEE': 'RI Recurring Subscription Fee'
+    'RI_SUBSCRIPTION_FEE': 'RI Recurring Subscription Fee',
+    'MARKETPLACE_SOFTWARE': 'Marketplace Software'
 }
 
 def classify_cur_record(record: Dict[str, Any]) -> Dict[str, Any]:
@@ -90,6 +93,45 @@ def classify_cur_record(record: Dict[str, Any]) -> Dict[str, Any]:
             'is_backup': 'backup' in ut_lower or 'snapshot' in ut_lower,
             'is_classified': False,
             'classification_status': 'USAGE_LEVEL_COST'
+        }
+
+    # ==================== AMAZON EKS ====================
+    if service in ('Amazon EKS', 'AmazonEKS') or ':cluster/' in res_lower:
+        return {
+            'service': 'Amazon EKS',
+            'category': 'EKS_CLUSTER',
+            'category_label': 'EKS Cluster Control Plane',
+            'asset_type': 'Kubernetes Cluster',
+            'is_snapshot': False,
+            'is_backup': False,
+            'is_classified': True,
+            'classification_status': 'CLASSIFIED_RESOURCE'
+        }
+
+    # ==================== AMAZON ECS ====================
+    if service in ('Amazon ECS', 'AmazonECS') or ':task/' in res_lower or 'fargate' in ut_lower:
+        return {
+            'service': 'Amazon ECS',
+            'category': 'ECS_TASK',
+            'category_label': 'ECS Container Task',
+            'asset_type': 'Fargate / Container',
+            'is_snapshot': False,
+            'is_backup': False,
+            'is_classified': True,
+            'classification_status': 'CLASSIFIED_RESOURCE'
+        }
+
+    # ==================== AWS MARKETPLACE ====================
+    if service == 'AWS Marketplace' or 'softwareusage' in ut_lower:
+        return {
+            'service': 'AWS Marketplace',
+            'category': 'MARKETPLACE_SOFTWARE',
+            'category_label': 'Marketplace Software',
+            'asset_type': 'Software Subscription',
+            'is_snapshot': False,
+            'is_backup': False,
+            'is_classified': True,
+            'classification_status': 'CLASSIFIED_RESOURCE'
         }
 
     # ==================== AMAZON EC2 ====================
@@ -798,117 +840,25 @@ def build_materialized_explorer_index(cur_data: Dict[str, Any]) -> Dict[str, Any
     for rid, data in res_map.items():
         sorted_uts = sorted(data['usage_types'].items(), key=lambda x: x[1], reverse=True)
         primary_ut = sorted_uts[0][0] if sorted_uts else 'Standard'
-        primary_unit = list(data['units'])[0] if data['units'] else ''
         primary_curr = list(data['currencies'])[0] if data['currencies'] else 'USD'
-
-        # Resolve primary category and archetype deterministically
         rid_lower = rid.lower()
-        if rid.startswith('i-'):
-            primary_cat = 'EC2_INSTANCE'
-        elif rid.startswith('vol-'):
-            primary_cat = 'EBS_VOLUME'
-        elif ':db:' in rid_lower:
-            # Check if this database resource had compute instance usage or is a retained backup/storage
-            if 'RDS_DB_INSTANCE' in data['categories'] or any(
-                'instanceusage' in ut.lower() or 'boxusage' in ut.lower() or 'heavyusage' in ut.lower()
-                for ut in data['usage_types'].keys()
-            ):
-                primary_cat = 'RDS_DB_INSTANCE'
-            elif 'RDS_BACKUP' in data['categories'] or any('backup' in ut.lower() for ut in data['usage_types'].keys()):
-                primary_cat = 'RDS_BACKUP'
-            elif 'RDS_STORAGE' in data['categories'] or any('storage' in ut.lower() or 'gp3' in ut.lower() or 'gp2' in ut.lower() for ut in data['usage_types'].keys()):
-                primary_cat = 'RDS_STORAGE'
-            else:
-                primary_cat = 'RDS_DB_INSTANCE'
-        elif ':snapshot/' in rid_lower or 'snap-' in rid_lower or 'rds:snap-' in rid_lower:
-            if data['service'] == 'Amazon EC2' or ':ec2:' in rid_lower or 'snap-' in rid_lower:
-                primary_cat = 'EBS_SNAPSHOT'
-            else:
-                primary_cat = 'RDS_SNAPSHOT'
-        elif ':natgateway/' in rid_lower or rid.startswith('nat-'):
-            primary_cat = 'NAT_GATEWAY'
-        elif ':distribution/' in rid_lower or 'arn:aws:cloudfront' in rid_lower:
-            primary_cat = 'CLOUDFRONT_DISTRIBUTION'
-            data['service'] = 'Amazon CloudFront'
-        elif ':webacl/' in rid_lower or 'arn:aws:waf' in rid_lower:
-            primary_cat = 'WAF_WEB_ACL'
-            data['service'] = 'AWS WAF'
-        elif ':hostedzone/' in rid_lower or 'arn:aws:route53' in rid_lower:
-            primary_cat = 'ROUTE53_HOSTED_ZONE'
-            data['service'] = 'Amazon Route 53'
-        elif ':reserved-instances/' in rid_lower or ':ri:' in rid_lower:
-            primary_cat = 'RI_SUBSCRIPTION_FEE'
-        elif rid.startswith('eipalloc-'):
-            primary_cat = 'ELASTIC_IP'
-        elif rid.startswith('TAX-') or rid == 'TAX-INVOICE-GST' or 'TAX_AND_FEES' in data['categories']:
-            primary_cat = 'TAX_AND_FEES'
-            data['service'] = 'Taxes & Surcharges'
-        elif rid.startswith('No-Resource-ID'):
-            if 'TAX_AND_FEES' in data['categories']:
-                primary_cat = 'TAX_AND_FEES'
-                data['service'] = 'Taxes & Surcharges'
-            elif 'RI_SUBSCRIPTION_FEE' in data['categories'] or data.get('ri_arns'):
-                primary_cat = 'RI_SUBSCRIPTION_FEE'
-            else:
-                primary_cat = 'USAGE_LEVEL_COST'
-        else:
-            sorted_cats = sorted(data['categories'].items(), key=lambda x: x[1], reverse=True)
-            primary_cat = sorted_cats[0][0] if sorted_cats else 'GENERIC_RESOURCE'
 
+        # 1. Resolve primary category deterministically via Rule Engine
+        primary_cat = ResourceClassifierEngine.resolve_primary_category(rid, rid_lower, data)
         primary_cat_label = data['category_labels'].get(primary_cat, CATEGORY_LABELS.get(primary_cat, primary_cat))
         primary_asset_type = data['asset_types'].get(primary_cat, 'Other')
 
-        # Resolve primary region by highest spend
+        # 2. Resolve primary region by highest spend
         sorted_regions = sorted(data['regions'].items(), key=lambda x: x[1], reverse=True)
         primary_region = sorted_regions[0][0] if sorted_regions else (data['region'] or 'global')
 
-        clean_label = data['name']
-        if not clean_label:
-            if rid.startswith('i-'):
-                clean_label = f"EC2 ({data['short_id']})"
-            elif rid.startswith('vol-'):
-                clean_label = f"EBS Disk ({data['short_id']})"
-            elif ':db:' in rid_lower:
-                if primary_cat == 'RDS_BACKUP':
-                    clean_label = f"RDS Retained Backup ({data['short_id']})"
-                elif primary_cat == 'RDS_STORAGE':
-                    clean_label = f"RDS Disk Storage ({data['short_id']})"
-                else:
-                    clean_label = f"RDS DB ({data['short_id']})"
-            elif ':snapshot/' in rid_lower or rid.startswith('snap-'):
-                clean_label = f"EBS Snapshot ({data['short_id']})"
-            elif ':natgateway/' in rid_lower or rid.startswith('nat-'):
-                clean_label = f"NAT GW ({data['short_id']})"
-            elif ':distribution/' in rid_lower or 'arn:aws:cloudfront' in rid_lower:
-                clean_label = f"Distribution ({data['short_id']})"
-            elif ':webacl/' in rid_lower or 'arn:aws:waf' in rid_lower:
-                clean_label = f"Web ACL: {data['short_id']}"
-            elif ':loadbalancer/' in rid_lower:
-                clean_label = f"Load Balancer: {data['short_id']}"
-            elif rid.startswith('No-Resource-ID'):
-                if data['service'] in ('AWS WAF', 'WAF', 'awswaf'):
-                    clean_label = "Unassociated WAF Request Volume & Managed Rules"
-                elif primary_cat == 'RI_SUBSCRIPTION_FEE':
-                    sub_count = len(data.get('subscription_ids', []))
-                    if sub_count > 1:
-                        clean_label = f"Reserved Instance Commitment Portfolio ({sub_count} Contracts)"
-                    elif sub_count == 1:
-                        clean_label = f"Reserved Instance Commitment Contract #{list(data['subscription_ids'])[0]}"
-                    else:
-                        clean_label = "Reserved Instance Commitment Portfolio"
-                else:
-                    op_str = f" ({list(data['operations'])[0]})" if data['operations'] else ""
-                    clean_label = f"{data['service']} Usage{op_str}"
-            elif primary_cat == 'RI_SUBSCRIPTION_FEE' or ':reserved-instances/' in rid_lower or ':ri:' in rid_lower:
-                clean_label = data['name'] or f"Reserved Instance: {data['short_id'][:8]}"
-            else:
-                clean_label = data['short_id']
+        # 3. Resolve display label via Rule Engine
+        clean_label = ResourceClassifierEngine.resolve_display_label(rid, rid_lower, data, primary_cat)
 
         all_cats = set(data['categories'].keys()) | {primary_cat}
         is_snap = any(c in ('EBS_SNAPSHOT', 'RDS_SNAPSHOT') for c in all_cats)
         is_bkp = any(c in ('RDS_BACKUP',) for c in all_cats)
 
-        # Explicit FinOps Lifecycle Status classification
         has_instance_compute = any(
             'instanceusage' in ut.lower() or 'boxusage' in ut.lower() or 'heavyusage' in ut.lower()
             for ut in data['usage_types'].keys()
@@ -917,35 +867,20 @@ def build_materialized_explorer_index(cur_data: Dict[str, Any]) -> Dict[str, Any
             'storage' in ut.lower() or 'gp3' in ut.lower() for ut in data['usage_types'].keys()
         )
 
+        # 4. Resolve FinOps Lifecycle status deterministically via Rule Engine (Live CUR Activity Check)
+        max_dataset_date = max(all_dates) if all_dates else ''
+        r_dates = list(data.get('dates', {}).keys())
+        r_last_date = max(r_dates) if r_dates else (data.get('last_seen', '').split(' ')[0] if data.get('last_seen') else '')
         is_ri_contract = (primary_cat == 'RI_SUBSCRIPTION_FEE' or ':reserved-instances/' in rid_lower or ':ri:' in rid_lower)
-        if is_ri_contract:
-            lifecycle_status = 'COMMITMENT_CONTRACT'
-            lifecycle_label = 'Reserved Instance Commitment'
-        elif rid.startswith('No-Resource-ID') or rid.startswith('TAX-') or primary_cat == 'TAX_AND_FEES':
-            lifecycle_status = 'ACCOUNT_LEVEL_FEES'
-            lifecycle_label = 'Account / Tax / Fee'
-        elif primary_cat == 'RDS_DB_INSTANCE' or (has_instance_compute and ':db:' in rid_lower):
-            lifecycle_status = 'ACTIVE_INSTANCE'
-            lifecycle_label = 'Active DB Instance'
-        elif primary_cat == 'RDS_BACKUP' or (is_retained_backup_only and ':db:' in rid_lower):
-            lifecycle_status = 'RETAINED_BACKUP_STORAGE'
-            lifecycle_label = 'Retained Backup (Terminated DB)'
-        elif primary_cat == 'EC2_INSTANCE' or (has_instance_compute and rid.startswith('i-')):
-            lifecycle_status = 'ACTIVE_INSTANCE'
-            lifecycle_label = 'Active Compute Instance'
-        elif primary_cat == 'EBS_SNAPSHOT' or is_snap:
-            lifecycle_status = 'SNAPSHOT_STORAGE'
-            lifecycle_label = 'Snapshot Storage Asset'
-        elif primary_cat == 'EBS_VOLUME':
-            lifecycle_status = 'PROVISIONED_STORAGE'
-            lifecycle_label = 'EBS Block Storage'
-        else:
-            lifecycle_status = 'ACTIVE_RESOURCE'
-            lifecycle_label = 'Active Cloud Resource'
+        lifecycle_status, lifecycle_label = ResourceClassifierEngine.resolve_lifecycle(
+            rid, rid_lower, primary_cat, has_instance_compute, is_retained_backup_only, is_snap,
+            last_seen_date=r_last_date, max_dataset_date=max_dataset_date
+        )
 
-        # Extract multi-node cluster topology (Data nodes vs Dedicated Master nodes vs Storage)
+        # 5. Extract multi-node cluster topology
         cluster_info = extract_cluster_topology(data['service'], rid, data, total_days=len(all_dates))
 
+        # 6. Resolve usage amount & formatted display via Rule Engine
         if cluster_info:
             primary_usage_amount = round(cluster_info['total_compute_hours'], 4)
             primary_unit = 'Hrs'
@@ -955,96 +890,16 @@ def build_materialized_explorer_index(cur_data: Dict[str, Any]) -> Dict[str, Any
             primary_unit = ''
             usage_display = '—'
         else:
-            # Deterministic, unit-safe usage selection without cross-unit contamination
-            unit_map = data['usage_amounts_by_unit']
-            if 'Hrs' in unit_map and (has_instance_compute or primary_cat in ('EC2_INSTANCE', 'RDS_DB_INSTANCE')):
-                primary_unit = 'Hrs'
-                primary_usage_amount = round(unit_map['Hrs'], 4)
-            elif 'GB-Mo' in unit_map and (is_snap or is_bkp or primary_cat in ('EBS_VOLUME', 'RDS_STORAGE', 'RDS_BACKUP', 'EBS_SNAPSHOT')):
-                primary_unit = 'GB-Mo'
-                primary_usage_amount = round(unit_map['GB-Mo'], 4)
-            elif 'GB' in unit_map and any('transfer' in ut.lower() or 'bytes' in ut.lower() for ut in data['usage_types'].keys()):
-                primary_unit = 'GB'
-                primary_usage_amount = round(unit_map['GB'], 4)
-            elif 'Hrs' in unit_map:
-                primary_unit = 'Hrs'
-                primary_usage_amount = round(unit_map['Hrs'], 4)
-            elif 'GB-Mo' in unit_map:
-                primary_unit = 'GB-Mo'
-                primary_usage_amount = round(unit_map['GB-Mo'], 4)
-            elif 'GB' in unit_map:
-                primary_unit = 'GB'
-                primary_usage_amount = round(unit_map['GB'], 4)
-            elif unit_map:
-                sorted_u = sorted(unit_map.items(), key=lambda x: x[1], reverse=True)
-                primary_unit, u_amt = sorted_u[0]
-                primary_usage_amount = round(u_amt, 4)
-            else:
-                primary_unit = ''
-                primary_usage_amount = 0.0
+            primary_unit, primary_usage_amount, usage_display = ResourceClassifierEngine.resolve_usage_metrics(
+                data, rid_lower, primary_cat, has_instance_compute, is_snap, is_bkp
+            )
 
-            if ':loadbalancer/' in rid_lower or data['service'] in ('Elastic Load Balancing', 'AWSELB', 'ELB'):
-                lcu_amt = unit_map.get('LCU-Hrs', 0)
-                gb_amt = unit_map.get('GB', 0)
-                hrs_amt = unit_map.get('Hrs', 0)
-                if lcu_amt > 0 and gb_amt > 0:
-                    usage_display = f"{lcu_amt:,.1f} LCU-Hrs • {gb_amt:,.1f} GB"
-                elif lcu_amt > 0:
-                    usage_display = f"{lcu_amt:,.1f} LCU-Hrs"
-                elif gb_amt > 0:
-                    usage_display = f"{gb_amt:,.1f} GB"
-                else:
-                    usage_display = f"{hrs_amt:,.0f} Hrs" if hrs_amt > 0 else '—'
-            elif primary_unit in ('Request', 'Requests') or ':webacl/' in rid_lower or data['service'] in ('AWS WAF', 'WAF', 'awswaf'):
-                if primary_usage_amount >= 1_000_000:
-                    usage_display = f"{primary_usage_amount / 1_000_000:.1f}M Requests"
-                elif primary_usage_amount >= 1_000:
-                    usage_display = f"{primary_usage_amount / 1_000:.1f}K Requests"
-                elif primary_usage_amount > 0:
-                    usage_display = f"{primary_usage_amount:,.0f} Requests"
-                else:
-                    usage_display = '—'
-            elif primary_usage_amount >= 1:
-                usage_display = f"{primary_usage_amount:,.2f} {primary_unit}"
-            elif primary_usage_amount > 0:
-                usage_display = f"{primary_usage_amount:.4f} {primary_unit}"
-            else:
-                usage_display = '—'
-
-        # Extract instance type / volume type / SKU (e.g. m6a.2xlarge, t3a.medium, db.r7i.4xl, gp3)
-        inst_type = None
-        if is_ri_contract and not rid.startswith('i-'):
-            sub_count = len(data.get('subscription_ids', set())) or len(data.get('ri_arns', set()))
-            if sub_count > 1:
-                inst_type = f"{sub_count} RI Contracts"
-            else:
-                for ut in sorted_uts:
-                    ut_str = ut[0]
-                    if 'heavyusage:' in ut_str.lower():
-                        inst_type = ut_str.split('HeavyUsage:')[-1].split(':')[-1]
-                        break
-        else:
-            for ut in sorted_uts:
-                ut_str = ut[0]
-                ut_lower = ut_str.lower()
-                if 'boxusage:' in ut_lower:
-                    inst_type = ut_str.split('BoxUsage:')[-1].split(':')[-1]
-                    break
-                elif 'heavyusage:' in ut_lower:
-                    inst_type = ut_str.split('HeavyUsage:')[-1].split(':')[-1]
-                    break
-                elif 'instanceusage:' in ut_lower:
-                    inst_type = ut_str.split('InstanceUsage:')[-1].split(':')[-1]
-                    break
-                elif 'node:' in ut_lower:
-                    inst_type = ut_str.split('Node:')[-1].split(':')[-1]
-                    break
-                elif 'esinstance:' in ut_lower:
-                    inst_type = ut_str.split('ESInstance:')[-1].split(':')[-1]
-                    break
-                elif 'volumeusage.' in ut_lower:
-                    inst_type = ut_str.split('VolumeUsage.')[-1].upper()
-                    break
+        # 7. Extract instance type
+        inst_type = (
+            (cluster_info.get('data_nodes', {}).get('instance_type') or cluster_info.get('node_info', {}).get('instance_type') or '')
+            if cluster_info
+            else ResourceClassifierEngine.extract_instance_type(sorted_uts)
+        )
 
         all_resources.append({
             'resource_id': rid,
@@ -1153,6 +1008,249 @@ def build_materialized_explorer_index(cur_data: Dict[str, Any]) -> Dict[str, Any
     cur_data['_materialized_explorer_index'] = index
     return index
 
+
+
+# ==============================================================================
+# DECLARATIVE RESOURCE CLASSIFICATION & NORMALIZATION ENGINE
+# ==============================================================================
+
+class ResourceClassifierEngine:
+    """
+    Production-grade Rule Engine replacing 99+ nested elif conditionals.
+    Encapsulates pattern matching, deterministic archetypes, labels, and lifecycle states.
+    """
+    
+    CATEGORY_PREFIX_RULES = (
+        ('i-', 'EC2_INSTANCE'),
+        ('vol-', 'EBS_VOLUME'),
+        ('nat-', 'NAT_GATEWAY'),
+        ('eipalloc-', 'ELASTIC_IP'),
+    )
+    
+    CATEGORY_SUBSTRING_RULES = (
+        (':natgateway/', 'NAT_GATEWAY', None),
+        (':distribution/', 'CLOUDFRONT_DISTRIBUTION', 'Amazon CloudFront'),
+        ('arn:aws:cloudfront', 'CLOUDFRONT_DISTRIBUTION', 'Amazon CloudFront'),
+        (':webacl/', 'WAF_WEB_ACL', 'AWS WAF'),
+        ('arn:aws:waf', 'WAF_WEB_ACL', 'AWS WAF'),
+        (':hostedzone/', 'ROUTE53_HOSTED_ZONE', 'Amazon Route 53'),
+        ('arn:aws:route53', 'ROUTE53_HOSTED_ZONE', 'Amazon Route 53'),
+        (':reserved-instances/', 'RI_SUBSCRIPTION_FEE', None),
+        (':ri:', 'RI_SUBSCRIPTION_FEE', None),
+    )
+
+    @classmethod
+    def resolve_primary_category(cls, rid: str, rid_lower: str, data: dict) -> str:
+        # 1. Prefix rules
+        for prefix, cat in cls.CATEGORY_PREFIX_RULES:
+            if rid.startswith(prefix):
+                return cat
+                
+        # 2. Database instances & backups
+        if ':db:' in rid_lower:
+            cats = data.get('categories', {})
+            uts = [ut.lower() for ut in data.get('usage_types', {}).keys()]
+            if 'RDS_DB_INSTANCE' in cats or any('instanceusage' in u or 'boxusage' in u or 'heavyusage' in u for u in uts):
+                return 'RDS_DB_INSTANCE'
+            if 'RDS_BACKUP' in cats or any('backup' in u for u in uts):
+                return 'RDS_BACKUP'
+            if 'RDS_STORAGE' in cats or any('storage' in u or 'gp3' in u or 'gp2' in u for u in uts):
+                return 'RDS_STORAGE'
+            return 'RDS_DB_INSTANCE'
+            
+        # 3. Snapshots
+        if ':snapshot/' in rid_lower or 'snap-' in rid_lower or 'rds:snap-' in rid_lower:
+            if data.get('service') == 'Amazon EC2' or ':ec2:' in rid_lower or 'snap-' in rid_lower:
+                return 'EBS_SNAPSHOT'
+            return 'RDS_SNAPSHOT'
+            
+        # 4. Substring rules
+        for substr, cat, service_override in cls.CATEGORY_SUBSTRING_RULES:
+            if substr in rid_lower:
+                if service_override:
+                    data['service'] = service_override
+                return cat
+                
+        # 5. Tax & invoices
+        if rid.startswith('TAX-') or rid == 'TAX-INVOICE-GST' or 'TAX_AND_FEES' in data.get('categories', {}):
+            data['service'] = 'Taxes & Surcharges'
+            return 'TAX_AND_FEES'
+            
+        if data.get('service') == 'AWS Marketplace':
+            return data.get('name') or "Netgate pfSense Plus Firewall / VPN"
+            
+        if rid.startswith('No-Resource-ID'):
+            if 'TAX_AND_FEES' in data.get('categories', {}):
+                data['service'] = 'Taxes & Surcharges'
+                return 'TAX_AND_FEES'
+            if 'RI_SUBSCRIPTION_FEE' in data.get('categories', {}) or data.get('ri_arns'):
+                return 'RI_SUBSCRIPTION_FEE'
+            return 'USAGE_LEVEL_COST'
+            
+        # 6. Dominant category fallback
+        sorted_cats = sorted(data.get('categories', {}).items(), key=lambda x: x[1], reverse=True)
+        return sorted_cats[0][0] if sorted_cats else 'GENERIC_RESOURCE'
+
+    @classmethod
+    def resolve_display_label(cls, rid: str, rid_lower: str, data: dict, primary_cat: str) -> str:
+        if data.get('name'):
+            return data['name']
+            
+        short_id = data.get('short_id', '')
+        if rid.startswith('i-'):
+            return f"EC2 ({short_id})"
+        if rid.startswith('vol-'):
+            return f"EBS Disk ({short_id})"
+        if ':db:' in rid_lower:
+            if primary_cat == 'RDS_BACKUP':
+                return f"RDS Retained Backup ({short_id})"
+            if primary_cat == 'RDS_STORAGE':
+                return f"RDS Disk Storage ({short_id})"
+            return f"RDS DB ({short_id})"
+        if ':snapshot/' in rid_lower or rid.startswith('snap-'):
+            return f"EBS Snapshot ({short_id})"
+        if ':natgateway/' in rid_lower or rid.startswith('nat-'):
+            return f"NAT GW ({short_id})"
+        if ':distribution/' in rid_lower or 'arn:aws:cloudfront' in rid_lower:
+            return f"Distribution ({short_id})"
+        if ':webacl/' in rid_lower or 'arn:aws:waf' in rid_lower:
+            return f"Web ACL: {short_id}"
+        if ':loadbalancer/' in rid_lower:
+            return f"Load Balancer: {short_id}"
+            
+        if data.get('service') == 'AWS Marketplace':
+            return data.get('name') or "Netgate pfSense Plus Firewall / VPN"
+            
+        if rid.startswith('No-Resource-ID'):
+            if data.get('service') in ('AWS WAF', 'WAF', 'awswaf'):
+                return "Unassociated WAF Request Volume & Managed Rules"
+            if primary_cat == 'RI_SUBSCRIPTION_FEE':
+                sub_count = len(data.get('subscription_ids', []))
+                if sub_count > 1:
+                    return f"Reserved Instance Commitment Portfolio ({sub_count} Contracts)"
+                if sub_count == 1:
+                    return f"Reserved Instance Commitment Contract #{list(data['subscription_ids'])[0]}"
+                return "Reserved Instance Commitment Portfolio"
+            op_str = f" ({list(data['operations'])[0]})" if data.get('operations') else ""
+            return f"{data.get('service', 'AWS')} Usage{op_str}"
+            
+        if primary_cat == 'RI_SUBSCRIPTION_FEE' or ':reserved-instances/' in rid_lower or ':ri:' in rid_lower:
+            return data.get('name') or f"Reserved Instance: {short_id[:8]}"
+            
+        return short_id
+
+    @classmethod
+    def resolve_lifecycle(cls, rid: str, rid_lower: str, primary_cat: str, has_instance_compute: bool, is_retained_backup_only: bool, is_snap: bool, last_seen_date: str = '', max_dataset_date: str = '') -> tuple[str, str]:
+        if primary_cat == 'RI_SUBSCRIPTION_FEE' or ':reserved-instances/' in rid_lower or ':ri:' in rid_lower:
+            return 'COMMITMENT_CONTRACT', 'Reserved Instance Commitment'
+        if rid.startswith('No-Resource-ID') or rid.startswith('TAX-') or primary_cat == 'TAX_AND_FEES':
+            return 'ACCOUNT_LEVEL_FEES', 'Account / Tax / Fee'
+        if primary_cat == 'EBS_SNAPSHOT' or is_snap:
+            return 'SNAPSHOT_STORAGE', 'Snapshot Storage Asset'
+        if primary_cat == 'RDS_BACKUP' or (is_retained_backup_only and ':db:' in rid_lower):
+            return 'RETAINED_BACKUP_STORAGE', 'Retained Backup (Terminated DB)'
+
+        # Authoritative FinOps Activity Check against CUR Reporting Boundary
+        is_terminated = bool(max_dataset_date and last_seen_date and last_seen_date < max_dataset_date)
+
+        if primary_cat == 'RDS_DB_INSTANCE' or (has_instance_compute and ':db:' in rid_lower):
+            if is_terminated:
+                return 'TERMINATED_INSTANCE', f'Terminated DB Instance (Inactive since {last_seen_date})'
+            return 'ACTIVE_INSTANCE', 'Active DB Instance'
+
+        if primary_cat == 'EC2_INSTANCE' or (has_instance_compute and rid.startswith('i-')):
+            if is_terminated:
+                return 'TERMINATED_INSTANCE', f'Terminated Workload (Inactive since {last_seen_date})'
+            return 'ACTIVE_INSTANCE', 'Active Compute Instance'
+
+        if primary_cat == 'EBS_VOLUME':
+            if is_terminated:
+                return 'DELETED_STORAGE', f'Deleted EBS Volume (Inactive since {last_seen_date})'
+            return 'PROVISIONED_STORAGE', 'EBS Block Storage'
+
+        if is_terminated:
+            return 'DECOMMISSIONED_RESOURCE', f'Decommissioned Resource (Inactive since {last_seen_date})'
+        return 'ACTIVE_RESOURCE', 'Active Cloud Resource'
+
+    @classmethod
+    def extract_instance_type(cls, sorted_uts: list) -> str:
+        for ut_str, _ in sorted_uts:
+            ut_lower = ut_str.lower()
+            if 'boxusage:' in ut_lower:
+                return ut_str.split('BoxUsage:')[-1].split(':')[-1]
+            if 'heavyusage:' in ut_lower:
+                return ut_str.split('HeavyUsage:')[-1].split(':')[-1]
+            if 'instanceusage:' in ut_lower:
+                return ut_str.split('InstanceUsage:')[-1].split(':')[-1]
+            if 'node:' in ut_lower:
+                return ut_str.split('Node:')[-1].split(':')[-1]
+            if 'esinstance:' in ut_lower:
+                return ut_str.split('ESInstance:')[-1].split(':')[-1]
+            if 'volumeusage.' in ut_lower:
+                return ut_str.split('VolumeUsage.')[-1].upper()
+        return ''
+
+    @classmethod
+    def resolve_usage_metrics(cls, data: dict, rid_lower: str, primary_cat: str, has_instance_compute: bool, is_snap: bool, is_bkp: bool) -> tuple[str, float, str]:
+        unit_map = data.get('usage_amounts_by_unit', {})
+        
+        # 1. Deterministic unit selection
+        if 'Hrs' in unit_map and (has_instance_compute or primary_cat in ('EC2_INSTANCE', 'RDS_DB_INSTANCE')):
+            primary_unit = 'Hrs'
+            primary_amt = round(unit_map['Hrs'], 4)
+        elif 'GB-Mo' in unit_map and (is_snap or is_bkp or primary_cat in ('EBS_VOLUME', 'RDS_STORAGE', 'RDS_BACKUP', 'EBS_SNAPSHOT')):
+            primary_unit = 'GB-Mo'
+            primary_amt = round(unit_map['GB-Mo'], 4)
+        elif 'GB' in unit_map and any('transfer' in ut.lower() or 'bytes' in ut.lower() for ut in data.get('usage_types', {}).keys()):
+            primary_unit = 'GB'
+            primary_amt = round(unit_map['GB'], 4)
+        elif 'Hrs' in unit_map:
+            primary_unit = 'Hrs'
+            primary_amt = round(unit_map['Hrs'], 4)
+        elif 'GB-Mo' in unit_map:
+            primary_unit = 'GB-Mo'
+            primary_amt = round(unit_map['GB-Mo'], 4)
+        elif 'GB' in unit_map:
+            primary_unit = 'GB'
+            primary_amt = round(unit_map['GB'], 4)
+        elif unit_map:
+            sorted_u = sorted(unit_map.items(), key=lambda x: x[1], reverse=True)
+            primary_unit, u_amt = sorted_u[0]
+            primary_amt = round(u_amt, 4)
+        else:
+            primary_unit = ''
+            primary_amt = 0.0
+
+        # 2. Formatted usage display
+        if ':loadbalancer/' in rid_lower or data.get('service') in ('Elastic Load Balancing', 'AWSELB', 'ELB'):
+            lcu = unit_map.get('LCU-Hrs', 0)
+            gb = unit_map.get('GB', 0)
+            hrs = unit_map.get('Hrs', 0)
+            if lcu > 0 and gb > 0:
+                display = f"{lcu:,.1f} LCU-Hrs · {gb:,.1f} GB"
+            elif lcu > 0:
+                display = f"{lcu:,.1f} LCU-Hrs"
+            elif gb > 0:
+                display = f"{gb:,.1f} GB"
+            else:
+                display = f"{hrs:,.0f} Hrs" if hrs > 0 else '—'
+        elif primary_unit in ('Request', 'Requests') or ':webacl/' in rid_lower or data.get('service') in ('AWS WAF', 'WAF', 'awswaf'):
+            if primary_amt >= 1_000_000:
+                display = f"{primary_amt / 1_000_000:.1f}M Requests"
+            elif primary_amt >= 1_000:
+                display = f"{primary_amt / 1_000:.1f}K Requests"
+            elif primary_amt > 0:
+                display = f"{primary_amt:,.0f} Requests"
+            else:
+                display = '—'
+        elif primary_amt >= 1:
+            display = f"{primary_amt:,.2f} {primary_unit}"
+        elif primary_amt > 0:
+            display = f"{primary_amt:.4f} {primary_unit}"
+        else:
+            display = '—'
+
+        return primary_unit, primary_amt, display
 
 def query_resource_explorer(
     cur_data: Dict[str, Any],
@@ -1273,19 +1371,22 @@ def query_resource_explorer(
     unallocated_spend = round_currency(unallocated_spend_dec)
     classified_cost = round_currency(classified_cost_dec)
 
-    # Sorting
+    # Dynamic sort key resolver: supports any arbitrary field without hardcoding
     reverse_sort = (sort_order.lower() == 'desc')
     if sort_by != 'cost' or not reverse_sort or has_date_filter:
-        if sort_by == 'cost':
-            filtered.sort(key=lambda x: x['total_cost'], reverse=reverse_sort)
-        elif sort_by == 'days':
-            filtered.sort(key=lambda x: x['active_days'], reverse=reverse_sort)
-        elif sort_by == 'id':
-            filtered.sort(key=lambda x: x['resource_id'], reverse=reverse_sort)
-        elif sort_by == 'name':
-            filtered.sort(key=lambda x: x['name'] or x['short_id'], reverse=reverse_sort)
-        elif sort_by == 'usage_amount':
-            filtered.sort(key=lambda x: x['usage_amount'], reverse=reverse_sort)
+        def dynamic_resource_sort_key(x):
+            if sort_by in ('name', 'resource_name'):
+                return (str(x.get('name') or x.get('short_id') or '')).lower()
+            if sort_by in ('id', 'resource_id'):
+                return str(x.get('resource_id') or '').lower()
+            if sort_by in ('days', 'active_days'):
+                return x.get('active_days', 0)
+            val = x.get(sort_by)
+            if val is not None:
+                return str(val).lower() if isinstance(val, str) else val
+            return x.get('total_cost', 0.0)
+
+        filtered.sort(key=dynamic_resource_sort_key, reverse=reverse_sort)
 
     safe_page_size = max(1, min(100, page_size))
     total_pages = max(1, math.ceil(total_records / safe_page_size))
@@ -1924,7 +2025,12 @@ def get_resource_detail(cur_data: Dict[str, Any], resource_id: str) -> Optional[
                 'is_attributed': len(c_info['benefiting_resources']) > 0
             })
 
-    # Resolve authoritative lifecycle status
+    # Resolve authoritative lifecycle status (Live CUR Activity Check)
+    all_dates = cur_data.get('dates', [])
+    max_dataset_date = max(all_dates) if all_dates else ''
+    r_last_date = max(daily_spend.keys()) if daily_spend else (sample.get('last_seen', '').split(' ')[0] if sample.get('last_seen') else '')
+    is_terminated = bool(max_dataset_date and r_last_date and r_last_date < max_dataset_date)
+
     if resource_id.startswith('No-Resource-ID') or resource_id.startswith('TAX-') or cls['category'] == 'TAX_AND_FEES':
         if cls['category'] == 'RI_SUBSCRIPTION_FEE' or is_comm:
             lifecycle_status = 'COMMITMENT_CONTRACT'
@@ -1933,11 +2039,19 @@ def get_resource_detail(cur_data: Dict[str, Any], resource_id: str) -> Optional[
             lifecycle_status = 'ACCOUNT_LEVEL_FEES'
             lifecycle_label = 'Account / Tax / Fee'
     elif cls['category'] == 'RDS_DB_INSTANCE':
-        lifecycle_status = 'ACTIVE_INSTANCE'
-        lifecycle_label = 'Active DB Instance'
+        if is_terminated:
+            lifecycle_status = 'TERMINATED_INSTANCE'
+            lifecycle_label = f'Terminated DB Instance (Inactive since {r_last_date})'
+        else:
+            lifecycle_status = 'ACTIVE_INSTANCE'
+            lifecycle_label = 'Active DB Instance'
     elif cls['category'] == 'EC2_INSTANCE':
-        lifecycle_status = 'ACTIVE_INSTANCE'
-        lifecycle_label = 'Active Compute Instance'
+        if is_terminated:
+            lifecycle_status = 'TERMINATED_INSTANCE'
+            lifecycle_label = f'Terminated Workload (Inactive since {r_last_date})'
+        else:
+            lifecycle_status = 'ACTIVE_INSTANCE'
+            lifecycle_label = 'Active Compute Instance'
     elif cls['category'] in ('EBS_SNAPSHOT', 'RDS_SNAPSHOT'):
         lifecycle_status = 'SNAPSHOT_STORAGE'
         lifecycle_label = 'Snapshot Storage Asset'
@@ -1945,11 +2059,19 @@ def get_resource_detail(cur_data: Dict[str, Any], resource_id: str) -> Optional[
         lifecycle_status = 'RETAINED_BACKUP_STORAGE'
         lifecycle_label = 'Retained Backup (Terminated DB)'
     elif cls['category'] == 'EBS_VOLUME':
-        lifecycle_status = 'PROVISIONED_STORAGE'
-        lifecycle_label = 'EBS Block Storage'
+        if is_terminated:
+            lifecycle_status = 'DELETED_STORAGE'
+            lifecycle_label = f'Deleted EBS Volume (Inactive since {r_last_date})'
+        else:
+            lifecycle_status = 'PROVISIONED_STORAGE'
+            lifecycle_label = 'EBS Block Storage'
     else:
-        lifecycle_status = 'ACTIVE_RESOURCE'
-        lifecycle_label = 'Active Cloud Resource'
+        if is_terminated:
+            lifecycle_status = 'DECOMMISSIONED_RESOURCE'
+            lifecycle_label = f'Decommissioned Resource (Inactive since {r_last_date})'
+        else:
+            lifecycle_status = 'ACTIVE_RESOURCE'
+            lifecycle_label = 'Active Cloud Resource'
 
     if is_comm and (cls['category'] == 'RI_SUBSCRIPTION_FEE' or resource_id.startswith('No-Resource-ID')):
         if len(sub_ids_for_resource) > 1:
