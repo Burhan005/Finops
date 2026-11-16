@@ -185,5 +185,8 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         target_pg = sys.argv[1]
     else:
-        target_pg = os.getenv("DATABASE_URL", "postgresql://zorvex_app:yhE7Z%2Arp%21%29%23D734@localhost:5432/finops_db")
+        target_pg = os.getenv("DATABASE_URL")
+        if not target_pg:
+            print("ERROR: DATABASE_URL must be provided as argument or set in environment.")
+            sys.exit(1)
     run_migration(target_pg)

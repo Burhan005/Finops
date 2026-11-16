@@ -117,13 +117,15 @@ def sanitize_upload_filename(filename: str) -> str:
 
 import uuid
 from datetime import datetime, timezone, timedelta
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import jwt
 
-JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "zorvex-finops-production-super-secret-jwt-key-2026-secure")
-JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "15"))
-REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "7"))
+from .core.config import (
+    JWT_SECRET_KEY,
+    JWT_ALGORITHM,
+    ACCESS_TOKEN_EXPIRE_MINUTES,
+    REFRESH_TOKEN_EXPIRE_DAYS
+)
 
 def create_access_token(
     user_id: int,

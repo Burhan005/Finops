@@ -4,6 +4,7 @@ Provides environment variable bindings, canonical paths, session controls, and s
 """
 
 import os
+import secrets
 from pathlib import Path
 from typing import List
 from dotenv import load_dotenv
@@ -34,10 +35,10 @@ ENVIRONMENT = os.getenv("ENVIRONMENT", "production")
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8050"))
 
-# Database Configuration (PostgreSQL 18 default)
+# Database Configuration (PostgreSQL default via .env, fallback to local SQLite)
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql://zorvex_app:yhE7Z%2Arp%21%29%23D734@localhost:5432/finops_db"
+    f"sqlite:///{os.path.join(DATA_DIR, 'finops.db')}"
 )
 
 # Cache / Redis
@@ -46,8 +47,19 @@ CACHE_TTL_DEFAULT = int(os.getenv("CACHE_TTL_DEFAULT", "300"))
 CACHE_TTL_OVERVIEW = int(os.getenv("CACHE_TTL_OVERVIEW", "60"))
 
 # Security & Authentication
-# JWT & Session Token Security
-JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "zorvex-finops-production-super-secret-jwt-key-2026-secure")
+# JWT & Session Token Security (strictly loaded from .env or securely generated ephemeral key)
+_env_jwt_secret = os.getenv("JWT_SECRET_KEY")
+if _env_jwt_secret:
+    JWT_SECRET_KEY = _env_jwt_secret
+else:
+    # Auto-generate dynamic cryptographically secure 256-bit key at runtime
+    JWT_SECRET_KEY = secrets.token_hex(32)
+    if ENVIRONMENT == "production":
+        import logging
+        logging.getLogger("zorvex.security").warning(
+            "[SECURITY NOTICE] JWT_SECRET_KEY not set in environment. Generated an ephemeral in-memory 256-bit key."
+        )
+
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "15"))
 REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "7"))
@@ -55,15 +67,15 @@ REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "7"))
 SESSION_TTL_HOURS = int(os.getenv("ZORVEX_SESSION_TTL_HOURS", "8"))
 MAX_UPLOAD_BYTES = int(os.getenv("ZORVEX_MAX_UPLOAD_BYTES", str(100 * 1024 * 1024)))  # 100 MB
 
-# Seed / Initial Admin Configuration
+# Seed / Initial Admin Configuration (strictly loaded from environment)
 SEED_ADMIN_EMAIL = os.getenv("SEED_ADMIN_EMAIL", "cloudops@finopsclay.io")
-SEED_ADMIN_PASSWORD = os.getenv("SEED_ADMIN_PASSWORD", "Password123!")
+SEED_ADMIN_PASSWORD = os.getenv("SEED_ADMIN_PASSWORD", "")
 DEFAULT_CONTACT_EMAIL = os.getenv("DEFAULT_CONTACT_EMAIL", "cloudops@finopsclay.io")
 
-if ENVIRONMENT == "production" and SEED_ADMIN_PASSWORD == "Password123!":
+if ENVIRONMENT == "production" and (not SEED_ADMIN_PASSWORD or SEED_ADMIN_PASSWORD == "Password123!"):
     import logging
     logging.getLogger("zorvex.security").warning(
-        "[SECURITY ADVISORY] System running in production with default SEED_ADMIN_PASSWORD. Please configure a custom SEED_ADMIN_PASSWORD."
+        "[SECURITY ADVISORY] System running with default or unconfigured SEED_ADMIN_PASSWORD. Please configure a custom SEED_ADMIN_PASSWORD in .env."
     )
 
 # Rate Limiting Controls
