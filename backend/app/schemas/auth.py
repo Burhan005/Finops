@@ -34,3 +34,16 @@ class CaptchaChallengeResponse(BaseModel):
     challenge_svg: str
     challenge_type: str
     expires_in: int
+
+
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str
+
+
+class TokenResponse(BaseModel):
+    token: str
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    expires_in: int
+    user: Optional[dict] = None

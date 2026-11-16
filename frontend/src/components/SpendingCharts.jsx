@@ -80,6 +80,14 @@ function SpendingCharts({ overview, trends, currency = 'USD', forexData, filterS
       : `$${converted.toFixed(2)}`;
   };
 
+  // Format signed currency delta helper (e.g. +$12.50 or -$8.20)
+  const formatDelta = (deltaVal) => {
+    const sign = deltaVal > 0.005 ? '+' : deltaVal < -0.005 ? '-' : '';
+    const absVal = Math.abs(deltaVal);
+    const converted = isINR ? Math.round(absVal * fxRate).toLocaleString('en-IN') : absVal.toFixed(2);
+    return `${sign}${symbol}${converted}`;
+  };
+
   // Prepare Daily Trajectory Data
   const dailyTotals = (metricMode === 'gross' && hasGross)
     ? overview.daily_gross_totals
@@ -469,11 +477,19 @@ function SpendingCharts({ overview, trends, currency = 'USD', forexData, filterS
           afterLabel: (context) => {
             const idx = context.dataIndex;
             const spend = rawSpendData[idx];
-            if (spend !== undefined && avgDailySpend > 0 && viewMode === 'daily') {
-              const diff = ((spend - avgDailySpend) / avgDailySpend) * 100;
-              return `  Benchmark: ${diff > 0 ? '+' : ''}${diff.toFixed(1)}% vs 16-day avg`;
+            if (spend === undefined || viewMode !== 'daily') return '';
+
+            if (idx === 0) {
+              return '  Day-over-Day: Initial Period Baseline';
             }
-            return '';
+
+            const prevSpend = rawSpendData[idx - 1];
+            const delta = spend - prevSpend;
+            const pct = prevSpend > 0 ? (delta / prevSpend) * 100 : 0;
+            const prevDateLabel = dates[idx - 1] ? dates[idx - 1].slice(5) : 'prev day';
+            const sign = delta > 0.005 ? '+' : '';
+
+            return `  Day-over-Day: ${formatDelta(delta)} (${sign}${pct.toFixed(1)}% vs ${prevDateLabel})`;
           }
         }
       }
@@ -735,7 +751,7 @@ function SpendingCharts({ overview, trends, currency = 'USD', forexData, filterS
                     : 'text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary hover:text-zorvex-text'
                 }`}
               >
-                <span className="hidden sm:inline">16-Day </span>Trajectory
+                <span className="hidden sm:inline">{dates.length > 0 ? `${dates.length}-Day ` : 'Daily '}</span>Trajectory
               </button>
               <button
                 type="button"
@@ -1045,12 +1061,22 @@ function SpendingCharts({ overview, trends, currency = 'USD', forexData, filterS
                   </div>
                   <div className="text-[11px] text-zorvex-text-muted mt-0.5">
                     Total Day Spend: <span className="font-mono font-bold text-zorvex-forest dark:text-zorvex-forest-highlight">{fmt(inspectedDate.spend)}</span>
-                    {avgDailySpend > 0 && (
-                      <span className={`ml-2 font-mono font-semibold ${
-                        inspectedDate.spend > avgDailySpend ? 'text-rose-500' : 'text-emerald-500'
-                      }`}>
-                        ({inspectedDate.spend > avgDailySpend ? '+' : ''}{(((inspectedDate.spend - avgDailySpend) / avgDailySpend) * 100).toFixed(1)}% vs avg)
-                      </span>
+                    {inspectedDate.idx > 0 && (
+                      (() => {
+                        const prev = rawSpendData[inspectedDate.idx - 1] || 0;
+                        const delta = inspectedDate.spend - prev;
+                        const pct = prev > 0 ? (delta / prev) * 100 : 0;
+                        const prevDate = dates[inspectedDate.idx - 1]?.slice(5) || 'prev day';
+                        const isUp = delta > 0.005;
+                        const isDown = delta < -0.005;
+                        return (
+                          <span className={`ml-2 font-mono font-semibold ${
+                            isUp ? 'text-rose-500' : isDown ? 'text-emerald-500' : 'text-zorvex-text-muted'
+                          }`}>
+                            ({formatDelta(delta)} / {isUp ? '+' : ''}{pct.toFixed(1)}% vs {prevDate})
+                          </span>
+                        );
+                      })()
                     )}
                   </div>
                 </div>

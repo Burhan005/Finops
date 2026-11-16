@@ -3,8 +3,6 @@ import AnimatedCounter from './common/AnimatedCounter';
 
 import { DollarSign, TrendingUp, TrendingDown, Coins, Server, ShieldCheck, Zap, ArrowUpRight, Globe } from 'lucide-react';
 
-
-
 function KpiCards({ overview, recommendations, forexData, currency = 'USD' }) {
   if (!overview) return null;
 
@@ -24,12 +22,7 @@ function KpiCards({ overview, recommendations, forexData, currency = 'USD' }) {
   const savings = overview.potential_savings || recommendations?.total_potential_savings || recommendations?.summary?.total_monthly_savings || 0;
   const resCount = overview.total_resources || overview.matching_resources_count || overview.total_rows || 0;
 
-
-
-
   const isSpike = deltaCost > 0.01;
-
-
 
   // Real-time dynamic Forex rate from live open exchange API
 
@@ -43,15 +36,10 @@ function KpiCards({ overview, recommendations, forexData, currency = 'USD' }) {
 
   
 
-  // Dynamic Optimization Health Score (90-98 based on waste-to-spend ratio)
-
-  const wasteRatio = totalCost > 0 ? (savings / (totalCost * 2)) : 0;
-
-  const healthScore = Math.max(82, Math.min(98, Math.round(100 - (wasteRatio * 100))));
-
-  const healthGrade = healthScore >= 90 ? 'Grade A' : 'Grade B';
-
-
+  // Transparent FinOps Cost Efficiency Score: (Productive Spend / Total Monitored Spend)
+  const wasteRatio = totalCost > 0 ? Math.min(savings / totalCost, 1.0) : 0;
+  const healthScore = totalCost > 0 ? Math.max(0, Math.min(100, Math.round((1 - wasteRatio) * 100))) : 100;
+  const healthGrade = healthScore >= 95 ? 'Grade A+' : (healthScore >= 88 ? 'Grade A' : (healthScore >= 75 ? 'Grade B' : (healthScore >= 60 ? 'Grade C' : 'Needs Review')));
 
   return (
 
@@ -103,8 +91,6 @@ function KpiCards({ overview, recommendations, forexData, currency = 'USD' }) {
 
         </div>
 
-
-
         {/* Combined Executive Metrics: Annual Run-Rate ROI & FinOps Health Score */}
 
         <div className="w-full md:w-auto flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 sm:gap-4 bg-zorvex-surface/80 dark:bg-zorvex-dark-surface/80 px-4 py-2.5 rounded-xl border border-zorvex-border dark:border-zorvex-dark-border shadow-sm">
@@ -139,11 +125,7 @@ function KpiCards({ overview, recommendations, forexData, currency = 'USD' }) {
 
           </div>
 
-
-
           <div className="hidden sm:block h-8 w-px bg-zorvex-border dark:bg-zorvex-dark-border" />
-
-
 
           {/* Account FinOps Health Score */}
 
@@ -178,8 +160,6 @@ function KpiCards({ overview, recommendations, forexData, currency = 'USD' }) {
         </div>
 
       </div>
-
-
 
       {/* 4 Core KPI Cards */}
 
@@ -239,8 +219,6 @@ function KpiCards({ overview, recommendations, forexData, currency = 'USD' }) {
 
             </div>
 
-
-
             {/* Financial Reconciliation Breakdown (Gross vs Net Invoiced) */}
 
             {(overview.accounting_reconciliation || overview.taxes_total > 0 || overview.gross_cost !== overview.net_cost) && (
@@ -248,43 +226,24 @@ function KpiCards({ overview, recommendations, forexData, currency = 'USD' }) {
               <div className="pt-2 mt-2 border-t border-zorvex-border/50 dark:border-zorvex-dark-border/50 text-[10px] space-y-0.5">
 
                 <div className="flex items-center justify-between text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">
-
                   <span>Gross Usage:</span>
-
                   <span className="font-mono font-bold text-zorvex-text dark:text-zorvex-dark-text">
-
                     ${(overview.gross_cost || totalCost).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-
                   </span>
-
                 </div>
-
                 {overview.taxes_total > 0 && (
-
                   <div className="flex items-center justify-between text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">
-
                     <span>Tax (GST):</span>
-
                     <span className="font-mono font-bold text-amber-600 dark:text-amber-400">
-
                       +${overview.taxes_total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-
                     </span>
-
                   </div>
-
                 )}
-
                 <div className="flex items-center justify-between font-bold text-zorvex-forest dark:text-zorvex-forest-highlight">
-
                   <span>Net Invoiced:</span>
-
                   <span className="font-mono">
-
                     ${(overview.net_cost || totalCost).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-
                   </span>
-
                 </div>
 
               </div>
@@ -294,8 +253,6 @@ function KpiCards({ overview, recommendations, forexData, currency = 'USD' }) {
           </div>
 
         </div>
-
-
 
         {/* 2. Latest Daily Delta */}
 
@@ -366,8 +323,6 @@ function KpiCards({ overview, recommendations, forexData, currency = 'USD' }) {
 
         </div>
 
-
-
         {/* 3. Potential Monthly Savings */}
 
         <div className="clay-card p-5 sm:p-6 flex flex-col justify-between relative overflow-hidden">
@@ -390,7 +345,7 @@ function KpiCards({ overview, recommendations, forexData, currency = 'USD' }) {
 
           <div>
 
-            <div className="text-2xl sm:text-3xl font-extrabold text-zorvex-forest dark:text-zorvex-dark-forest tracking-tight font-mono">
+                        <div className="text-2xl sm:text-3xl font-extrabold text-zorvex-forest dark:text-zorvex-dark-forest tracking-tight font-mono">
               <AnimatedCounter
                 value={savings}
                 prefix="$"
@@ -418,8 +373,6 @@ function KpiCards({ overview, recommendations, forexData, currency = 'USD' }) {
           </div>
 
         </div>
-
-
 
         {/* 4. Monitored Resources */}
 
@@ -467,18 +420,12 @@ function KpiCards({ overview, recommendations, forexData, currency = 'USD' }) {
 
         </div>
 
-
-
       </div>
-
-
 
     </div>
 
   );
 
 }
-
-
 
 export default React.memo(KpiCards);

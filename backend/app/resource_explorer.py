@@ -1,3 +1,4 @@
+from datetime import datetime
 """
 ZORVEX CUR-Driven Resource Explorer & Snapshot Cost Intelligence Engine
 Authoritative asset classification, cost aggregation, and snapshot intelligence
@@ -487,7 +488,7 @@ def get_available_hierarchies(cur_data: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
-def extract_cluster_topology(service: str, resource_id: str, data: Dict[str, Any], total_days: int) -> Optional[Dict[str, Any]]:
+def extract_cluster_topology(service: str, resource_id: str, data: Dict[str, Any], total_days: int, dataset_start_date: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """
     Decomposes multi-node cluster resources (OpenSearch, Elasticsearch, Redshift)
     into constituent Data Nodes, Dedicated Master Nodes, Provisioned Storage,
@@ -521,7 +522,13 @@ def extract_cluster_topology(service: str, resource_id: str, data: Dict[str, Any
             ut_lower = ut.lower()
             if 'esinstance:' in ut_lower or 'instance' in ut_lower:
                 inst_type = ut.split(':')[-1] if ':' in ut else ut
-                count = round(amt / (days * 24)) if (days * 24) > 0 else 1
+                daily_map = data.get('usage_by_type_and_date', {}).get(ut, {})
+                peak_daily = max(daily_map.values()) if daily_map else 0.0
+                if peak_daily >= 18.0:
+                    count = round(peak_daily / 24.0)
+                else:
+                    active_days = max(len(data.get('dates', {})), 1)
+                    count = max(1, round(amt / (active_days * 24.0)))
                 count = max(count, 1)
                 node_types[inst_type] = {
                     'instance_type': inst_type,
@@ -572,6 +579,50 @@ def extract_cluster_topology(service: str, resource_id: str, data: Dict[str, Any
         total_hours = sum(n['hours'] for n in node_types.values())
         total_nodes = sum(n['estimated_count'] for n in node_types.values())
 
+        first_seen = (data.get('first_seen') or '').split(' ')[0]
+        compute_cost_dates = []
+        for ut_key, dates_map in data.get('cost_by_type_and_date', {}).items():
+            if 'instance' in ut_key.lower() or 'esinstance:' in ut_key.lower():
+                for d_key, c_val in dates_map.items():
+                    if c_val > 0:
+                        compute_cost_dates.append(d_key)
+
+        on_demand_start = min(compute_cost_dates) if compute_cost_dates else None
+
+        on_demand_badge = None
+        total_compute_cost = sum(n['cost'] for n in node_types.values())
+        if total_compute_cost > 0:
+            if on_demand_start:
+                try:
+                    dt = datetime.strptime(on_demand_start, '%Y-%m-%d')
+                    start_str = dt.strftime('%b %d')
+                except Exception:
+                    start_str = on_demand_start
+
+                ds_start = dataset_start_date or (min(data.get('dates', {}).keys()) if data.get('dates') else '')
+                is_new_launch = bool(on_demand_start == first_seen and ds_start and first_seen > ds_start)
+                if is_new_launch:
+                    on_demand_label = f"Newly Launched • On-Demand since {start_str} (${total_compute_cost:.2f} compute)"
+                    on_demand_tooltip = f"Domain was newly provisioned on {on_demand_start} as unreserved On-Demand compute."
+                elif first_seen and on_demand_start > first_seen:
+                    on_demand_label = f"On-Demand since {start_str} (${total_compute_cost:.2f} compute)"
+                    on_demand_tooltip = f"Reserved Instance expired on {on_demand_start}. Cluster transitioned to unreserved On-Demand compute."
+                else:
+                    on_demand_label = f"On-Demand since {start_str} (${total_compute_cost:.2f} compute)"
+                    on_demand_tooltip = f"Unreserved On-Demand compute active since {on_demand_start}."
+            else:
+                is_new_launch = False
+                on_demand_label = f"On-Demand (${total_compute_cost:.2f} compute)"
+                on_demand_tooltip = "Unreserved On-Demand compute."
+
+            on_demand_badge = {
+                'label': on_demand_label,
+                'tooltip': on_demand_tooltip,
+                'start_date': on_demand_start,
+                'cost': round(total_compute_cost, 2),
+                'is_new_launch': is_new_launch
+            }
+
         return {
             'is_cluster': True,
             'cluster_type': 'OpenSearch Domain',
@@ -587,7 +638,8 @@ def extract_cluster_topology(service: str, resource_id: str, data: Dict[str, Any
             'network_cost': round(transfer_cost, 2),
             'summary_label': ' • '.join(summary_parts),
             'total_compute_hours': total_hours,
-            'node_count': total_nodes
+            'node_count': total_nodes,
+            'on_demand_badge': on_demand_badge
         }
 
     elif is_redshift:
@@ -600,7 +652,13 @@ def extract_cluster_topology(service: str, resource_id: str, data: Dict[str, Any
             ut_lower = ut.lower()
             if 'node:' in ut_lower:
                 inst_type = ut.split(':')[-1] if ':' in ut else ut
-                count = round(amt / (days * 24)) if (days * 24) > 0 else 1
+                daily_map = data.get('usage_by_type_and_date', {}).get(ut, {})
+                peak_daily = max(daily_map.values()) if daily_map else 0.0
+                if peak_daily >= 18.0:
+                    count = round(peak_daily / 24.0)
+                else:
+                    active_days = max(len(data.get('dates', {})), 1)
+                    count = max(1, round(amt / (active_days * 24.0)))
                 count = max(count, 1)
                 node_info = {
                     'instance_type': inst_type,
@@ -660,6 +718,8 @@ def build_materialized_explorer_index(cur_data: Dict[str, Any]) -> Dict[str, Any
         'usage_amounts_by_unit': defaultdict(float),
         'usage_by_type': defaultdict(float),
         'cost_by_type': defaultdict(float),
+        'usage_by_type_and_date': defaultdict(lambda: defaultdict(float)),
+        'cost_by_type_and_date': defaultdict(lambda: defaultdict(float)),
         'dates': defaultdict(float),
         'dates_dec': defaultdict(Decimal),
         'usage_types': defaultdict(float),
@@ -755,6 +815,9 @@ def build_materialized_explorer_index(cur_data: Dict[str, Any]) -> Dict[str, Any
         if ut:
             entry['usage_by_type'][ut] += u_amt
             entry['cost_by_type'][ut] += cost
+            if r_date:
+                entry['usage_by_type_and_date'][ut][r_date] += u_amt
+                entry['cost_by_type_and_date'][ut][r_date] += cost
 
         entry['dates_dec'][r_date] += cost_dec
         entry['dates'][r_date] += cost
@@ -878,7 +941,7 @@ def build_materialized_explorer_index(cur_data: Dict[str, Any]) -> Dict[str, Any
         )
 
         # 5. Extract multi-node cluster topology
-        cluster_info = extract_cluster_topology(data['service'], rid, data, total_days=len(all_dates))
+        cluster_info = extract_cluster_topology(data['service'], rid, data, total_days=len(all_dates), dataset_start_date=min(all_dates) if all_dates else None)
 
         # 6. Resolve usage amount & formatted display via Rule Engine
         if cluster_info:
@@ -1155,12 +1218,12 @@ class ResourceClassifierEngine:
 
         if primary_cat == 'RDS_DB_INSTANCE' or (has_instance_compute and ':db:' in rid_lower):
             if is_terminated:
-                return 'TERMINATED_INSTANCE', f'Terminated DB Instance (Inactive since {last_seen_date})'
+                return 'STOPPED_INSTANCE', f'Stopped / Inactive DB (Since {last_seen_date})'
             return 'ACTIVE_INSTANCE', 'Active DB Instance'
 
         if primary_cat == 'EC2_INSTANCE' or (has_instance_compute and rid.startswith('i-')):
             if is_terminated:
-                return 'TERMINATED_INSTANCE', f'Terminated Workload (Inactive since {last_seen_date})'
+                return 'STOPPED_INSTANCE', f'Stopped / Inactive Workload (Since {last_seen_date})'
             return 'ACTIVE_INSTANCE', 'Active Compute Instance'
 
         if primary_cat == 'EBS_VOLUME':
@@ -1436,35 +1499,61 @@ def query_resource_explorer(
         'charge_dates_count': charge_dates_count
     }
 
-    active_instances = [r for r in filtered if r.get('lifecycle_status') == 'ACTIVE_INSTANCE']
-    retained_backups = [r for r in filtered if r.get('lifecycle_status') in ('RETAINED_BACKUP_STORAGE', 'SNAPSHOT_STORAGE')]
+    # Calculate Authoritative Inventory across the FULL Amazon RDS service, not skewed by local category filters
+    rds_all = index['by_service'].get('Amazon RDS', []) if service == 'Amazon RDS' else filtered
+    active_instances = [
+        r for r in rds_all
+        if not (r.get('resource_id') or '').startswith('No-Resource-ID')
+        and (
+            r.get('category') in ('RDS_DB_INSTANCE', 'RDS_STORAGE')
+            or any(('storage' in ut.lower() or 'instance' in ut.lower() or 'heavyusage' in ut.lower() or 'datatransfer' in ut.lower()) and 'backup' not in ut.lower() for ut in r.get('usage_types', []))
+        )
+    ]
     active_instances_count = len(active_instances)
-    retained_backups_count = len(retained_backups)
 
-    # Collect actual unique database/resource names dynamically from the filtered resources
     active_db_names = []
+    active_instances_with_backups = []
     for r in active_instances:
         name = r.get('name') or r.get('short_id') or r.get('resource_id')
+        if name and name.startswith('arn:aws:rds'):
+            name = name.split(':')[-1]
         if name and name not in active_db_names:
             active_db_names.append(name)
+        if any('backup' in ut.lower() for ut in r.get('usage_types', [])):
+            if name and name not in active_instances_with_backups:
+                active_instances_with_backups.append(name)
+
+    retained_backups = [
+        r for r in rds_all
+        if not (r.get('resource_id') or '').startswith('No-Resource-ID')
+        and (r.get('category') == 'RDS_BACKUP' or r.get('lifecycle_status') == 'RETAINED_BACKUP_STORAGE')
+        and r not in active_instances
+    ]
+    retained_backups_count = len(retained_backups)
 
     retained_backup_names = []
     for r in retained_backups:
         name = r.get('name') or r.get('short_id') or r.get('resource_id')
+        if name and name.startswith('arn:aws:rds'):
+            name = name.split(':')[-1]
         if name and name not in retained_backup_names:
             retained_backup_names.append(name)
 
     if service == 'Amazon RDS':
         active_list_str = f" ({', '.join(active_db_names[:4])})" if active_db_names else ""
+        backup_str = f" ({', '.join(active_instances_with_backups[:3])})" if active_instances_with_backups else ""
+        retained_list_str = f" ({', '.join(retained_backup_names[:4])})" if retained_backup_names else ""
+
         if retained_backups_count > 0:
-            retained_list_str = f" ({', '.join(retained_backup_names[:4])})" if retained_backup_names else ""
             reconciliation_note = (
-                f"Authoritative AWS inventory contains {active_instances_count} active database instance{'s' if active_instances_count != 1 else ''}{active_list_str}. "
-                f"The remaining {retained_backups_count} identifier{'s represent' if retained_backups_count != 1 else ' represents'} retained automated backup storage from terminated databases{retained_list_str}."
+                f"Authoritative AWS inventory contains {active_instances_count} active database instances{active_list_str}. "
+                f"Automated backups are actively billed for {len(active_instances_with_backups)} instances{backup_str}. "
+                f"The remaining {retained_backups_count} identifiers represent retained backup storage from decommissioned databases{retained_list_str}."
             )
         else:
             reconciliation_note = (
-                f"Authoritative AWS inventory contains {active_instances_count} active database instance{'s' if active_instances_count != 1 else ''}{active_list_str} with zero retained backup storage."
+                f"Authoritative AWS inventory contains {active_instances_count} active database instances{active_list_str}. "
+                f"Automated backups are actively billed for {len(active_instances_with_backups)} instances{backup_str}."
             )
     else:
         reconciliation_note = f"{active_instances_count} active compute instances and {retained_backups_count} snapshot/backup storage assets in {service}."
@@ -1472,9 +1561,10 @@ def query_resource_explorer(
     inventory_reconciliation = {
         'active_instances': active_instances_count,
         'active_instance_names': active_db_names,
+        'active_instances_with_backups': active_instances_with_backups,
         'retained_backups': retained_backups_count,
         'retained_backup_names': retained_backup_names,
-        'total_billable_identifiers': unique_count,
+        'total_billable_identifiers': len(rds_all) if service == 'Amazon RDS' else unique_count,
         'scope': service,
         'reconciliation_note': reconciliation_note
     }
@@ -1760,7 +1850,13 @@ def query_resource_explorer(
         for rec in cur_data.get('records', []):
             prod = (rec.get('prod') or rec.get('service') or '')
             prod_clean = prod.lower().replace('amazon', '').replace('aws', '').replace(' ', '').replace('/', '').replace('_', '')
-            if prod_clean == svc_clean or normalize_service_code(prod) == service or prod == service:
+            prod_norm = normalize_service_code(prod)
+            if (
+                prod_clean == svc_clean or 
+                prod == service or 
+                prod_norm == service or 
+                (service_norm and (prod_norm == service_norm or prod == service_norm))
+            ):
                 ut = rec.get('usage') or rec.get('usage_type') or 'General Usage'
                 cost_val = Decimal(str(rec.get('cost') or 0.0))
                 amt = float(rec.get('usage_amount') or rec.get('amount') or 0.0)
@@ -1865,6 +1961,8 @@ def get_resource_detail(cur_data: Dict[str, Any], resource_id: str) -> Optional[
     usage_amounts_by_unit = defaultdict(float)
     usage_by_type = defaultdict(float)
     cost_by_type = defaultdict(float)
+    usage_by_type_and_date = defaultdict(lambda: defaultdict(float))
+    cost_by_type_and_date = defaultdict(lambda: defaultdict(float))
     operations = set()
     line_types = set()
     units = set()
@@ -1875,11 +1973,15 @@ def get_resource_detail(cur_data: Dict[str, Any], resource_id: str) -> Optional[
         u_unit = r.get('unit', '') or ''
         ut = r.get('usage_type', '')
 
-        daily_spend[r.get('date', '')] += cost_val
+        r_dt = (r.get('date') or '').split(' ')[0]
+        daily_spend[r_dt] += cost_val
         usage_type_spend[ut] += cost_val
         if ut:
             usage_by_type[ut] += u_amt
             cost_by_type[ut] += cost_val
+            if r_dt:
+                usage_by_type_and_date[ut][r_dt] += u_amt
+                cost_by_type_and_date[ut][r_dt] += cost_val
         if u_unit:
             units.add(u_unit)
             usage_amounts_by_unit[u_unit] += u_amt
@@ -1895,8 +1997,16 @@ def get_resource_detail(cur_data: Dict[str, Any], resource_id: str) -> Optional[
     cluster_info = extract_cluster_topology(
         cls['service'], 
         resource_id, 
-        {'usage_by_type': usage_by_type, 'cost_by_type': cost_by_type}, 
-        total_days=len(daily_spend)
+        {
+            'usage_by_type': usage_by_type, 
+            'cost_by_type': cost_by_type,
+            'usage_by_type_and_date': usage_by_type_and_date,
+            'cost_by_type_and_date': cost_by_type_and_date,
+            'first_seen': min(daily_spend.keys()) if daily_spend else '',
+            'dates': daily_spend
+        }, 
+        total_days=len(daily_spend),
+        dataset_start_date=min(daily_spend.keys()) if daily_spend else None
     )
 
     if cluster_info:
@@ -2040,15 +2150,15 @@ def get_resource_detail(cur_data: Dict[str, Any], resource_id: str) -> Optional[
             lifecycle_label = 'Account / Tax / Fee'
     elif cls['category'] == 'RDS_DB_INSTANCE':
         if is_terminated:
-            lifecycle_status = 'TERMINATED_INSTANCE'
-            lifecycle_label = f'Terminated DB Instance (Inactive since {r_last_date})'
+            lifecycle_status = 'STOPPED_INSTANCE'
+            lifecycle_label = f'Stopped / Inactive DB (Since {r_last_date})'
         else:
             lifecycle_status = 'ACTIVE_INSTANCE'
             lifecycle_label = 'Active DB Instance'
     elif cls['category'] == 'EC2_INSTANCE':
         if is_terminated:
-            lifecycle_status = 'TERMINATED_INSTANCE'
-            lifecycle_label = f'Terminated Workload (Inactive since {r_last_date})'
+            lifecycle_status = 'STOPPED_INSTANCE'
+            lifecycle_label = f'Stopped / Inactive Workload (Since {r_last_date})'
         else:
             lifecycle_status = 'ACTIVE_INSTANCE'
             lifecycle_label = 'Active Compute Instance'

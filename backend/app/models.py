@@ -5,7 +5,7 @@ cryptographic reset tokens, normalized billing persistence, and foreign key inte
 """
 
 from datetime import datetime, timezone
-from sqlalchemy import Column, Integer, String, Float, DateTime, Text, ForeignKey, UniqueConstraint, Index
+from sqlalchemy import Column, Integer, String, Float, Numeric, DateTime, Text, ForeignKey, UniqueConstraint, Index
 from sqlalchemy.orm import relationship
 from .database import Base
 
@@ -17,7 +17,7 @@ def utc_now():
 class Organization(Base):
     __tablename__ = "organizations"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     name = Column(String(128), unique=True, index=True, nullable=False)
     created_at = Column(DateTime, default=utc_now)
 
@@ -27,7 +27,7 @@ class Organization(Base):
 class User(Base):
     __tablename__ = "users"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), index=True, nullable=True)
     name = Column(String(128), nullable=False)
     company = Column(String(128), nullable=False)
@@ -43,8 +43,8 @@ class User(Base):
 class UserSession(Base):
     __tablename__ = "user_sessions"
 
-    id = Column(Integer, primary_key=True, index=True)
-    token = Column(String(255), unique=True, index=True, nullable=False)
+    id = Column(Integer, primary_key=True)
+    token = Column(String(512), unique=True, index=True, nullable=False)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
     organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), index=True, nullable=True)
     expires_at = Column(DateTime, nullable=True)
@@ -56,7 +56,7 @@ class UserSession(Base):
 class PasswordResetToken(Base):
     __tablename__ = "password_reset_tokens"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
     token_hash = Column(String(64), unique=True, index=True, nullable=False)
     expires_at = Column(DateTime, nullable=False)
@@ -69,7 +69,7 @@ class PasswordResetToken(Base):
 class ExportTicket(Base):
     __tablename__ = "export_tickets"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     ticket = Column(String(64), unique=True, index=True, nullable=False)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
     organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), index=True, nullable=False)
@@ -83,17 +83,17 @@ class ExportTicket(Base):
 class DatasetRecord(Base):
     __tablename__ = "datasets"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), index=True, nullable=True)
     filename = Column(String(255), index=True)
     filepath = Column(String(512))
     file_type = Column(String(32), default='upload')  # 'sample' or 'upload'
     checksum_sha256 = Column(String(64), index=True, nullable=True)
-    total_cost = Column(Float, default=0.0)      # Gross operational spend
-    net_cost = Column(Float, default=0.0)        # Net invoiced cost after credits/refunds/tax
-    credits_total = Column(Float, default=0.0)   # Sum of credits
-    refunds_total = Column(Float, default=0.0)   # Sum of refunds
-    taxes_total = Column(Float, default=0.0)     # Sum of taxes
+    total_cost = Column(Numeric(18, 4, asdecimal=False), default=0.0)      # Gross operational spend
+    net_cost = Column(Numeric(18, 4, asdecimal=False), default=0.0)        # Net invoiced cost after credits/refunds/tax
+    credits_total = Column(Numeric(18, 4, asdecimal=False), default=0.0)   # Sum of credits
+    refunds_total = Column(Numeric(18, 4, asdecimal=False), default=0.0)   # Sum of refunds
+    taxes_total = Column(Numeric(18, 4, asdecimal=False), default=0.0)     # Sum of taxes
     total_rows = Column(Integer, default=0)
     is_active = Column(Integer, default=0, index=True)
     uploaded_at = Column(DateTime, default=utc_now)
@@ -123,21 +123,21 @@ class DatasetRecord(Base):
 class BillingRecord(Base):
     __tablename__ = "billing_records"
 
-    id = Column(Integer, primary_key=True, index=True)
-    organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), index=True, nullable=False)
-    dataset_id = Column(Integer, ForeignKey("datasets.id", ondelete="CASCADE"), index=True, nullable=False)
-    line_item_id = Column(String(255), index=True, nullable=True)   # Source identity/LineItemId
-    usage_date = Column(String(16), index=True, nullable=False)      # YYYY-MM-DD
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
+    dataset_id = Column(Integer, ForeignKey("datasets.id", ondelete="CASCADE"), nullable=False)
+    line_item_id = Column(String(255), nullable=True)   # Source identity/LineItemId
+    usage_date = Column(String(16), nullable=False)                  # YYYY-MM-DD (Indexed via composite ix_billing_records_org_ds_date)
     usage_month = Column(String(16), index=True, nullable=False)     # YYYY-MM
     usage_hour = Column(String(8), default="00:00")
-    service = Column(String(128), index=True, nullable=False)
-    resource_id = Column(String(255), index=True, nullable=False)
+    service = Column(String(128), nullable=False)
+    resource_id = Column(String(255), nullable=False)
     short_id = Column(String(255), default="")
-    account_id = Column(String(64), index=True, nullable=False)
+    account_id = Column(String(64), nullable=False)
     region = Column(String(64), index=True, nullable=False)
-    cost = Column(Float, nullable=False, default=0.0)               # Effective operational cost
-    unblended_cost = Column(Float, nullable=False, default=0.0)     # Raw unblended cost
-    line_item_type = Column(String(64), index=True, nullable=False) # Usage, Credit, Refund, Tax, RIFee, Fee
+    cost = Column(Numeric(18, 4, asdecimal=False), nullable=False, default=0.0)               # Effective operational cost (Fixed-point numeric)
+    unblended_cost = Column(Numeric(18, 4, asdecimal=False), nullable=False, default=0.0)     # Raw unblended cost (Fixed-point numeric)
+    line_item_type = Column(String(64), nullable=False)             # Usage, Credit, Refund, Tax, RIFee, Fee
     usage_type = Column(String(255), default="")
     pricing_term = Column(String(32), default="OnDemand")
     resource_name = Column(String(255), default="")
@@ -148,27 +148,24 @@ class BillingRecord(Base):
     dataset = relationship("DatasetRecord", back_populates="billing_records")
 
     __table_args__ = (
-        Index("ix_billing_records_dataset_service", "dataset_id", "service", "cost"),
-        Index("ix_billing_records_dataset_date", "dataset_id", "usage_date", "cost"),
-        Index("ix_billing_records_dataset_resource", "dataset_id", "resource_id", "cost"),
-        Index("ix_billing_records_dataset_line_item", "dataset_id", "line_item_id"),
-        Index("ix_billing_records_org_dataset", "organization_id", "dataset_id"),
-        Index("ix_billing_records_org_dataset_service", "organization_id", "dataset_id", "service"),
-        Index("ix_billing_records_org_dataset_date", "organization_id", "dataset_id", "usage_date"),
-        Index("ix_billing_records_org_ds_linetype", "organization_id", "dataset_id", "line_item_type", "cost"),
+        # Consolidated covering indexes (reduced from 21 bloated indexes to 6 clean multi-column covering indexes)
+        Index("ix_billing_records_org_ds_service", "organization_id", "dataset_id", "service", "cost"),
+        Index("ix_billing_records_org_ds_date", "organization_id", "dataset_id", "usage_date", "cost"),
         Index("ix_billing_records_org_ds_resource", "organization_id", "dataset_id", "resource_id", "cost"),
+        Index("ix_billing_records_org_ds_linetype", "organization_id", "dataset_id", "line_item_type", "cost"),
         Index("ix_billing_records_org_ds_account", "organization_id", "dataset_id", "account_id", "cost"),
+        Index("ix_billing_records_org_ds_line_item", "organization_id", "dataset_id", "line_item_id"),
     )
 
 
 class DatasetServiceRollup(Base):
     __tablename__ = "dataset_service_rollups"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), index=True, nullable=False)
     dataset_id = Column(Integer, ForeignKey("datasets.id", ondelete="CASCADE"), index=True, nullable=False)
     service = Column(String(128), index=True, nullable=False)
-    total_cost = Column(Float, nullable=False, default=0.0)
+    total_cost = Column(Numeric(18, 4, asdecimal=False), nullable=False, default=0.0)
     record_count = Column(Integer, nullable=False, default=0)
     resource_count = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime, default=utc_now)
@@ -184,15 +181,15 @@ class DatasetServiceRollup(Base):
 class DatasetDailyRollup(Base):
     __tablename__ = "dataset_daily_rollups"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), index=True, nullable=False)
     dataset_id = Column(Integer, ForeignKey("datasets.id", ondelete="CASCADE"), index=True, nullable=False)
     usage_date = Column(String(16), index=True, nullable=False)
-    gross_cost = Column(Float, nullable=False, default=0.0)
-    net_cost = Column(Float, nullable=False, default=0.0)
-    credits_cost = Column(Float, nullable=False, default=0.0)
-    refunds_cost = Column(Float, nullable=False, default=0.0)
-    taxes_cost = Column(Float, nullable=False, default=0.0)
+    gross_cost = Column(Numeric(18, 4, asdecimal=False), nullable=False, default=0.0)
+    net_cost = Column(Numeric(18, 4, asdecimal=False), nullable=False, default=0.0)
+    credits_cost = Column(Numeric(18, 4, asdecimal=False), nullable=False, default=0.0)
+    refunds_cost = Column(Numeric(18, 4, asdecimal=False), nullable=False, default=0.0)
+    taxes_cost = Column(Numeric(18, 4, asdecimal=False), nullable=False, default=0.0)
     record_count = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime, default=utc_now)
 
@@ -207,7 +204,7 @@ class DatasetDailyRollup(Base):
 class AuditEvent(Base):
     __tablename__ = "audit_events"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), index=True, nullable=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     timestamp = Column(DateTime, default=utc_now)
@@ -219,7 +216,7 @@ class AuditEvent(Base):
 class S3SyncConfig(Base):
     __tablename__ = "s3_sync_configs"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), index=True, nullable=True)
     bucket_name = Column(String(255), nullable=False)
     region = Column(String(64), default="us-east-1")
@@ -235,7 +232,7 @@ class S3SyncConfig(Base):
 class AgencyBrandingConfig(Base):
     __tablename__ = "agency_branding_configs"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), index=True, nullable=True)
     agency_name = Column(String(255), default="Cloud FinOps Advisory Partners")
     client_name = Column(String(255), default="Enterprise Client Organization")
@@ -248,7 +245,7 @@ class AgencyBrandingConfig(Base):
 class UnitEconomicsConfig(Base):
     __tablename__ = "unit_economics_configs"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), index=True, nullable=True)
     metric_name = Column(String(128), default="Monthly Active Users (MAU)")
     metric_unit = Column(String(64), default="Users")
@@ -265,7 +262,7 @@ class RecommendationRecord(Base):
         UniqueConstraint("organization_id", "recommendation_id", name="uix_recommendations_org_rec"),
     )
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), index=True, nullable=True)
     recommendation_id = Column(String(128), index=True, nullable=False)
     category = Column(String(64), index=True, nullable=False)
@@ -299,7 +296,7 @@ class AnomalyAlert(Base):
         UniqueConstraint("organization_id", "alert_key", name="uix_anomaly_alerts_org_alert"),
     )
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), index=True, nullable=True)
     alert_key = Column(String(128), index=True, nullable=False)
     date = Column(String(32), index=True, nullable=False)
@@ -325,7 +322,7 @@ class AnomalyAlert(Base):
 class BudgetConfig(Base):
     __tablename__ = "budget_configs"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), index=True, nullable=True)
     name = Column(String(128), nullable=False)
     scope_type = Column(String(32), default="WORKSPACE")
@@ -341,7 +338,7 @@ class BudgetConfig(Base):
 class ForecastRun(Base):
     __tablename__ = "forecast_runs"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), index=True, nullable=True)
     period_month = Column(String(16), index=True, nullable=False)
     methodology = Column(String(64), default="HOLT_WINTERS_RUNRATE")
@@ -361,7 +358,7 @@ class ForecastRun(Base):
 class AiAnalystQuery(Base):
     __tablename__ = "ai_analyst_queries"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), index=True, nullable=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), index=True, nullable=True)
     query_text = Column(Text, nullable=False)
@@ -375,7 +372,7 @@ class AiAnalystQuery(Base):
 class S3SyncExecutionHistory(Base):
     __tablename__ = "s3_sync_execution_history"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), index=True, nullable=True)
     s3_config_id = Column(Integer, ForeignKey("s3_sync_configs.id", ondelete="CASCADE"), index=True, nullable=True)
     started_at = Column(DateTime, default=utc_now)
@@ -390,7 +387,7 @@ class S3SyncExecutionHistory(Base):
 class ResourceLifecycleEvent(Base):
     __tablename__ = "resource_lifecycle_events"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
     organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), index=True, nullable=False)
     event_id = Column(String(128), index=True, nullable=False)
     resource_id = Column(String(255), index=True, nullable=False)

@@ -8,51 +8,49 @@ from collections import defaultdict
 from typing import Dict, List, Any, Optional
 
 
+ARN_SUBSTRING_PATTERNS = (
+    ('distribution/', 'CloudFront', lambda s: s.split('distribution/')[-1]),
+    ('loadbalancer/app/', 'ALB', lambda s: s.split('loadbalancer/app/')[-1].split('/')[0]),
+    ('loadbalancer/net/', 'NLB', lambda s: s.split('loadbalancer/net/')[-1].split('/')[0]),
+    (':db:', 'RDS', lambda s: s.split(':db:')[-1]),
+    ('natgateway/', 'NAT Gateway', lambda s: s.split('natgateway/')[-1]),
+    (':domain/', 'OpenSearch', lambda s: s.split(':domain/')[-1]),
+    ('/webacl/', 'WAF', lambda s: s.split('/webacl/')[-1].split('/')[0]),
+    (':rep:', 'DMS', lambda s: s.split(':rep:')[-1]),
+    (':stream/', 'Kinesis', lambda s: s.split(':stream/')[-1]),
+    (':log-group:', 'CloudWatch', lambda s: s.split(':log-group:')[-1]),
+    ('hostedzone/', 'Route 53', lambda s: s.split('hostedzone/')[-1]),
+    (':cluster:', 'Redshift', lambda s: s.split(':cluster:')[-1] if 'redshift' in s.lower() else None),
+    (':function/', 'CF Function', lambda s: s.split(':function/')[-1]),
+    (':function:', 'Lambda', lambda s: s.split(':function:')[-1].split(':')[0]),
+    (':secret:', 'Secrets Manager', lambda s: s.split(':secret:')[-1].split('-')[0]),
+    (':snapshot:', 'RDS Snapshot', lambda s: s.split(':snapshot:')[-1]),
+    ('network-interface/', 'ENI', lambda s: s.split('network-interface/')[-1]),
+)
+
+
 def clean_resource_label(arn_or_id: str) -> str:
-    """Converts lengthy raw AWS ARNs into clean human-readable executive labels."""
-    if not arn_or_id or arn_or_id in ['Unassigned', 'Unknown', 'Baseline', 'Steady Fleet', 'No-Resource-ID']:
+    """Converts lengthy raw AWS ARNs into clean human-readable executive labels with fast dispatch."""
+    if not arn_or_id or arn_or_id in ('Unassigned', 'Unknown', 'Baseline', 'Steady Fleet', 'No-Resource-ID'):
         return arn_or_id or 'Baseline Fleet'
-    
-    if 'distribution/' in arn_or_id:
-        return f"CloudFront ({arn_or_id.split('distribution/')[-1]})"
-    if 'loadbalancer/app/' in arn_or_id:
-        return f"ALB ({arn_or_id.split('loadbalancer/app/')[-1].split('/')[0]})"
-    if 'loadbalancer/net/' in arn_or_id:
-        return f"NLB ({arn_or_id.split('loadbalancer/net/')[-1].split('/')[0]})"
-    if ':db:' in arn_or_id:
-        return f"RDS ({arn_or_id.split(':db:')[-1]})"
-    if 'natgateway/' in arn_or_id:
-        return f"NAT Gateway ({arn_or_id.split('natgateway/')[-1]})"
-    if ':domain/' in arn_or_id:
-        return f"OpenSearch ({arn_or_id.split(':domain/')[-1]})"
-    if '/webacl/' in arn_or_id:
-        return f"WAF ({arn_or_id.split('/webacl/')[-1].split('/')[0]})"
-    if ':rep:' in arn_or_id:
-        return f"DMS ({arn_or_id.split(':rep:')[-1]})"
-    if ':stream/' in arn_or_id:
-        return f"Kinesis ({arn_or_id.split(':stream/')[-1]})"
-    if ':log-group:' in arn_or_id:
-        return f"CloudWatch ({arn_or_id.split(':log-group:')[-1]})"
-    if 'hostedzone/' in arn_or_id:
-        return f"Route 53 ({arn_or_id.split('hostedzone/')[-1]})"
-    if ':cluster:' in arn_or_id and 'redshift' in arn_or_id.lower():
-        return f"Redshift ({arn_or_id.split(':cluster:')[-1]})"
-    if arn_or_id.startswith('arn:aws:s3:::'):
-        return f"S3 ({arn_or_id.split(':::')[-1]})"
-    if ':function/' in arn_or_id:
-        return f"CF Function ({arn_or_id.split(':function/')[-1]})"
-    if ':function:' in arn_or_id:
-        return f"Lambda ({arn_or_id.split(':function:')[-1].split(':')[0]})"
-    if ':secret:' in arn_or_id:
-        return f"Secrets Manager ({arn_or_id.split(':secret:')[-1].split('-')[0]})"
-    if ':snapshot:' in arn_or_id:
-        return f"RDS Snapshot ({arn_or_id.split(':snapshot:')[-1]})"
-    if 'network-interface/' in arn_or_id:
-        return f"ENI ({arn_or_id.split('network-interface/')[-1]})"
+
+    # Fast O(1) prefix check for predominant AWS infrastructure primitives
     if arn_or_id.startswith('i-'):
         return f"EC2 ({arn_or_id})"
     if arn_or_id.startswith('vol-'):
         return f"EBS ({arn_or_id})"
+    if arn_or_id.startswith('snap-'):
+        return f"EBS Snapshot ({arn_or_id})"
+    if arn_or_id.startswith('arn:aws:s3:::'):
+        return f"S3 ({arn_or_id.split(':::')[-1]})"
+
+    # Structured pattern dispatch table for AWS ARNs
+    for pattern, prefix, extractor in ARN_SUBSTRING_PATTERNS:
+        if pattern in arn_or_id:
+            val = extractor(arn_or_id)
+            if val:
+                return f"{prefix} ({val})"
+
     if '/' in arn_or_id:
         return arn_or_id.split('/')[-1]
     return arn_or_id
@@ -331,7 +329,8 @@ def deduce_resource_root_cause(
     line_type: str = '',
     sp_arn: str = '',
     last_seen: str = '',
-    line_types: Optional[Any] = None
+    line_types: Optional[Any] = None,
+    description: str = ''
 ) -> str:
     """Config-driven individual resource engineering root cause synthesis."""
     usage_types = usage_types or []
@@ -353,6 +352,7 @@ def deduce_resource_root_cause(
         'sp_arn': sp_arn,
         'last_str': f" [Last active: {last_seen}]" if last_seen else "",
         'ltypes_set': ltypes_set,
+        'description': description,
     }
 
     for matcher in ROOT_CAUSE_MATCHERS:
@@ -360,16 +360,24 @@ def deduce_resource_root_cause(
         if res is not None:
             return res
 
-    # Fallback
+        # Fallback
     if cost_base == 0 and cost_target > 0:
+        if description:
+            return f"NEW WORKLOAD: {description} (+${cost_target:.4f})"
         return f"NEW WORKLOAD: Newly provisioned {service or 'AWS'} resource (+${cost_target:.4f})"
     elif cost_base > 0 and cost_target == 0:
+        if description:
+            return f"DECOMMISSIONED: {description}{ctx['last_str']} (Saved -${cost_base:.4f})"
         return f"DECOMMISSIONED: Resource terminated or removed{ctx['last_str']} (Saved -${cost_base:.4f})"
     elif diff > 0.0005:
+        if description:
+            return f"USAGE VARIANCE: {description} (+${diff:.4f})"
         return f"USAGE INCREASE: Operational consumption increased on {service or 'workload'} (+${diff:.4f})"
     elif diff < -0.0005:
+        if description:
+            return f"USAGE VARIANCE: {description} (-${abs(diff):.4f})"
         return f"USAGE REDUCTION: Operational activity decreased (-${abs(diff):.4f})"
-    return "STABLE: Steady-state operational baseline"
+    return "STABLE: Steady-state operational baseline" 
 
 
 def compare_dates(cur_data: Dict[str, Any], baseline_date: str, target_date: str, account_id: Optional[str] = None) -> Dict[str, Any]:
@@ -450,7 +458,7 @@ def compare_dates(cur_data: Dict[str, Any], baseline_date: str, target_date: str
     # Resource-level comparison
     res_base = defaultdict(lambda: {
         'cost': 0.0, 'service': '', 'name': '', 'short_id': '', 'usage_types': set(),
-        'term': '', 'line_types': set(), 'sp_arn': '', 'last_seen': ''
+        'term': '', 'line_types': set(), 'sp_arn': '', 'last_seen': '', 'descriptions': set()
     })
     for r in baseline_records:
         rid = r['resource_id']
@@ -465,10 +473,13 @@ def compare_dates(cur_data: Dict[str, Any], baseline_date: str, target_date: str
             res_base[rid]['line_types'].add(r.get('line_type'))
         res_base[rid]['sp_arn'] = r.get('sp_arn', '')
         res_base[rid]['last_seen'] = r.get('timestamp', '')
+        d_val = r.get('desc') or r.get('item_description')
+        if d_val and d_val.strip():
+            res_base[rid]['descriptions'].add(d_val.strip())
 
     res_target = defaultdict(lambda: {
         'cost': 0.0, 'service': '', 'name': '', 'short_id': '', 'usage_types': set(),
-        'term': '', 'line_types': set(), 'sp_arn': '', 'last_seen': ''
+        'term': '', 'line_types': set(), 'sp_arn': '', 'last_seen': '', 'descriptions': set()
     })
     for r in target_records:
         rid = r['resource_id']
@@ -483,6 +494,9 @@ def compare_dates(cur_data: Dict[str, Any], baseline_date: str, target_date: str
             res_target[rid]['line_types'].add(r.get('line_type'))
         res_target[rid]['sp_arn'] = r.get('sp_arn', '')
         res_target[rid]['last_seen'] = r.get('timestamp', '')
+        d_val = r.get('desc') or r.get('item_description')
+        if d_val and d_val.strip():
+            res_target[rid]['descriptions'].add(d_val.strip())
 
     all_res_ids = set(res_base.keys()) | set(res_target.keys())
     spikes = []
@@ -513,6 +527,9 @@ def compare_dates(cur_data: Dict[str, Any], baseline_date: str, target_date: str
 
         pct = round(((diff / cb) * 100.0), 1) if cb > 0 else (None if ct > 0 else 0.0)
 
+        descs = list((t_info.get('descriptions') or set()) | (b_info.get('descriptions') or set()))
+        primary_desc = descs[0] if descs else ''
+
         # Root cause deduction
         root_cause = deduce_resource_root_cause(
             res_id=rid,
@@ -525,7 +542,8 @@ def compare_dates(cur_data: Dict[str, Any], baseline_date: str, target_date: str
             line_type=ltype,
             sp_arn=sp_arn,
             last_seen=last_seen,
-            line_types=ltypes
+            line_types=ltypes,
+            description=primary_desc
         )
 
         item = {
@@ -534,6 +552,7 @@ def compare_dates(cur_data: Dict[str, Any], baseline_date: str, target_date: str
             'name': name,
             'service': svc,
             'usage_types': utypes,
+            'description': primary_desc,
             'baseline_cost': round(cb, 4),
             'target_cost': round(ct, 4),
             'delta_cost': round(diff, 4),

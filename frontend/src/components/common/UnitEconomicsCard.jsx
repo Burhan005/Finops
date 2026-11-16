@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { api } from '../../services/api';
 import { 
   SlidersHorizontal, 
   Layers, 
@@ -24,6 +25,19 @@ function UnitEconomicsCard({
 }) {
   const [serviceDropdownOpen, setServiceDropdownOpen] = useState(false);
   const dropdownRef = useRef(null);
+  const [unitData, setUnitData] = useState(null);
+
+  useEffect(() => {
+    let isMounted = true;
+    api.getUnitEconomics()
+      .then((data) => {
+        if (isMounted && data) {
+          setUnitData(data);
+        }
+      })
+      .catch(() => {});
+    return () => { isMounted = false; };
+  }, []);
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -130,10 +144,18 @@ function UnitEconomicsCard({
           </div>
 
           <p className="text-[11px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary mt-0.5 flex flex-wrap items-center gap-2">
-            <span>Filtering charts across <strong>{servicesList.length || 18} AWS Services</strong></span>
+            <span>Filtering across <strong>{servicesList.length || 18} AWS Services</strong></span>
             <span className="text-zorvex-forest dark:text-zorvex-dark-forest font-bold">
-              • Active Scope: {filterService !== 'All' ? filterService : 'All Services'} ({displayRange})
+              • Scope: {filterService !== 'All' ? filterService : 'All Services'} ({displayRange})
             </span>
+            {unitData && unitData.current_unit_cost > 0 && (
+              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 font-mono text-[10px] font-bold border border-emerald-500/20">
+                Unit Cost: {currency === 'INR' ? `₹${(unitData.current_unit_cost * (forexData?.rate || 95.32)).toFixed(3)}` : `$${unitData.current_unit_cost.toFixed(4)}`} / {unitData.metric_unit || 'Unit'}
+                {unitData.efficiency_gain_pct !== 0 && (
+                  <span className="font-sans font-semibold">({unitData.efficiency_gain_pct > 0 ? '+' : ''}{unitData.efficiency_gain_pct}% efficiency)</span>
+                )}
+              </span>
+            )}
           </p>
         </div>
       </div>

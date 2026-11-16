@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
-import { Cpu, Database, Network, ShieldCheck, Layers, Activity } from 'lucide-react';
-
+import { Cpu, Database, Network, ShieldCheck, HardDrive, CircleDollarSign } from 'lucide-react';
+import ClusterMeshIcon from '../common/ClusterMeshIcon';
+import ServerlessLambdaIcon from '../common/ServerlessLambdaIcon';
 /**
  * LivingCostTopology (Definitive Master Synthesis — 5-Layer Hybrid FinOps Topology)
  * 
@@ -26,6 +27,15 @@ const CLOUD_CONCEPTS = [
     bgGlow: 'rgba(56, 189, 248, 0.20)'
   },
   {
+    id: 'storage',
+    label: 'STORAGE',
+    Icon: HardDrive,
+    color: 'text-purple-400',
+    dotColor: '#A855F7',
+    borderColor: 'border-purple-500/30',
+    bgGlow: 'rgba(168, 85, 247, 0.20)'
+  },
+  {
     id: 'database',
     label: 'DATABASE',
     Icon: Database,
@@ -33,6 +43,15 @@ const CLOUD_CONCEPTS = [
     dotColor: '#34D399',
     borderColor: 'border-emerald-500/30',
     bgGlow: 'rgba(52, 211, 153, 0.20)'
+  },
+  {
+    id: 'serverless',
+    label: 'SERVERLESS',
+    Icon: ServerlessLambdaIcon,
+    color: 'text-amber-500 dark:text-amber-400',
+    dotColor: '#F59E0B',
+    borderColor: 'border-amber-500/30',
+    bgGlow: 'rgba(245, 158, 11, 0.20)'
   },
   {
     id: 'network',
@@ -47,31 +66,30 @@ const CLOUD_CONCEPTS = [
     id: 'security',
     label: 'SECURITY',
     Icon: ShieldCheck,
-    color: 'text-amber-400',
-    dotColor: '#FBBF24',
-    borderColor: 'border-amber-500/30',
-    bgGlow: 'rgba(251, 191, 36, 0.20)'
+    color: 'text-rose-400',
+    dotColor: '#F43F5E',
+    borderColor: 'border-rose-500/30',
+    bgGlow: 'rgba(244, 63, 94, 0.20)'
   },
   {
     id: 'clusters',
     label: 'CLUSTERS',
-    Icon: Layers,
-    color: 'text-teal-400',
-    dotColor: '#2DD4BF',
-    borderColor: 'border-teal-500/30',
-    bgGlow: 'rgba(45, 212, 191, 0.20)'
+    Icon: ClusterMeshIcon,
+    color: 'text-teal-500 dark:text-teal-400',
+    dotColor: '#0D9488',
+    borderColor: 'border-teal-500/40',
+    bgGlow: 'rgba(13, 148, 136, 0.25)'
   },
   {
-    id: 'telemetry',
-    label: 'TELEMETRY',
-    Icon: Activity,
-    color: 'text-rose-400',
-    dotColor: '#F472B6',
-    borderColor: 'border-rose-500/30',
-    bgGlow: 'rgba(244, 114, 182, 0.20)'
+    id: 'finops',
+    label: 'FINOPS',
+    Icon: CircleDollarSign,
+    color: 'text-emerald-500 dark:text-emerald-400',
+    dotColor: '#10B981',
+    borderColor: 'border-emerald-500/30',
+    bgGlow: 'rgba(16, 185, 129, 0.20)'
   }
 ];
-
 export default function LivingCostTopology({
   darkMode = false,
   interactive = true,
@@ -84,21 +102,17 @@ export default function LivingCostTopology({
   const animFrameRef = useRef(null);
   const lastTimeRef = useRef(0);
   const iconDomRefs = useRef([]);
-
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-
     let width = 0;
     let height = 0;
     let dpr = window.devicePixelRatio || 1;
-
     const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-
     const resize = () => {
-      dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+      dpr = window.devicePixelRatio || 1;
       width = canvas.parentElement ? canvas.parentElement.clientWidth : window.innerWidth;
       height = canvas.parentElement ? canvas.parentElement.clientHeight : window.innerHeight;
       canvas.width = Math.floor(width * dpr);
@@ -108,31 +122,25 @@ export default function LivingCostTopology({
       ctx.scale(dpr, dpr);
       initEntities();
     };
-
     const handlePointerMove = (e) => {
       if (!interactive) return;
       const rect = canvas.getBoundingClientRect();
       pointerPos.current.targetX = e.clientX - rect.left;
       pointerPos.current.targetY = e.clientY - rect.top;
     };
-
     const handlePointerLeave = () => {
       pointerPos.current.targetX = -1000;
       pointerPos.current.targetY = -1000;
     };
-
     if (interactive) {
       window.addEventListener('mousemove', handlePointerMove, { passive: true });
       document.addEventListener('mouseleave', handlePointerLeave);
     }
-
     // Scaled counts: Golden constellation density (Lively, high-tech, balanced)
     const starCount = density === 'low' ? 42 : density === 'high' ? 78 : 64;
-
     // Entities state
     let ambientStars = [];
     let busPackets = [];
-
     const initEntities = () => {
       ambientStars = [];
       for (let i = 0; i < starCount; i++) {
@@ -148,7 +156,6 @@ export default function LivingCostTopology({
           cloud: i % 3 === 0 ? 'azure' : i % 3 === 1 ? 'gcp' : 'aws'
         });
       }
-
       busPackets = [
         { yRatio: 0.28, colorDark: '#00B0FF', colorLight: '#0284C7', speed: 125, offset: 0 },
         { yRatio: 0.28, colorDark: '#00B0FF', colorLight: '#0284C7', speed: 125, offset: 0.5 },
@@ -160,12 +167,9 @@ export default function LivingCostTopology({
         { yRatio: 0.80, colorDark: '#EC7211', colorLight: '#D97706', speed: -95, offset: 0.54 }
       ];
     };
-
     resize();
     window.addEventListener('resize', resize);
-
     let phase = 0;
-
     const render = (timestamp) => {
       if (typeof document !== 'undefined' && document.hidden) {
         animFrameRef.current = requestAnimationFrame(render);
@@ -179,49 +183,39 @@ export default function LivingCostTopology({
       }
       const dt = Math.min(elapsed / 1000, 0.1);
       lastTimeRef.current = timestamp;
-
       if (!width || !height || width <= 10 || height <= 10 || !Number.isFinite(width) || !Number.isFinite(height)) {
         animFrameRef.current = requestAnimationFrame(render);
         return;
       }
-
       if (!prefersReducedMotion) {
         phase += dt * 0.75 * speed;
       }
-
       // Smooth pointer lerp
       pointerPos.current.x += (pointerPos.current.targetX - pointerPos.current.x) * 0.08;
       pointerPos.current.y += (pointerPos.current.targetY - pointerPos.current.y) * 0.08;
-
       ctx.clearRect(0, 0, width, height);
-
       const centerX = width * 0.5;
       const centerY = height * 0.44;
-
       const tiltX = (width > 0 && pointerPos.current.x > 0) ? ((pointerPos.current.x - centerX) / width) * 22 : 0;
       const tiltY = (height > 0 && pointerPos.current.y > 0) ? ((pointerPos.current.y - centerY) / height) * 22 : 0;
       const safeTiltX = Number.isFinite(tiltX) ? tiltX : 0;
       const safeTiltY = Number.isFinite(tiltY) ? tiltY : 0;
-
       // =========================================================================
       // 1. LAYER 1: 3D Isometric Architectural CAD Grid (Concept 3)
       // =========================================================================
       const gridSize = 52;
       ctx.lineWidth = 0.5;
       ctx.strokeStyle = darkMode ? 'rgba(255, 255, 255, 0.035)' : 'rgba(100, 116, 139, 0.055)';
-
       for (let d = -width; d < width * 2; d += gridSize) {
         ctx.beginPath();
         ctx.moveTo(d, 0);
         ctx.lineTo(d + height * 0.6, height);
         ctx.stroke();
-
         ctx.beginPath();
         ctx.moveTo(d, 0);
         ctx.lineTo(d - height * 0.6, height);
         ctx.stroke();
       }
-
       // Benchmark crosshairs (+) at major intersections
       const crossStep = gridSize * 3;
       ctx.lineWidth = 1;
@@ -236,7 +230,6 @@ export default function LivingCostTopology({
           ctx.stroke();
         }
       }
-
       // =========================================================================
       // 2. LAYER 2: Aurora Iridescent Streams (Concept 1)
       // =========================================================================
@@ -247,21 +240,17 @@ export default function LivingCostTopology({
         const amp = 35 + factor * 48;
         const freq = 0.0020 + factor * 0.0006;
         const wavePhase = phase * 0.7 + i * 0.8;
-
         ctx.beginPath();
         ctx.moveTo(0, height);
         ctx.lineTo(0, startY);
-
         const segments = 45;
         for (let s = 0; s <= segments; s++) {
           const x = (s / segments) * width;
           const h = Math.sin(x * freq + wavePhase) * amp + Math.cos(x * freq * 1.9 - wavePhase * 0.5) * (amp * 0.35);
-
           ctx.lineTo(x, startY + h);
         }
         ctx.lineTo(width, height);
         ctx.closePath();
-
         const ribbonGrad = ctx.createLinearGradient(0, startY - amp, width, startY + amp * 1.8);
         const alpha = 0.030 + factor * 0.035; // Rich visible depth without eye strain
         if (darkMode) {
@@ -277,17 +266,14 @@ export default function LivingCostTopology({
           ribbonGrad.addColorStop(0.80, `rgba(16, 185, 129, ${alpha * 0.45})`);
           ribbonGrad.addColorStop(1, 'rgba(244, 246, 249, 0)');
         }
-
         ctx.fillStyle = ribbonGrad;
         ctx.fill();
-
         ctx.lineWidth = 0.85 + factor * 0.4;
         ctx.strokeStyle = darkMode 
           ? `rgba(255, 255, 255, ${0.05 + factor * 0.06})` 
           : `rgba(148, 163, 184, ${0.10 + factor * 0.10})`;
         ctx.stroke();
       }
-
       // =========================================================================
       // 3. LAYER 3: Topographic Vector Wave Matrix (Concept 2)
       // =========================================================================
@@ -295,14 +281,12 @@ export default function LivingCostTopology({
       const topoStartY = height * 0.58;
       const topoEndY = height * 0.95;
       const stepY = (topoEndY - topoStartY) / topoLines;
-
       for (let i = 0; i < topoLines; i++) {
         const factor = i / topoLines;
         const curY = topoStartY + i * stepY;
         const waveAmp = 16 + factor * 24;
         const freq = 0.0032;
         const pOffset = factor * 1.6 + phase * 0.85;
-
         ctx.beginPath();
         const segments = 45;
         for (let s = 0; s <= segments; s++) {
@@ -312,7 +296,6 @@ export default function LivingCostTopology({
           if (s === 0) ctx.moveTo(x, y);
           else ctx.lineTo(x, y);
         }
-
         const alpha = 0.025 + factor * 0.045; // Subtle, restful elevation lines
         ctx.strokeStyle = i % 3 === 0 
           ? (darkMode ? `rgba(14, 165, 233, ${alpha})` : `rgba(2, 132, 199, ${alpha * 0.70})`)
@@ -322,23 +305,19 @@ export default function LivingCostTopology({
         ctx.lineWidth = 0.5;
         ctx.stroke();
       }
-
       // =========================================================================
       // 4. LAYER 4: Stepped Isometric Contours & Focal Apex Nexus (Existing Core)
       // =========================================================================
       const baseRadiusX = width * 0.40;
       const baseRadiusY = height * 0.30;
       const contourCount = 6;
-
       for (let i = contourCount; i >= 1; i--) {
         const factor = i / contourCount;
         const rx = baseRadiusX * factor;
         const ry = baseRadiusY * factor;
         const elevation = (1 - factor) * 85;
-
         const offX = centerX + safeTiltX * (1 - factor);
         const offY = centerY - elevation + safeTiltY * (1 - factor);
-
         ctx.beginPath();
         const steps = 48;
         for (let s = 0; s <= steps; s++) {
@@ -354,16 +333,13 @@ export default function LivingCostTopology({
           ? (i % 2 === 0 ? 'rgba(20, 22, 28, 0.40)' : 'rgba(14, 16, 22, 0.55)') 
           : (i % 2 === 0 ? 'rgba(255, 255, 255, 0.18)' : 'rgba(241, 245, 249, 0.10)');
         ctx.fill();
-
         ctx.strokeStyle = darkMode ? 'rgba(255, 255, 255, 0.05)' : 'rgba(148, 163, 184, 0.18)';
         ctx.lineWidth = darkMode ? 0.9 : 0.75;
         ctx.stroke();
       }
-
       // The Apex Nexus Star (Golden FinOps Center Anchor)
       const apexX = centerX + safeTiltX * 1.1;
       const apexY = centerY - 105 + safeTiltY * 1.1;
-
       if (Number.isFinite(apexX) && Number.isFinite(apexY)) {
         const apexGlow = ctx.createRadialGradient(apexX, apexY, 2, apexX, apexY, 55);
         if (darkMode) {
@@ -379,14 +355,12 @@ export default function LivingCostTopology({
         ctx.arc(apexX, apexY, 55, 0, Math.PI * 2);
         ctx.fillStyle = apexGlow;
         ctx.fill();
-
         // Concentric sonar orbit ring around apex
         ctx.beginPath();
         ctx.arc(apexX, apexY, 15 + Math.sin(phase * 2) * 2, 0, Math.PI * 2);
         ctx.strokeStyle = darkMode ? 'rgba(236, 114, 17, 0.35)' : 'rgba(245, 158, 11, 0.30)';
         ctx.lineWidth = 0.8;
         ctx.stroke();
-
         // Apex Star Core
         ctx.beginPath();
         ctx.arc(apexX, apexY, 6.5, 0, Math.PI * 2);
@@ -395,14 +369,12 @@ export default function LivingCostTopology({
         ctx.shadowBlur = darkMode ? 12 : 8;
         ctx.fill();
         ctx.shadowBlur = 0;
-
         // Specular White Micro-Core for jewel-like finish
         ctx.beginPath();
         ctx.arc(apexX, apexY, 2.2, 0, Math.PI * 2);
         ctx.fillStyle = '#FFFFFF';
         ctx.fill();
       }
-
       // Precision Telemetry Constellation Nodes (Razor-sharp, Zero Emojis, Institutional Finish)
       const contourOrbitNodes = [
         { ring: 1, angle: 1.20, color: '#38BDF8', speed: 0.28 },
@@ -413,24 +385,19 @@ export default function LivingCostTopology({
         { ring: 5, angle: 3.90, color: '#38BDF8', speed: -0.16 },
         { ring: 5, angle: 0.85, color: '#34D399', speed: 0.15 }
       ];
-
       for (const cNode of contourOrbitNodes) {
         const factor = cNode.ring / contourCount;
         const rx = baseRadiusX * factor;
         const ry = baseRadiusY * factor;
         const elevation = (1 - factor) * 85;
-
         const offX = centerX + safeTiltX * (1 - factor);
         const offY = centerY - elevation + safeTiltY * (1 - factor);
-
         const theta = (phase * cNode.speed + cNode.angle) % (Math.PI * 2);
         const harmonic = Math.sin(theta * 3 + phase + cNode.ring * 0.25) * 0.05;
         const nx = Math.round(offX + Math.cos(theta) * rx * (1 + harmonic));
         const ny = Math.round(offY + Math.sin(theta) * ry * (1 + harmonic));
-
         if (Number.isFinite(nx) && Number.isFinite(ny)) {
           const nodeColor = darkMode ? cNode.color : '#0F172A';
-
           // Razor-sharp pinpoint telemetry node
           ctx.beginPath();
           ctx.arc(nx, ny, 2.5, 0, Math.PI * 2);
@@ -439,13 +406,11 @@ export default function LivingCostTopology({
           ctx.shadowBlur = 6;
           ctx.fill();
           ctx.shadowBlur = 0;
-
           // Crisp specular white jewel micro-core
           ctx.beginPath();
           ctx.arc(nx, ny, 1.0, 0, Math.PI * 2);
           ctx.fillStyle = '#FFFFFF';
           ctx.fill();
-
           // Delicate outer sonar orbit ring
           ctx.beginPath();
           ctx.arc(nx, ny, 6, 0, Math.PI * 2);
@@ -456,14 +421,12 @@ export default function LivingCostTopology({
           ctx.globalAlpha = 1.0;
         }
       }
-
       // =========================================================================
       // 5. LAYER 5: Telemetry Data Bus Tracks & Pulse Gliders (Concept 3)
       // =========================================================================
       for (const bus of busPackets) {
         const busY = height * bus.yRatio;
         const busColor = darkMode ? bus.colorDark : bus.colorLight;
-
         ctx.beginPath();
         ctx.moveTo(0, busY);
         ctx.lineTo(width, busY);
@@ -472,13 +435,11 @@ export default function LivingCostTopology({
         ctx.globalAlpha = darkMode ? 0.16 : 0.10;
         ctx.stroke();
         ctx.globalAlpha = 1.0;
-
         if (!prefersReducedMotion) {
           const trackWidth = width + 240;
           const offsetDist = (bus.offset || 0) * trackWidth;
           const rawX = ((phase * bus.speed * speed + offsetDist) % trackWidth) - 120;
           const normX = rawX < -120 ? trackWidth + rawX : rawX;
-
           ctx.beginPath();
           ctx.arc(normX, busY, 3.2, 0, Math.PI * 2);
           ctx.fillStyle = busColor;
@@ -486,7 +447,6 @@ export default function LivingCostTopology({
           ctx.shadowBlur = 8;
           ctx.fill();
           ctx.shadowBlur = 0;
-
           ctx.beginPath();
           ctx.moveTo(normX, busY);
           ctx.lineTo(normX - Math.sign(bus.speed) * 38, busY);
@@ -497,7 +457,6 @@ export default function LivingCostTopology({
           ctx.globalAlpha = 1.0;
         }
       }
-
       // =========================================================================
       // 6. LAYER 6: Tri-Cloud Celestial Beacons & Organic Filaments (Refined)
       // =========================================================================
@@ -511,14 +470,10 @@ export default function LivingCostTopology({
           else if (s.y > height) s.y = 0;
         }
       }
-
       // Delicate Distance Filaments between close stars
       const maxDistSq = 100 * 100;
       for (let i = 0; i < ambientStars.length; i++) {
         const s1 = ambientStars[i];
-
-
-
         for (let j = i + 1; j < ambientStars.length; j++) {
           const s2 = ambientStars[j];
           const dx = s1.x - s2.x;
@@ -540,7 +495,6 @@ export default function LivingCostTopology({
           }
         }
       }
-
       // Draw Beacons with Center Headline Typography Clearance
       for (const s of ambientStars) {
         // Distance from center & Typography clearance box
@@ -552,11 +506,9 @@ export default function LivingCostTopology({
           // In light mode: ensure headline typography stays 100% pristine and unblemished by dots
           typoMask = darkMode ? Math.max(0.35, factor) : Math.max(0.08, factor * factor);
         }
-
         const pulse = Math.sin(phase * s.pulseSpeed + s.pulseOffset);
         const r = s.radius * (1 + pulse * 0.16);
         const alpha = Math.max(0.30, Math.min(0.95, s.baseAlpha * (1 + pulse * 0.22))) * typoMask;
-
         ctx.beginPath();
         ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
         if (s.cloud === 'azure') {
@@ -567,7 +519,6 @@ export default function LivingCostTopology({
           ctx.fillStyle = darkMode ? `rgba(255, 153, 0, ${alpha})` : `rgba(245, 158, 11, ${alpha * 0.88})`;
         }
         ctx.fill();
-
         // Soft specular halo for beacon dots
         if (s.radius > 1.8 && typoMask > 0.30) {
           ctx.beginPath();
@@ -581,13 +532,11 @@ export default function LivingCostTopology({
           ctx.fill();
         }
       }
-
       // Continuous 3D Elliptical Orbit for Universal Cloud Concept Tokens (Auto-adapts to Mobile & Desktop)
       const isMobile = width < 640;
       const orbitRx = isMobile ? Math.min(width * 0.36, 135) : width * 0.38;
       const orbitRy = isMobile ? Math.min(height * 0.18, 85) : height * 0.22;
       const baseSpeed = 0.14 * speed;
-
       // Draw subtle gossamer constellation mesh connecting the nodes
       ctx.beginPath();
       CLOUD_CONCEPTS.forEach((_, i) => {
@@ -602,38 +551,28 @@ export default function LivingCostTopology({
       ctx.strokeStyle = darkMode ? 'rgba(56, 189, 248, 0.08)' : 'rgba(14, 165, 233, 0.08)';
       ctx.lineWidth = 0.75;
       ctx.stroke();
-
       // Position DOM tokens with hardware-accelerated translate3d and 3D depth scale
       CLOUD_CONCEPTS.forEach((concept, i) => {
         const domEl = iconDomRefs.current[i];
         if (!domEl) return;
-
         const baseAngle = (i / CLOUD_CONCEPTS.length) * Math.PI * 2;
         const currentAngle = (phase * baseSpeed + baseAngle) % (Math.PI * 2);
-
         const posX = centerX + Math.cos(currentAngle) * orbitRx - 24; // center of 48px
         const posY = centerY + Math.sin(currentAngle) * orbitRy - 24;
-
         // 3D Depth scaling & opacity: front is larger/clearer, back is subtle/softer
         const depth = (Math.sin(currentAngle) + 1) / 2; // 0 (far back) to 1 (near front)
-        const baseScale = isMobile ? 0.68 : 0.80;
-        const scaleRange = isMobile ? 0.22 : 0.32;
-        const scale = baseScale + depth * scaleRange;
-        const opacity = 0.45 + depth * 0.55; // 0.45 to 1.00
+        const opacity = 0.85 + depth * 0.15; // 0.85 to 1.00 (crisp, solid, never washed out)
         const zIndex = Math.round(depth * 30);
-
-        domEl.style.transform = `translate3d(${posX.toFixed(1)}px, ${posY.toFixed(1)}px, 0) scale(${scale.toFixed(2)})`;
+        // Snap strictly to integer pixels and ELIMINATE continuous CSS scale() to remove GPU texture blur
+        domEl.style.transform = `translate3d(${Math.round(posX)}px, ${Math.round(posY)}px, 0)`;
         domEl.style.opacity = opacity.toFixed(2);
         domEl.style.zIndex = zIndex;
       });
-
       if (!prefersReducedMotion) {
         animFrameRef.current = requestAnimationFrame(render);
       }
     };
-
     animFrameRef.current = requestAnimationFrame(render);
-
     return () => {
       window.removeEventListener('resize', resize);
       if (interactive) {
@@ -643,7 +582,6 @@ export default function LivingCostTopology({
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
     };
   }, [darkMode, interactive, speed, density]);
-
   return (
     <div className={`relative w-full h-full overflow-hidden pointer-events-none select-none ${className}`}>
       <canvas
@@ -651,7 +589,6 @@ export default function LivingCostTopology({
         className="w-full h-full block"
         style={{ transform: 'translateZ(0)' }}
       />
-
       {/* 3D Orbiting Universal Cloud Concept Tokens (Native SVG Icons — 0% Blur, Zero Emojis) */}
       <div className="absolute inset-0 pointer-events-none overflow-hidden">
         {CLOUD_CONCEPTS.map((concept, i) => {
@@ -665,30 +602,49 @@ export default function LivingCostTopology({
               className="absolute top-0 left-0 pointer-events-none will-change-transform flex flex-col items-center"
               style={{ transform: 'translate3d(-1000px, -1000px, 0)' }}
             >
-              {/* Circular Clay Glass Token */}
+              {/* Solid High-DPI Token (Solid Background, Crisp Vector Rendering, Zero Diffuse Fog) */}
               <div 
-                className={`w-12 h-12 rounded-full surface-raised border ${concept.borderColor} flex items-center justify-center relative shadow-surface-raised transition-all`}
+                className={`w-12 h-12 rounded-2xl flex items-center justify-center relative transition-shadow`}
                 style={{
-                  background: darkMode ? 'rgba(18, 20, 26, 0.82)' : 'rgba(255, 255, 255, 0.90)',
-                  backdropFilter: 'blur(10px)',
-                  boxShadow: `0 8px 24px -4px ${concept.bgGlow}`
+                  background: darkMode ? '#121620' : '#FFFFFF',
+                  border: darkMode ? '1.5px solid rgba(255, 255, 255, 0.16)' : '1.5px solid rgba(0, 0, 0, 0.10)',
+                  boxShadow: darkMode 
+                    ? `0 6px 16px rgba(0, 0, 0, 0.6), 0 0 0 1px ${concept.dotColor}40`
+                    : `0 6px 16px rgba(0, 0, 0, 0.08), 0 0 0 1px ${concept.dotColor}30`,
+                  backfaceVisibility: 'hidden',
+                  WebkitBackfaceVisibility: 'hidden',
+                  transform: 'translateZ(0)'
                 }}
               >
                 {/* Active Micro-Beacon Orbit Dot */}
                 <span 
-                  className="absolute top-0.5 right-0.5 w-2.5 h-2.5 rounded-full border border-black/40 shadow-sm"
+                  className="absolute -top-1 -right-1 w-3 h-3 rounded-full border-2 border-white dark:border-[#121620] shadow-xs"
                   style={{ 
                     backgroundColor: concept.dotColor,
                     boxShadow: `0 0 8px ${concept.dotColor}`
                   }}
                 />
-                
-                {/* Crisp 100% Vector Lucide Icon */}
-                <IconComp className={`w-5 h-5 ${concept.color} stroke-[1.85]`} />
-              </div>
 
-              {/* High-Tech Monospace Tag */}
-              <span className="mt-1 text-[9px] font-mono font-extrabold tracking-wider px-2 py-0.5 rounded-clay-pill surface-recessed text-zorvex-text-secondary dark:text-white/80 select-none border border-zorvex-border/40 dark:border-white/10 shadow-sm">
+                
+
+                {/* Crisp 100% Vector Icon */}
+                <IconComp 
+                  className={`w-6 h-6 ${concept.color} stroke-[2.2]`} 
+                  style={{ 
+                    shapeRendering: 'geometricPrecision',
+                    vectorEffect: 'non-scaling-stroke'
+                  }} 
+                />
+              </div>
+              {/* High-Tech Monospace Tag (Solid, Ultra-Crisp, High Contrast) */}
+              <span 
+                className="mt-1.5 text-[10px] font-mono font-extrabold tracking-wider px-2.5 py-0.5 rounded-md select-none shadow-xs"
+                style={{
+                  background: darkMode ? '#181E2B' : '#F1F5F9',
+                  color: darkMode ? '#F8FAFC' : '#0F172A',
+                  border: darkMode ? '1px solid rgba(255, 255, 255, 0.15)' : '1px solid rgba(0, 0, 0, 0.10)'
+                }}
+              >
                 {concept.label}
               </span>
             </div>

@@ -99,8 +99,8 @@ class ZorvexDualTierCache:
         param_hash = hashlib.sha256(sorted_params.encode('utf-8')).hexdigest()[:16]
         return f"zorvex:v1:org:{org_id}:ds:{dataset_id}:{endpoint}:{param_hash}"
 
-    def get(self, key: str) -> Optional[Dict[str, Any]]:
-        """Retrieves cached value from Redis or Memory tier."""
+    def get(self, key: str, count_miss: bool = True) -> Optional[Dict[str, Any]]:
+        """Retrieves cached value from Redis or Memory tier with configurable miss tracking."""
         # 1. Try Redis if live
         if self.redis_available and self.redis_client:
             try:
@@ -121,14 +121,16 @@ class ZorvexDualTierCache:
                     del self._memory_store[key]
                     self._current_memory_bytes -= entry.get('bytes', 0)
                     self.evictions += 1
-                    self.misses += 1
+                    if count_miss:
+                        self.misses += 1
                     return None
                 # Mark as recently used
                 self._memory_store.move_to_end(key)
                 self.hits += 1
                 return entry['data']
 
-        self.misses += 1
+        if count_miss:
+            self.misses += 1
         return None
 
     def set(self, key: str, value: Dict[str, Any], ttl: Optional[int] = None) -> bool:
@@ -266,8 +268,8 @@ class ZorvexDualTierCache:
         Single-flight cached accessor. Prevents cache stampede / thundering herds
         by ensuring only one thread computes the value on a cache miss.
         """
-        # Fast path: check cache
-        cached = self.get(key)
+        # Fast path: check cache without recording miss (prevents double-counting misses on single-flight paths)
+        cached = self.get(key, count_miss=False)
         if cached is not None:
             return cached
 
@@ -278,8 +280,8 @@ class ZorvexDualTierCache:
             lock = self._key_locks[key]
 
         with lock:
-            # Re-check cache in case another thread computed it while waiting
-            cached = self.get(key)
+            # Re-check cache in case another thread computed it while waiting; record miss exactly once if still absent
+            cached = self.get(key, count_miss=True)
             if cached is not None:
                 return cached
 

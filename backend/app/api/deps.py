@@ -23,6 +23,7 @@ from ..parser import parse_cur_file
 from ..cache import global_cache
 from ..database import get_db
 from ..models import User, Organization, UserSession, DatasetRecord
+from ..security import decode_access_token
 from ..repository import BillingRepository
 
 import logging
@@ -45,10 +46,56 @@ def get_current_user_and_org(
     if not auth_token:
         return None, None
 
-    # Instant Redis Token Blacklist Check (Sub-millisecond rejection of revoked sessions)
+    # Tier 1: Check if auth_token is a JWT Access Token (header.payload.signature)
+    if auth_token.count(".") == 2:
+        payload = decode_access_token(auth_token)
+        if payload:
+            jti = payload.get("jti")
+            # Redis Blacklist check for revoked JWT JTI
+            if jti and global_cache.redis_available and global_cache.redis_client:
+                try:
+                    if (
+                        global_cache.redis_client.sismember("zorvex:blacklist:tokens_set", jti) or
+                        bool(global_cache.redis_client.get(f"zorvex:blacklist:jti:{jti}"))
+                    ):
+                        logger.debug("Rejected blacklisted JWT JTI: %s", jti)
+                        return None, None
+                except Exception as e:
+                    logger.debug("Redis JWT blacklist check notice: %s", e)
+
+            try:
+                user_id = int(payload.get("sub", 0))
+            except (ValueError, TypeError):
+                return None, None
+
+            user = (
+                db.query(User)
+                .options(joinedload(User.organization))
+                .filter(User.id == user_id)
+                .first()
+            )
+            if not user:
+                return None, None
+
+            org = user.organization
+            if not org and user.organization_id:
+                org = db.query(Organization).filter(Organization.id == user.organization_id).first()
+            if not org:
+                return None, None
+
+            return user, org
+        else:
+            # If JWT was provided but was expired or invalid signature, do not accept as opaque
+            return None, None
+
+    # Instant Redis Token Blacklist Check (Single-Set O(1) membership avoids keyspace miss pollution)
     if global_cache.redis_available and global_cache.redis_client:
         try:
-            if global_cache.redis_client.get(f"zorvex:blacklist:token:{auth_token}"):
+            is_revoked = (
+                global_cache.redis_client.sismember("zorvex:blacklist:tokens_set", auth_token) or
+                bool(global_cache.redis_client.get(f"zorvex:blacklist:token:{auth_token}"))
+            )
+            if is_revoked:
                 logger.debug("Rejected revoked session token: %s...", auth_token[:8])
                 return None, None
         except Exception as e:

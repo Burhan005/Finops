@@ -46,6 +46,12 @@ CACHE_TTL_DEFAULT = int(os.getenv("CACHE_TTL_DEFAULT", "300"))
 CACHE_TTL_OVERVIEW = int(os.getenv("CACHE_TTL_OVERVIEW", "60"))
 
 # Security & Authentication
+# JWT & Session Token Security
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "zorvex-finops-production-super-secret-jwt-key-2026-secure")
+JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "15"))
+REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "7"))
+
 SESSION_TTL_HOURS = int(os.getenv("ZORVEX_SESSION_TTL_HOURS", "8"))
 MAX_UPLOAD_BYTES = int(os.getenv("ZORVEX_MAX_UPLOAD_BYTES", str(100 * 1024 * 1024)))  # 100 MB
 
@@ -72,8 +78,7 @@ MAX_ORG_DATASETS_ENTRIES = int(os.getenv("ZORVEX_MAX_ORG_DATASETS_ENTRIES", "10"
 # CORS Configuration
 DEFAULT_CORS_ORIGINS: List[str] = [
     "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost:3000"
+    "http://127.0.0.1:5173"
 ]
 
 cors_env = os.getenv("CORS_ORIGINS", "").strip()

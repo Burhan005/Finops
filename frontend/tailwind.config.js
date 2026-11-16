@@ -108,6 +108,9 @@ export default {
         'clay-sm': '10px',
         'clay-lg': '20px',
         'clay-pill': '9999px',
+      },
+      gridTemplateColumns: {
+        '24': 'repeat(24, minmax(0, 1fr))',
       }
     },
   },

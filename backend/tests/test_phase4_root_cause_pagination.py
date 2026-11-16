@@ -17,9 +17,9 @@ Verifies:
 import unittest
 from decimal import Decimal
 from fastapi.testclient import TestClient
-from backend.app.main import app
-from backend.app.root_cause import analyze_cost_root_cause
-from backend.app.cache import ZorvexDualTierCache, global_cache
+from app.main import app
+from app.root_cause import analyze_cost_root_cause
+from app.cache import ZorvexDualTierCache, global_cache
 
 
 class TestPhase4RootCausePagination(unittest.TestCase):

@@ -32,6 +32,241 @@ FINOPS_REFUND_TYPES = frozenset({'refund'})
 FINOPS_TAX_TYPES = frozenset({'tax'})
 
 
+def _format_date_label(d_str: str) -> str:
+    """Formats '2025-09-01' to '01 Sep'."""
+    if not d_str or len(d_str) < 10:
+        return d_str or ""
+    try:
+        parts = d_str.split('-')
+        months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+        m_idx = int(parts[1]) - 1
+        return f"{parts[2]} {months[m_idx]}"
+    except Exception:
+        return d_str
+
+
+def _extract_compute_sku(usage_types) -> str:
+    """Extracts compute/instance SKU from a set of usage types."""
+    for u in usage_types:
+        if 'BoxUsage:' in u:
+            return u.split('BoxUsage:')[-1]
+        elif 'HeavyUsage:' in u:
+            return u.split('HeavyUsage:')[-1]
+        elif 'InstanceUsage:' in u:
+            return u.split('InstanceUsage:')[-1]
+        elif ':' in u and any(f in u for f in ['.nano', '.micro', '.small', '.medium', '.large', '.xlarge', '.2xl', '.4xl', '.8xl', '.12xl', '.16xl', '.24xl', '.metal']):
+            return u.split(':')[-1]
+    return ""
+
+
+def _deduce_granular_resource_forensics(
+    svc: str,
+    rid: str,
+    cb: float,
+    ct: float,
+    uts_base: Set[str],
+    uts_target: Set[str],
+    base_cost_by_type: Dict[str, float],
+    target_cost_by_type: Dict[str, float],
+    first_date: Optional[str] = None,
+    target_start: Optional[str] = None,
+    min_delta: float = 0.001
+) -> Tuple[str, str, str, str, str]:
+    """
+    Returns (change_category, explanation, evidence_status, operational_note, detail_badge)
+    with rigorous service-specific FinOps root-cause decomposition.
+    """
+    diff = round(ct - cb, 2)
+    diff_str = f"+${diff:.2f}" if diff > 0 else f"-${abs(diff):.2f}"
+    svc_lower = (svc or '').lower()
+
+    # 1. EC2 Compute Server Instances
+    if 'ec2' in svc_lower or rid.startswith('i-'):
+        base_size = _extract_compute_sku(uts_base)
+        target_size = _extract_compute_sku(uts_target)
+        if base_size and target_size and base_size != target_size:
+            action = "Resized up" if diff > 0 else "Resized down"
+            return (
+                'CAPACITY_OR_SKU_CHANGE',
+                f"EC2 server {action} from {base_size} to {target_size} ({diff_str})",
+                'CONFIRMED_BY_CUR',
+                f"CUR documents compute SKU transition from {base_size} to {target_size}.",
+                f"Resized {base_size} -> {target_size}"
+            )
+        if cb <= 0.0001 and ct > 0.0001:
+            lbl = f" ({target_size})" if target_size else ""
+            return (
+                'NEW_RESOURCE',
+                f"Newly launched EC2 server{lbl} provisioned ({diff_str})",
+                'CONFIRMED_BY_CUR',
+                "New EC2 server instance provisioned during target period.",
+                f"New Instance{lbl}"
+            )
+        if cb > 0.0001 and ct <= 0.0001:
+            lbl = f" ({base_size})" if base_size else ""
+            return (
+                'TERMINATED_RESOURCE',
+                f"EC2 server{lbl} stopped or deleted (Saved ${cb:.2f})",
+                'CONFIRMED_BY_CUR',
+                "EC2 server instance stopped or decommissioned.",
+                f"Decommissioned{lbl}"
+            )
+
+    # 2. RDS Managed Databases
+    if 'rds' in svc_lower or ':db:' in rid:
+        base_multi = any('multi-az' in u.lower() for u in uts_base)
+        target_multi = any('multi-az' in u.lower() for u in uts_target)
+        if base_multi and not target_multi:
+            return (
+                'CAPACITY_OR_SKU_CHANGE',
+                f"Switched RDS deployment from Multi-AZ to Single-AZ (Saved -${abs(diff):.2f})",
+                'CONFIRMED_BY_CUR',
+                "Architecture modified from Multi-AZ High Availability to Single-AZ standalone deployment.",
+                "Switched Multi-AZ -> Single-AZ"
+            )
+        if not base_multi and target_multi:
+            return (
+                'CAPACITY_OR_SKU_CHANGE',
+                f"Upgraded RDS deployment to Multi-AZ High Availability ({diff_str})",
+                'CONFIRMED_BY_CUR',
+                "Architecture upgraded from Single-AZ to Multi-AZ High Availability.",
+                "Upgraded Single-AZ -> Multi-AZ"
+            )
+        base_class = _extract_compute_sku(uts_base)
+        target_class = _extract_compute_sku(uts_target)
+        if base_class and target_class and base_class != target_class:
+            return (
+                'CAPACITY_OR_SKU_CHANGE',
+                f"RDS DB instance class modified from {base_class} to {target_class} ({diff_str})",
+                'CONFIRMED_BY_CUR',
+                f"CUR documents RDS instance class modification from {base_class} to {target_class}.",
+                f"Modified {base_class} -> {target_class}"
+            )
+        if cb <= 0.0001 and ct > 0.0001:
+            lbl = f" ({target_class})" if target_class else ""
+            return (
+                'NEW_RESOURCE',
+                f"Newly provisioned RDS managed database{lbl} ({diff_str})",
+                'CONFIRMED_BY_CUR',
+                "New RDS managed database provisioned during target period.",
+                f"New Database{lbl}"
+            )
+        if cb > 0.0001 and ct <= 0.0001:
+            lbl = f" ({base_class})" if base_class else ""
+            return (
+                'TERMINATED_RESOURCE',
+                f"RDS managed database{lbl} decommissioned (Saved ${cb:.2f})",
+                'CONFIRMED_BY_CUR',
+                "RDS database instance deleted or stopped.",
+                f"Decommissioned{lbl}"
+            )
+
+    # 3. New / Terminated lifecycle checks for other workloads
+    if cb <= 0.0001 and ct > 0.0001:
+        if first_date and target_start and first_date < target_start:
+            return (
+                'RESUMED_WORKLOAD',
+                f"Existing {svc or 'workload'} resumed incurring charges ({diff_str})",
+                'CONFIRMED_BY_CUR',
+                f"Resource was active earlier on {first_date}; resumed billing during target period.",
+                "Resumed Workload"
+            )
+        return (
+            'NEW_RESOURCE',
+            f"Newly provisioned {svc or 'workload'} began incurring charges ({diff_str})",
+            'CONFIRMED_BY_CUR',
+            "Resource appeared in billing records for the first time in target window.",
+            "New Workload"
+        )
+    if cb > 0.0001 and ct <= 0.0001:
+        return (
+            'TERMINATED_RESOURCE',
+            f"{svc or 'Workload'} stopped incurring charges (Saved ${cb:.2f})",
+            'CONFIRMED_BY_CUR',
+            "Resource ceased incurring charges in target period.",
+            f"Decommissioned (Saved ${cb:.2f})"
+        )
+
+    # 4. Service-Specific Dominant Usage SKU Breakdown
+    all_uts = uts_base | uts_target
+    ut_deltas = {u: target_cost_by_type.get(u, 0.0) - base_cost_by_type.get(u, 0.0) for u in all_uts}
+    dom_ut = max(ut_deltas.keys(), key=lambda u: abs(ut_deltas[u])) if ut_deltas else ''
+    dom_lower = dom_ut.lower()
+
+    if 'backup' in dom_lower:
+        badge = "Backup Retention Surge" if diff > 0 else "Backup Retention Subsidence"
+        return (
+            'USAGE_INCREASE' if diff > 0 else 'USAGE_DECREASE',
+            f"Automated backup snapshot storage volume variance ({diff_str})",
+            'CONFIRMED_BY_CUR',
+            "CUR documents backup snapshot retention volume change.",
+            badge
+        )
+    if 'timedstorage' in dom_lower or 'gp3' in dom_lower or 'gp2' in dom_lower or 'volumeusage' in dom_lower:
+        badge = "Storage Volume Growth" if diff > 0 else "Storage Scaled Down"
+        sku_clean = dom_ut.split(':')[-1] if ':' in dom_ut else dom_ut
+        return (
+            'USAGE_INCREASE' if diff > 0 else 'USAGE_DECREASE',
+            f"Allocated storage capacity variance on {sku_clean} ({diff_str})",
+            'CONFIRMED_BY_CUR',
+            "CUR documents volume storage capacity modification.",
+            badge
+        )
+    if 'requests' in dom_lower or 'request' in dom_lower:
+        badge = "API Requests Surge" if diff > 0 else "API Requests Subsided"
+        sku_clean = dom_ut.split(':')[-1] if ':' in dom_ut else dom_ut
+        return (
+            'USAGE_INCREASE' if diff > 0 else 'USAGE_DECREASE',
+            f"Operational API request traffic variance on {sku_clean} ({diff_str})",
+            'CONFIRMED_BY_CUR',
+            "CUR documents request invocation volume variance.",
+            badge
+        )
+    if 'datatransfer' in dom_lower or 'out-bytes' in dom_lower or 'in-bytes' in dom_lower or 'natgateway' in dom_lower:
+        badge = "Data Transfer Egress Surge" if diff > 0 else "Data Transfer Subsided"
+        return (
+            'USAGE_INCREASE' if diff > 0 else 'USAGE_DECREASE',
+            f"Network outbound data transfer volume variance ({diff_str})",
+            'CONFIRMED_BY_CUR',
+            "CUR documents network egress transfer variance.",
+            badge
+        )
+    if 'boxusage' in dom_lower or 'instanceusage' in dom_lower:
+        badge = f"Runtime Hours Increased (+${diff:.2f})" if diff > 0 else f"Runtime Hours Decreased (-${abs(diff):.2f})"
+        return (
+            'USAGE_INCREASE' if diff > 0 else 'USAGE_DECREASE',
+            f"Server compute runtime hours variance ({diff_str})",
+            'CONFIRMED_BY_CUR',
+            "CUR documents variable runtime hours variance under steady instance SKU.",
+            badge
+        )
+
+    if diff > min_delta:
+        return (
+            'USAGE_INCREASE',
+            f"Increased workload consumption ({diff_str})",
+            'CONFIRMED_BY_CUR',
+            "Increased operational usage observed in target period.",
+            "Usage Increase"
+        )
+    elif diff < -min_delta:
+        return (
+            'USAGE_DECREASE',
+            f"Reduced workload consumption ({diff_str})",
+            'CONFIRMED_BY_CUR',
+            "Reduced operational usage observed in target period.",
+            "Usage Decrease"
+        )
+    else:
+        return (
+            'STEADY_STATE',
+            'Steady-state operations.',
+            'CONFIRMED_BY_CUR',
+            'Stable ongoing operations.',
+            'Steady Fleet'
+        )
+
+
 
 class ServiceItem(dict):
     """
@@ -168,7 +403,14 @@ class BillingRepository:
             svc_filter = None
         if svc_filter:
             norm_svc = normalize_service_code(svc_filter)
-            filters.append(or_(BillingRecord.service == svc_filter, BillingRecord.service == norm_svc))
+            # Sargable IN-list lookup: eliminates non-sargable func.replace table scans
+            candidates = list(dict.fromkeys([
+                svc_filter,
+                norm_svc,
+                svc_filter.replace(' ', ''),
+                norm_svc.replace(' ', '')
+            ]))
+            filters.append(BillingRecord.service.in_(candidates))
 
         acc_filter = account_id.strip() if account_id else None
         if acc_filter and acc_filter.lower() in ('all', ''):
@@ -310,17 +552,21 @@ class BillingRepository:
         )
         all_dates = [r[0] for r in date_rows if r[0] and r[0] != 'Unknown']
 
-        month_rows = (
-            self.db.query(BillingRecord.usage_month)
-            .filter(
-                BillingRecord.organization_id == self.org_id,
-                BillingRecord.dataset_id == self.dataset_id
+        # High-Performance Optimization: Derive distinct months in-memory from distinct usage_date (YYYY-MM-DD)
+        # Eliminates a redundant full database table/index scan across large multi-million row datasets
+        all_months = sorted(list(set(d[:7] for d in all_dates if len(d) >= 7)))
+        if not all_months:
+            month_rows = (
+                self.db.query(BillingRecord.usage_month)
+                .filter(
+                    BillingRecord.organization_id == self.org_id,
+                    BillingRecord.dataset_id == self.dataset_id
+                )
+                .distinct()
+                .order_by(BillingRecord.usage_month.asc())
+                .all()
             )
-            .distinct()
-            .order_by(BillingRecord.usage_month.asc())
-            .all()
-        )
-        all_months = [r[0] for r in month_rows if r[0] and r[0] != 'Unknown']
+            all_months = [r[0] for r in month_rows if r[0] and r[0] != 'Unknown']
 
         filtered_dates = all_dates
         if start_date:
@@ -417,6 +663,14 @@ class BillingRepository:
                 services_dict[svc_name] = services_dict.get(svc_name, Decimal('0')) + Decimal(str(round(r.total_cost or 0.0, 6)))
 
         resp_services = {k: round_currency(v) for k, v in sorted(services_dict.items(), key=lambda item: item[1], reverse=True)}
+        # Guarantee both canonical and unspaced variants are present for robust frontend resolution on unslice overview
+        if not svc_filter:
+            aliases = {}
+            for k, v in resp_services.items():
+                unspaced_k = k.replace(' ', '')
+                if unspaced_k != k and unspaced_k not in resp_services:
+                    aliases[unspaced_k] = v
+            resp_services.update(aliases)
 
         # 4. Account Breakdown via SQL (gross operational spend by account)
         acc_query = (
@@ -815,12 +1069,17 @@ class BillingRepository:
             norm_svc = normalize_service_code(service)
             spaceless_svc = service.replace(' ', '')
             spaced_svc = 'Amazon ' + service.replace('Amazon', '').strip() if service.startswith('Amazon') else service
-            filters.append(or_(
+            svc_candidates = [
                 BillingRecord.service == service,
                 BillingRecord.service == norm_svc,
                 BillingRecord.service == spaceless_svc,
                 BillingRecord.service == spaced_svc
-            ))
+            ]
+            if norm_svc == 'Amazon CloudFront' or service in ('CloudFrontPlans', 'Amazon CloudFront', 'AmazonCloudFront'):
+                svc_candidates.append(BillingRecord.service == 'CloudFrontPlans')
+                svc_candidates.append(BillingRecord.service == 'Amazon CloudFront')
+                svc_candidates.append(BillingRecord.service == 'AmazonCloudFront')
+            filters.append(or_(*svc_candidates))
 
         if account_id and account_id.lower() not in ('all', ''):
             filters.append(BillingRecord.account_id == account_id)
@@ -864,7 +1123,9 @@ class BillingRepository:
                 func.max(BillingRecord.account_id).label('account_id'),
                 func.max(BillingRecord.region).label('region'),
                 func.max(BillingRecord.short_id).label('short_id'),
+                func.min(BillingRecord.usage_date).label('first_seen'),
                 func.max(BillingRecord.usage_date).label('last_seen'),
+                func.count(distinct(BillingRecord.usage_date)).label('active_days'),
                 func.max(BillingRecord.usage_type).label('usage_type'),
                 func.max(BillingRecord.line_item_type).label('line_type'),
                 func.sum(BillingRecord.cost).label('total_cost'),
@@ -922,13 +1183,22 @@ class BillingRepository:
         start_idx = (page_clamped - 1) * eff_page_size
         paged_slice = matched_items[start_idx:start_idx + eff_page_size]
 
+        # High-Performance DB Optimization: query max_dataset_date once outside the loop scoped to org and dataset
+        max_dataset_date = (
+            self.db.query(func.max(BillingRecord.usage_date))
+            .filter(
+                BillingRecord.organization_id == self.org_id,
+                BillingRecord.dataset_id == self.dataset_id
+            )
+            .scalar() or ''
+        )
+
         resources_out = []
         for r, c_meta in paged_slice:
             cost_val = round_currency(Decimal(str(round(r.total_cost or 0.0, 6))))
             inst_type = ResourceClassifierEngine.extract_instance_type([(r.usage_type, 1.0)]) if r.usage_type else None
 
             r_last_date = (r.last_seen or '').split(' ')[0]
-            max_dataset_date = self.db.query(func.max(BillingRecord.usage_date)).scalar() or ''
             is_terminated = bool(max_dataset_date and r_last_date and r_last_date < max_dataset_date)
 
             is_comm = bool(r.resource_id.startswith('No-Resource-ID') or c_meta.get('category') == 'RI_SUBSCRIPTION_FEE')
@@ -937,8 +1207,8 @@ class BillingRepository:
                 l_label = 'Reserved Instance Commitment'
             elif c_meta.get('category') in ('EC2_INSTANCE', 'RDS_DB_INSTANCE'):
                 if is_terminated:
-                    l_status = 'TERMINATED_INSTANCE'
-                    l_label = f"Terminated Workload (Inactive since {r_last_date})"
+                    l_status = 'STOPPED_INSTANCE'
+                    l_label = f"Stopped / Inactive Workload (Since {r_last_date})" if c_meta.get('category') == 'EC2_INSTANCE' else f"Stopped / Inactive DB (Since {r_last_date})"
                 else:
                     l_status = 'ACTIVE_INSTANCE'
                     l_label = 'Active Compute Instance' if c_meta.get('category') == 'EC2_INSTANCE' else 'Active DB Instance'
@@ -967,9 +1237,9 @@ class BillingRepository:
                 'total_cost': cost_val,
                 'cost': cost_val,
                 'effective_cost': cost_val,
-                'active_days': 1 if is_comm else 13,
-                'first_seen': '2026-10-01',
-                'last_seen': r.last_seen or '',
+                'active_days': 1 if is_comm else (r.active_days or 1),
+                'first_seen': str(r.first_seen).split(' ')[0] if r.first_seen else '',
+                'last_seen': str(r.last_seen).split(' ')[0] if r.last_seen else '',
                 'category': c_meta.get('category', 'GENERIC_RESOURCE'),
                 'category_label': c_meta.get('category_label', 'Identified Resource'),
                 'instance_type': inst_type,
@@ -1010,6 +1280,90 @@ class BillingRepository:
             'compliance_disclaimer': 'CUR provides historical billing evidence. Not verified against live AWS state. Does not prove whether snapshot currently exists or is safe to delete.'
         }
 
+        # Compute inventory_reconciliation for Amazon RDS (authoritative across dataset)
+        inventory_reconciliation = None
+        norm_svc_req = (service or '').lower()
+        if norm_svc_req in ('amazon rds', 'rds', 'snapshots_backups', 'all') or 'rds' in norm_svc_req:
+            rds_records = (
+                self.db.query(
+                    BillingRecord.resource_id,
+                    BillingRecord.resource_name,
+                    BillingRecord.short_id,
+                    BillingRecord.usage_type
+                )
+                .filter(
+                    BillingRecord.organization_id == self.org_id,
+                    BillingRecord.dataset_id == self.dataset_id,
+                    BillingRecord.service.ilike('%RDS%'),
+                    BillingRecord.line_item_type.notin_(['Credit', 'Refund', 'Tax', 'SavingsPlanNegation']),
+                    BillingRecord.cost > 0
+                )
+                .distinct()
+                .all()
+            )
+
+            db_types = defaultdict(set)
+            db_names = {}
+            for rid, name, short_id, ut in rds_records:
+                if not rid or rid.startswith('No-Resource-ID'):
+                    continue
+                clean_name = name or short_id or (rid.split(':')[-1] if ':' in rid else rid)
+                if clean_name.startswith('arn:aws:rds'):
+                    clean_name = clean_name.split(':')[-1]
+                db_names[rid] = clean_name
+                db_types[rid].add((ut or '').lower())
+
+            active_dbs = []
+            active_with_bkp = []
+            retained_bkps = []
+
+            for rid, uts in db_types.items():
+                nm = db_names[rid]
+                has_active_infra = any(('storage' in u or 'instance' in u or 'heavyusage' in u or 'datatransfer' in u) and 'backup' not in u for u in uts)
+                has_bkp = any('backup' in u for u in uts)
+                if has_active_infra:
+                    if nm not in active_dbs:
+                        active_dbs.append(nm)
+                    if has_bkp and nm not in active_with_bkp:
+                        active_with_bkp.append(nm)
+                elif has_bkp:
+                    if nm not in retained_bkps:
+                        retained_bkps.append(nm)
+
+            active_dbs.sort()
+            active_with_bkp.sort()
+            retained_bkps.sort()
+
+            active_instances_count = len(active_dbs)
+            retained_backups_count = len(retained_bkps)
+
+            active_list_str = f" ({', '.join(active_dbs[:4])})" if active_dbs else ""
+            backup_str = f" ({', '.join(active_with_bkp[:3])})" if active_with_bkp else ""
+            retained_list_str = f" ({', '.join(retained_bkps[:4])})" if retained_bkps else ""
+
+            if retained_backups_count > 0:
+                reconciliation_note = (
+                    f"Authoritative AWS inventory contains {active_instances_count} active database instances{active_list_str}. "
+                    f"Automated backups are actively billed for {len(active_with_bkp)} instances{backup_str}. "
+                    f"The remaining {retained_backups_count} identifiers represent retained backup storage from decommissioned databases{retained_list_str}."
+                )
+            else:
+                reconciliation_note = (
+                    f"Authoritative AWS inventory contains {active_instances_count} active database instances{active_list_str}. "
+                    f"Automated backups are actively billed for {len(active_with_bkp)} instances{backup_str}."
+                )
+
+            inventory_reconciliation = {
+                'active_instances': active_instances_count,
+                'active_instance_names': active_dbs,
+                'active_instances_with_backups': active_with_bkp,
+                'retained_backups': retained_backups_count,
+                'retained_backup_names': retained_bkps,
+                'total_billable_identifiers': len(db_types),
+                'scope': service,
+                'reconciliation_note': reconciliation_note
+            }
+
         return {
             'status': 'SUCCESS',
             'summary': {
@@ -1021,7 +1375,8 @@ class BillingRepository:
                 'currency': 'USD',
                 'scope_snapshot_cost': scope_snap_cost,
                 'scope_snapshot_count': scope_snap_count,
-                'has_scope_snapshots': scope_snap_count > 0
+                'has_scope_snapshots': scope_snap_count > 0,
+                'inventory_reconciliation': inventory_reconciliation
             },
             'snapshots_summary': snapshots_summary,
             'resources': resources_out,
@@ -1103,15 +1458,15 @@ class BillingRepository:
 
         if first.service == 'Amazon RDS':
             if is_terminated:
-                lifecycle_status = 'TERMINATED_INSTANCE'
-                lifecycle_label = f'Terminated DB Instance (Inactive since {r_last_date})'
+                lifecycle_status = 'STOPPED_INSTANCE'
+                lifecycle_label = f'Stopped / Inactive DB (Since {r_last_date})'
             else:
                 lifecycle_status = 'ACTIVE_INSTANCE'
                 lifecycle_label = 'Active DB Instance'
         elif first.service == 'Amazon EC2':
             if is_terminated:
-                lifecycle_status = 'TERMINATED_INSTANCE'
-                lifecycle_label = f'Terminated Workload (Inactive since {r_last_date})'
+                lifecycle_status = 'STOPPED_INSTANCE'
+                lifecycle_label = f'Stopped / Inactive Workload (Since {r_last_date})'
             else:
                 lifecycle_status = 'ACTIVE_INSTANCE'
                 lifecycle_label = 'Active Compute Instance'
@@ -1594,12 +1949,12 @@ class BillingRepository:
                 BillingRecord.usage_date,
                 BillingRecord.service,
                 BillingRecord.resource_id,
-                BillingRecord.short_id,
-                BillingRecord.resource_name,
-                BillingRecord.line_item_type,
-                BillingRecord.usage_type,
-                BillingRecord.pricing_term,
-                BillingRecord.sp_arn,
+                func.max(BillingRecord.short_id).label('short_id'),
+                func.max(BillingRecord.resource_name).label('resource_name'),
+                func.max(BillingRecord.line_item_type).label('line_item_type'),
+                func.max(BillingRecord.usage_type).label('usage_type'),
+                func.max(BillingRecord.pricing_term).label('pricing_term'),
+                func.max(BillingRecord.sp_arn).label('sp_arn'),
                 func.sum(BillingRecord.cost).label('total_cost'),
                 func.count(BillingRecord.id).label('records_count')
             )
@@ -1873,28 +2228,30 @@ class BillingRepository:
             norm_svc = normalize_service_code(service)
             filters.append(or_(BillingRecord.service == service, BillingRecord.service == norm_svc))
 
+        period_expr = case(
+            (and_(BillingRecord.usage_date >= baseline_start, BillingRecord.usage_date <= baseline_end), 'baseline'),
+            else_='target'
+        )
+
         rows = (
             self.db.query(
-                case(
-                    (and_(BillingRecord.usage_date >= baseline_start, BillingRecord.usage_date <= baseline_end), 'baseline'),
-                    else_='target'
-                ).label('period'),
+                period_expr.label('period'),
                 BillingRecord.service,
                 BillingRecord.resource_id,
-                BillingRecord.short_id,
-                BillingRecord.resource_name,
-                BillingRecord.account_id,
-                BillingRecord.region,
+                func.max(BillingRecord.short_id).label('short_id'),
+                func.max(BillingRecord.resource_name).label('resource_name'),
+                func.max(BillingRecord.account_id).label('account_id'),
+                func.max(BillingRecord.region).label('region'),
                 BillingRecord.line_item_type,
                 BillingRecord.usage_type,
-                BillingRecord.pricing_term,
-                BillingRecord.sp_arn,
+                func.max(BillingRecord.pricing_term).label('pricing_term'),
+                func.max(BillingRecord.sp_arn).label('sp_arn'),
                 func.sum(BillingRecord.cost).label('total_cost'),
                 func.count(BillingRecord.id).label('records_count')
             )
             .filter(*filters)
             .group_by(
-                'period',
+                period_expr,
                 BillingRecord.service,
                 BillingRecord.resource_id,
                 BillingRecord.line_item_type,
@@ -1928,6 +2285,10 @@ class BillingRepository:
                     'account_id': r.account_id or '',
                     'region': r.region or 'global',
                     'usage_types': set(),
+                    'base_usage_types': set(),
+                    'target_usage_types': set(),
+                    'base_cost_by_type': defaultdict(float),
+                    'target_cost_by_type': defaultdict(float),
                     'line_types': set(),
                     'sp_arn': r.sp_arn or '',
                     'term': r.pricing_term or 'OnDemand',
@@ -1935,6 +2296,12 @@ class BillingRepository:
                 }
             if r.usage_type:
                 res_meta[rid]['usage_types'].add(r.usage_type)
+                if period == 'baseline':
+                    res_meta[rid]['base_usage_types'].add(r.usage_type)
+                    res_meta[rid]['base_cost_by_type'][r.usage_type] += float(c_dec)
+                else:
+                    res_meta[rid]['target_usage_types'].add(r.usage_type)
+                    res_meta[rid]['target_cost_by_type'][r.usage_type] += float(c_dec)
             if r.line_item_type:
                 res_meta[rid]['line_types'].add(r.line_item_type)
             res_meta[rid]['records_count'] += rec_count
@@ -1983,6 +2350,30 @@ class BillingRepository:
 
         category_totals = defaultdict(float)
 
+        # High-Performance DB Optimization: Only query earliest seen date for candidate workloads
+        # that have zero baseline spend but positive target spend (avoids full-table GROUP BY scan)
+        has_baseline = (days_base > 0)
+        new_candidates = [
+            rid for rid in all_rids
+            if base_res_cost[rid] <= 0.0001 and target_res_cost[rid] > 0.0001
+        ]
+        first_seen_map = {}
+        if new_candidates:
+            first_seen_rows = (
+                self.db.query(
+                    BillingRecord.resource_id,
+                    func.min(BillingRecord.usage_date).label('first_date')
+                )
+                .filter(
+                    BillingRecord.organization_id == self.org_id,
+                    BillingRecord.dataset_id == self.dataset_id,
+                    BillingRecord.resource_id.in_(new_candidates)
+                )
+                .group_by(BillingRecord.resource_id)
+                .all()
+            )
+            first_seen_map = {r.resource_id: r.first_date for r in first_seen_rows}
+
         for rid in all_rids:
             cb = round_currency(base_res_cost[rid])
             ct = round_currency(target_res_cost[rid])
@@ -2005,46 +2396,56 @@ class BillingRepository:
             is_tax = 'Tax' in ltypes or 'tax' in ut_all or rid.startswith('TAX-') or meta.get('service') in ('Taxes & Surcharges', 'Tax')
             is_ri = any(t in ('RIFee', 'SavingsPlanRecurringFee', 'Fee') for t in ltypes) or 'rifee' in ut_all
 
+            first_date = first_seen_map.get(rid)
+
+            uts_b = meta.get('base_usage_types', set())
+            uts_t = meta.get('target_usage_types', set())
+            c_by_type_b = meta.get('base_cost_by_type', {})
+            c_by_type_t = meta.get('target_cost_by_type', {})
+
             if is_tax:
                 cat = 'BILLING_FEE_OR_TAX'
                 evidence = 'CONFIRMED_BY_CUR'
                 op_note = 'Invoice-level statutory tax recorded in CUR.'
                 explanation = f"Statutory tax adjustment ({'+' if diff > 0 else ''}${diff:.2f})"
+                detail_badge = "Statutory Tax"
             elif is_ri:
                 cat = 'COMMITMENT_FEE'
                 evidence = 'CONFIRMED_BY_CUR'
                 op_note = 'Contract commitment fee recorded in CUR.'
                 explanation = f"Reservation or Savings Plan recurring fee ({'+' if diff > 0 else ''}${diff:.2f})"
-            elif cb <= 0.0001 and ct > 0.0001:
-                cat = 'NEW_RESOURCE'
+                detail_badge = "Commitment Fee"
+            elif not has_baseline:
+                cat = 'ACTIVE_WORKLOAD'
                 evidence = 'CONFIRMED_BY_CUR'
-                op_note = 'Resource appeared in billing records for the first time in target window.'
-                explanation = f"Newly provisioned workload began incurring charges (+${ct:.2f})"
-            elif cb > 0.0001 and ct <= 0.0001:
-                cat = 'TERMINATED_RESOURCE'
-                evidence = 'CONFIRMED_BY_CUR'
-                op_note = 'Resource ceased incurring billing charges in target window.'
-                explanation = f"Workload stopped incurring charges (Saved ${cb:.2f})"
-            elif diff > min_delta:
-                cat = 'USAGE_INCREASE'
-                evidence = 'CONFIRMED_BY_CUR'
-                op_note = 'Increased operational usage observed in target period.'
-                explanation = f"Increased workload usage (+${diff:.2f})"
-            elif diff < -min_delta:
-                cat = 'USAGE_DECREASE'
-                evidence = 'CONFIRMED_BY_CUR'
-                op_note = 'Reduced operational usage observed in target period.'
-                explanation = f"Reduced workload usage (-${abs(diff):.2f})"
+                op_note = 'Active workload during target period (No baseline period configured for variance comparison).'
+                explanation = f"Active workload incurred ${ct:.2f} in target period"
+                root_cause = f"ACTIVE WORKLOAD: Billed ${ct:.2f} in selected target window (No baseline period configured for variance comparison)"
+                detail_badge = "Active Workload"
             else:
-                cat = 'STEADY_STATE'
-                evidence = 'CONFIRMED_BY_CUR'
-                op_note = 'Stable operations.'
-                explanation = 'Steady-state operations.'
+                cat, explanation, evidence, op_note, detail_badge = _deduce_granular_resource_forensics(
+                    svc=meta.get('service', 'Other'),
+                    rid=rid,
+                    cb=cb,
+                    ct=ct,
+                    uts_base=uts_b,
+                    uts_target=uts_t,
+                    base_cost_by_type=c_by_type_b,
+                    target_cost_by_type=c_by_type_t,
+                    first_date=first_date,
+                    target_start=target_start,
+                    min_delta=min_delta
+                )
 
             category_totals[cat] += diff
             share_pct = round((diff / net_delta * 100.0), 1) if abs(net_delta) > 0.001 else 0.0
             rpct = round(((diff / cb) * 100.0), 1) if cb > 0 else (None if ct > 0 else 0.0)
-            rpct_str = f"{'+' if rpct >= 0 else ''}{rpct:.1f}%" if rpct is not None else "New"
+            if not has_baseline:
+                rpct_str = f"${ct:.2f}"
+            elif cat == 'RESUMED_WORKLOAD':
+                rpct_str = "Resumed"
+            else:
+                rpct_str = f"{'+' if rpct >= 0 else ''}{rpct:.1f}%" if rpct is not None else "New"
 
             # Phase 2 Exact Decomposition
             if cb <= 0.0001 and ct > 0:
@@ -2092,6 +2493,9 @@ class BillingRepository:
                 'evidence_status': evidence,
                 'operational_note': op_note,
                 'root_cause': root_cause,
+                'detail_badge': detail_badge,
+                'inflection_date': None,
+                'inflection_event': None,
                 'usage_types': sorted(list(meta.get('usage_types', []))),
                 'raw_records_count': meta.get('records_count', 0)
             }
@@ -2108,6 +2512,100 @@ class BillingRepository:
                 spikes.append(r_entry)
             elif diff < -min_delta:
                 reductions.append(r_entry)
+
+        # Batch Inflection Date & Transition Point Detection across comparison span
+        changing_cands = [r for r in all_resources if abs(r.get('delta_cost', 0.0)) >= min_delta]
+        changing_cands.sort(key=lambda x: abs(x.get('delta_cost', 0.0)), reverse=True)
+        top_cand_items = changing_cands[:60]
+        cand_ids = [r['resource_id'] for r in top_cand_items if r.get('resource_id') not in ('Unassigned', 'Unknown', 'No-Resource-ID')]
+
+        if cand_ids and baseline_start and target_end and baseline_start != target_end:
+            try:
+                inflect_rows = (
+                    self.db.query(
+                        BillingRecord.resource_id,
+                        BillingRecord.usage_date,
+                        BillingRecord.usage_type,
+                        func.sum(BillingRecord.cost).label('day_cost')
+                    )
+                    .filter(
+                        BillingRecord.organization_id == self.org_id,
+                        BillingRecord.dataset_id == self.dataset_id,
+                        BillingRecord.resource_id.in_(cand_ids),
+                        BillingRecord.usage_date >= baseline_start,
+                        BillingRecord.usage_date <= target_end
+                    )
+                    .group_by(
+                        BillingRecord.resource_id,
+                        BillingRecord.usage_date,
+                        BillingRecord.usage_type
+                    )
+                    .order_by(
+                        BillingRecord.resource_id,
+                        BillingRecord.usage_date.asc()
+                    )
+                    .all()
+                )
+
+                daily_by_res = defaultdict(lambda: defaultdict(lambda: {'cost': 0.0, 'uts': set()}))
+                for ir in inflect_rows:
+                    ir_cost = float(ir.day_cost or 0.0)
+                    daily_by_res[ir.resource_id][ir.usage_date]['cost'] += ir_cost
+                    if ir.usage_type:
+                        daily_by_res[ir.resource_id][ir.usage_date]['uts'].add(ir.usage_type)
+
+                for r_item in top_cand_items:
+                    cid = r_item['resource_id']
+                    r_daily = daily_by_res.get(cid)
+                    if not r_daily:
+                        continue
+                    sorted_days = sorted(r_daily.keys())
+                    if not sorted_days:
+                        continue
+
+                    b_uts = set()
+                    for d in sorted_days:
+                        if baseline_start <= d <= baseline_end:
+                            b_uts.update(r_daily[d]['uts'])
+                    t_uts = set()
+                    for d in sorted_days:
+                        if target_start <= d <= target_end:
+                            t_uts.update(r_daily[d]['uts'])
+
+                    new_skus = t_uts - b_uts
+                    inflect_date = None
+                    if new_skus:
+                        for d in sorted_days:
+                            if any(u in r_daily[d]['uts'] for u in new_skus):
+                                inflect_date = d
+                                break
+                    elif r_item.get('change_category') == 'NEW_RESOURCE':
+                        for d in sorted_days:
+                            if r_daily[d]['cost'] > 0.0001:
+                                inflect_date = d
+                                break
+                    elif r_item.get('change_category') == 'TERMINATED_RESOURCE':
+                        active_days = [d for d in sorted_days if r_daily[d]['cost'] > 0.0001]
+                        if active_days:
+                            inflect_date = active_days[-1]
+                    else:
+                        max_jump = 0.0
+                        prev_c = r_daily[sorted_days[0]]['cost']
+                        for d in sorted_days[1:]:
+                            curr_c = r_daily[d]['cost']
+                            jump = abs(curr_c - prev_c)
+                            if jump > max_jump and jump > 0.05:
+                                max_jump = jump
+                                inflect_date = d
+                            prev_c = curr_c
+
+                    if inflect_date:
+                        fmt_d = _format_date_label(inflect_date)
+                        dbadge = r_item.get('detail_badge') or 'Usage Variance'
+                        r_item['inflection_date'] = inflect_date
+                        r_item['inflection_event'] = f"{fmt_d}: {dbadge}"
+            except Exception as e:
+                logger.warning(f"Failed to compute inflection events: {e}")
 
         # Sort lists with deterministic tie-breaking
         spikes.sort(key=lambda x: (x['delta_cost'], max(x['target_cost'], x['baseline_cost']), x.get('resource_id', '')), reverse=True)
@@ -2319,7 +2817,7 @@ class BillingRepository:
         service: Optional[str] = None,
         cluster_name: Optional[str] = None,
         target_date: Optional[str] = None,
-        cutoff_hour: str = "18:00"
+        cutoff_hour: str = "24:00"
     ) -> Dict[str, Any]:
         """
         Calculates 100% authentic, dynamic EKS, ECS, and EC2 cluster compute telemetry
@@ -2352,7 +2850,7 @@ class BillingRepository:
         ]
 
         # Determine cutoff mode (supports "24:00" / "none" for 24/7 production fleets)
-        clean_cutoff = (cutoff_hour or "18:00").strip().lower()
+        clean_cutoff = (cutoff_hour or "24:00").strip().lower()
         cutoff_is_active = clean_cutoff not in ["none", "24:00", "24", "00:00", "0", "false"]
         cutoff_threshold = clean_cutoff if cutoff_is_active else "24:00"
 
@@ -2361,23 +2859,57 @@ class BillingRepository:
 
         if 'eks' in clean_svc or 'elastic kubernetes' in clean_svc:
             orchestrator = "Amazon EKS (Kubernetes)"
-            cluster_display_name = "EKS Production Cluster"
-            cp_filter = list(base_filter) + [BillingRecord.service.in_(['Amazon EKS', 'AmazonEKS'])]
+
+            # Discover all distinct EKS control plane clusters in this dataset
+            cp_clusters_raw = self.db.query(
+                BillingRecord.resource_name,
+                BillingRecord.resource_id
+            ).filter(
+                *base_filter,
+                BillingRecord.service.in_(['Amazon EKS', 'AmazonEKS'])
+            ).distinct().all()
+
+            available_clusters = []
+            for r in cp_clusters_raw:
+                c_name = r.resource_name or (r.resource_id.split('/')[-1] if r.resource_id else '')
+                if c_name and c_name not in available_clusters:
+                    available_clusters.append(c_name)
+
+            # Preferred order: dev-eks-cluster first, or selected cluster
+            selected_cluster = cluster_name if cluster_name and cluster_name in available_clusters else (
+                'dev-eks-cluster' if 'dev-eks-cluster' in available_clusters else (available_clusters[0] if available_clusters else "prod-core-eks-cluster")
+            )
+            cluster_display_name = selected_cluster
+
+            # Specific Control Plane filter for selected cluster
+            cp_filter = list(base_filter) + [
+                BillingRecord.service.in_(['Amazon EKS', 'AmazonEKS']),
+                or_(BillingRecord.resource_name == selected_cluster, BillingRecord.resource_id.ilike(f'%{selected_cluster}%'))
+            ]
+
+            # Determine prefix for worker nodes (e.g. 'dev-eks', 'staging-qa', 'prod-core', 'ml-training')
+            pfx = selected_cluster.replace('-cluster', '').split('-')[0]
+
             worker_filter = list(base_filter) + [
                 BillingRecord.service == 'Amazon EC2',
                 BillingRecord.resource_id.like('i-%'),
-                or_(BillingRecord.resource_name.ilike('%eks%'), BillingRecord.resource_id.ilike('%eks%')),
+                or_(
+                    BillingRecord.resource_name.ilike(f'%{selected_cluster}%'),
+                    BillingRecord.resource_name.ilike(f'{pfx}-%'),
+                    BillingRecord.resource_id.ilike(f'%{pfx}%')
+                ),
                 ~BillingRecord.resource_id.like('vol-%'),
                 ~BillingRecord.resource_id.like('snap-%')
             ]
+
             storage_filter = list(base_filter) + [
                 or_(
-                    BillingRecord.resource_id.like('vol-0eks%'),
-                    BillingRecord.resource_id.like('snap-0eks%'),
+                    BillingRecord.resource_id.like(f'vol-0{pfx}%'),
+                    BillingRecord.resource_id.like(f'snap-0{pfx}%'),
                     and_(
                         BillingRecord.service.in_(['Amazon EC2', 'Amazon EBS', 'AmazonEBS']),
                         or_(BillingRecord.resource_id.like('vol-%'), BillingRecord.resource_id.like('snap-%')),
-                        or_(BillingRecord.resource_name.ilike('%eks%'), BillingRecord.resource_id.ilike('%eks%'))
+                        or_(BillingRecord.resource_name.ilike(f'%{selected_cluster}%'), BillingRecord.resource_name.ilike(f'%{pfx}%'))
                     )
                 )
             ]
@@ -2424,21 +2956,14 @@ class BillingRepository:
             worker_filter = list(base_filter) + [BillingRecord.service == service]
             storage_filter = []
 
-        # Query all available dates from compute nodes or dataset
+        # Query all available dates from dataset so user can inspect any day in the month
         dates_query = self.db.query(BillingRecord.usage_date).filter(
-            *worker_filter,
+            *base_filter,
             BillingRecord.usage_date.isnot(None),
             BillingRecord.usage_date != ''
         ).distinct().order_by(BillingRecord.usage_date.desc()).all()
 
         available_dates = [d[0] for d in dates_query if d[0]]
-        if not available_dates:
-            any_dates = self.db.query(BillingRecord.usage_date).filter(
-                *base_filter,
-                BillingRecord.usage_date.isnot(None),
-                BillingRecord.usage_date != ''
-            ).distinct().order_by(BillingRecord.usage_date.desc()).all()
-            available_dates = [d[0] for d in any_dates if d[0]]
 
         max_dataset_date = available_dates[0] if available_dates else datetime.now(timezone.utc).strftime("%Y-%m-%d")
         selected_date = target_date if target_date and target_date in available_dates else max_dataset_date
@@ -2477,6 +3002,8 @@ class BillingRepository:
                 cp_res_id = cp_recs[0].resource_id
                 cp_res_name = cp_recs[0].resource_name
                 cp_total = sum(float(r.total_cost or 0.0) for r in cp_recs)
+                if cp_res_name:
+                    cluster_display_name = cp_res_name
 
             cp_today_sum = self.db.query(func.sum(BillingRecord.cost)).filter(
                 *cp_filter,
@@ -2689,7 +3216,12 @@ class BillingRepository:
                 "active_today": is_active_today,
                 "is_overtime": is_ot,
                 "is_launched_today": is_launched,
-                "is_terminated_today": is_terminated
+                "is_terminated_today": is_terminated,
+                "min_hour": min_h if is_active_today else None,
+                "max_hour": max_h if is_active_today else None,
+                "active_hours_count": hours_count if is_active_today else 0,
+                "active_hours": day_hours if is_active_today else [],
+                "is_24h": is_24h if is_active_today else False
             })
 
         nodes.sort(key=lambda x: (x["spend_today"], x["total_spend"]), reverse=True)
@@ -2700,15 +3232,59 @@ class BillingRepository:
         overtime_spend_rounded = round(overtime_spend_today, 4) if cutoff_is_active else 0.0
         leakage_pct = round((overtime_spend_today / compute_spend_today * 100), 1) if (compute_spend_today > 0 and cutoff_is_active) else 0.0
 
-        clusters = [{
-            "cluster_name": "primary-compute-fleet",
-            "display_name": cluster_display_name,
-            "orchestrator": orchestrator,
-            "total_nodes": len(nodes),
-            "total_spend": total_cluster_spend,
-            "status": "HEALTHY",
-            "region": "ap-south-1"
-        }]
+        clusters = []
+        if 'eks' in clean_svc and available_clusters:
+            for c_name in available_clusters:
+                c_pfx = c_name.replace('-cluster', '').split('-')[0]
+                c_node_cnt = self.db.query(func.count(distinct(BillingRecord.resource_id))).filter(
+                    *base_filter,
+                    BillingRecord.service == 'Amazon EC2',
+                    BillingRecord.resource_id.like('i-%'),
+                    or_(
+                        BillingRecord.resource_name.ilike(f'%{c_name}%'),
+                        BillingRecord.resource_name.ilike(f'{c_pfx}-%'),
+                        BillingRecord.resource_id.ilike(f'%{c_pfx}%')
+                    ),
+                    ~BillingRecord.resource_id.like('vol-%'),
+                    ~BillingRecord.resource_id.like('snap-%')
+                ).scalar() or 0
+
+                c_spend = self.db.query(func.sum(BillingRecord.cost)).filter(
+                    *base_filter,
+                    or_(
+                        BillingRecord.resource_name.ilike(f'%{c_name}%'),
+                        BillingRecord.resource_id.ilike(f'%{c_name}%'),
+                        and_(
+                            BillingRecord.service == 'Amazon EC2',
+                            or_(
+                                BillingRecord.resource_name.ilike(f'{c_pfx}-%'),
+                                BillingRecord.resource_id.ilike(f'%{c_pfx}%')
+                            )
+                        )
+                    )
+                ).scalar() or 0.0
+
+                clusters.append({
+                    "cluster_name": c_name,
+                    "display_name": c_name,
+                    "orchestrator": orchestrator,
+                    "total_nodes": int(c_node_cnt),
+                    "total_spend": round(float(c_spend), 2),
+                    "status": "HEALTHY",
+                    "region": "ap-south-1"
+                })
+        else:
+            clusters = [{
+                "cluster_name": cp_res_name or "primary-compute-fleet",
+                "display_name": cluster_display_name,
+                "orchestrator": orchestrator,
+                "total_nodes": len(nodes),
+                "total_spend": total_cluster_spend,
+                "status": "HEALTHY",
+                "region": "ap-south-1"
+            }]
+
+        active_cluster_obj = next((c for c in clusters if c["cluster_name"] == cluster_display_name), clusters[0] if clusters else None)
 
         return {
             "dataset_id": ds_id,
@@ -2720,7 +3296,7 @@ class BillingRepository:
             "cutoff_hour": cutoff_hour,
             "cutoff_active": cutoff_is_active,
             "clusters": clusters,
-            "active_cluster": clusters[0] if clusters else None,
+            "active_cluster": active_cluster_obj,
             "kpis": {
                 "total_cluster_nodes": len(nodes),
                 "nodes_active_today": len([n for n in nodes if n["active_today"]]),

@@ -113,3 +113,122 @@ def sanitize_upload_filename(filename: str) -> str:
         cleaned = f"upload_{cleaned.lstrip('.')}"
     return cleaned or "upload.csv"
 
+
+
+import uuid
+from datetime import datetime, timezone, timedelta
+from typing import Dict, Any
+import jwt
+
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "zorvex-finops-production-super-secret-jwt-key-2026-secure")
+JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "15"))
+REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "7"))
+
+def create_access_token(
+    user_id: int,
+    email: str,
+    org_id: int,
+    expires_delta: Optional[timedelta] = None,
+    custom_claims: Optional[Dict[str, Any]] = None
+) -> Tuple[str, str]:
+    """
+    Generates a cryptographically signed, short-lived JWT Access Token.
+    Returns (jwt_token, jti).
+    Claims: sub (user_id), email, org_id, jti, type='access', iat, exp
+    """
+    now = datetime.now(timezone.utc)
+    jti = str(uuid.uuid4())
+    exp = now + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
+    
+    payload = {
+        "sub": str(user_id),
+        "email": str(email).lower().strip(),
+        "org_id": int(org_id),
+        "jti": jti,
+        "type": "access",
+        "iat": int(now.timestamp()),
+        "exp": int(exp.timestamp())
+    }
+    if custom_claims:
+        payload.update(custom_claims)
+        
+    token = jwt.encode(payload, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
+    return token, jti
+
+def create_refresh_token(
+    user_id: int,
+    org_id: int,
+    expires_delta: Optional[timedelta] = None
+) -> Tuple[str, str, datetime]:
+    """
+    Generates a cryptographically signed, long-lived JWT Refresh Token.
+    Returns (jwt_token, jti, exp_datetime).
+    Claims: sub (user_id), org_id, jti, type='refresh', iat, exp
+    """
+    now = datetime.now(timezone.utc)
+    jti = str(uuid.uuid4())
+    exp_dt = now + (expires_delta or timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS))
+    
+    payload = {
+        "sub": str(user_id),
+        "org_id": int(org_id),
+        "jti": jti,
+        "type": "refresh",
+        "iat": int(now.timestamp()),
+        "exp": int(exp_dt.timestamp())
+    }
+    token = jwt.encode(payload, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
+    return token, jti, exp_dt
+
+def decode_access_token(token: str) -> Optional[Dict[str, Any]]:
+    """
+    Strictly verifies and decodes a JWT access token.
+    Enforces valid signature, expiration time, and type=='access'.
+    Returns claims dict or None.
+    """
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(
+            token,
+            JWT_SECRET_KEY,
+            algorithms=[JWT_ALGORITHM],
+            options={"verify_exp": True, "verify_signature": True}
+        )
+        if payload.get("type") != "access":
+            logger.warning("Rejected token with invalid type: %s", payload.get("type"))
+            return None
+        return payload
+    except jwt.ExpiredSignatureError:
+        logger.debug("Access token signature expired")
+        return None
+    except jwt.InvalidTokenError as exc:
+        logger.debug("Invalid access token: %s", exc)
+        return None
+
+def decode_refresh_token(token: str) -> Optional[Dict[str, Any]]:
+    """
+    Strictly verifies and decodes a JWT refresh token.
+    Enforces valid signature, expiration time, and type=='refresh'.
+    Returns claims dict or None.
+    """
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(
+            token,
+            JWT_SECRET_KEY,
+            algorithms=[JWT_ALGORITHM],
+            options={"verify_exp": True, "verify_signature": True}
+        )
+        if payload.get("type") != "refresh":
+            logger.warning("Rejected refresh token with invalid type: %s", payload.get("type"))
+            return None
+        return payload
+    except jwt.ExpiredSignatureError:
+        logger.debug("Refresh token signature expired")
+        return None
+    except jwt.InvalidTokenError as exc:
+        logger.debug("Invalid refresh token: %s", exc)
+        return None

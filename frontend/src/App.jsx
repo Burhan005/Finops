@@ -315,7 +315,7 @@ function DashboardLayout({
                 <Route path="anomalies" element={<div className="page-transition"><AnomaliesBudgetsView overview={overview} /></div>} />
                 <Route path="recommendations" element={<div className="page-transition"><RecommendationsView recommendations={recommendations} /></div>} />
                 <Route path="ledger" element={<div className="page-transition"><SavingsLedgerView /></div>} />
-                <Route path="comparison" element={<div className="page-transition"><ComparisonView overview={overview} selectedAccount={filterAccount} forexData={forexData} /></div>} />
+                <Route path="comparison" element={<div className="page-transition"><ComparisonView overview={overview} selectedAccount={filterAccount} forexData={forexData} currency={currency} /></div>} />
                 <Route
                   path="resources"
                   element={
@@ -641,6 +641,7 @@ export default function App() {
   };
 
   const hasMountedRef = useRef(false);
+  const loadedUserIdRef = useRef(currentUser?.id || null);
 
   useEffect(() => {
     const init = async () => {
@@ -653,6 +654,7 @@ export default function App() {
           console.warn('Initial select dataset notice:', e);
         }
       }
+      loadedUserIdRef.current = currentUser?.id || null;
       await loadData(filterStartDate, filterEndDate, filterAccount, filterService, true);
       hasMountedRef.current = true;
     };
@@ -660,7 +662,10 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (hasMountedRef.current && currentUser) {
+    // High-Performance Optimization: Only reload data if the user actually switches accounts,
+    // eliminating duplicate initial network calls on mount.
+    if (hasMountedRef.current && currentUser?.id && loadedUserIdRef.current !== currentUser.id) {
+      loadedUserIdRef.current = currentUser.id;
       loadData(filterStartDate, filterEndDate, filterAccount, filterService, true);
     }
   }, [currentUser?.id]);

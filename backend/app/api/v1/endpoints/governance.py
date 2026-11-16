@@ -274,12 +274,12 @@ def delete_budget(
     db: Session = Depends(get_db)
 ):
     user, org = auth
-    b = db.query(BudgetConfig).filter(
-        BudgetConfig.id == budget_id,
-        BudgetConfig.organization_id == org.id
-    ).first()
-    if not b:
+    existing = db.query(BudgetConfig).filter(BudgetConfig.id == budget_id).first()
+    if not existing:
         raise HTTPException(status_code=404, detail="Budget not found.")
+    if existing.organization_id != org.id:
+        raise HTTPException(status_code=403, detail="Forbidden: Budget belongs to another organization.")
+    b = existing
 
     db.delete(b)
     db.commit()

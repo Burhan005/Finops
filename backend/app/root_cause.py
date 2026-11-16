@@ -51,6 +51,33 @@ def clean_resource_label(arn_or_id: str) -> str:
     return arn_or_id
 
 
+def _format_date_label(d_str: str) -> str:
+    """Formats '2025-09-01' to '01 Sep'."""
+    if not d_str or len(d_str) < 10:
+        return d_str or ""
+    try:
+        parts = d_str.split('-')
+        months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+        m_idx = int(parts[1]) - 1
+        return f"{parts[2]} {months[m_idx]}"
+    except Exception:
+        return d_str
+
+
+def _extract_compute_sku(usage_types) -> str:
+    """Extracts compute/instance SKU from a set of usage types."""
+    for u in usage_types:
+        if 'BoxUsage:' in u:
+            return u.split('BoxUsage:')[-1]
+        elif 'HeavyUsage:' in u:
+            return u.split('HeavyUsage:')[-1]
+        elif 'InstanceUsage:' in u:
+            return u.split('InstanceUsage:')[-1]
+        elif ':' in u and any(f in u for f in ['.nano', '.micro', '.small', '.medium', '.large', '.xlarge', '.2xl', '.4xl', '.8xl', '.12xl', '.16xl', '.24xl', '.metal']):
+            return u.split(':')[-1]
+    return ""
+
+
 def classify_resource_variance(
     rid: str,
     cb: float,
@@ -66,7 +93,10 @@ def classify_resource_variance(
     ltypes_base: Optional[Set[str]] = None,
     ltypes_target: Optional[Set[str]] = None,
     target_cost_by_type: Optional[Dict[str, float]] = None,
-    base_cost_by_type: Optional[Dict[str, float]] = None
+    base_cost_by_type: Optional[Dict[str, float]] = None,
+    has_baseline: bool = True,
+    first_seen_date: Optional[str] = None,
+    target_start_date: Optional[str] = None
 ) -> Tuple[str, str, str, str]:
     """
     Classifies a resource's variance into an authoritative FinOps category,
@@ -234,17 +264,31 @@ def classify_resource_variance(
                 "Invoice-level credit or fee subsidence recorded in CUR."
             )
 
-    # 1. New Workload (0 baseline cost and >0 target cost)
+    # If no baseline is selected or available
+    if not has_baseline:
+        qty_info = f" with {qt:,.2f}{unit_str}" if qt > 0 else ""
+        return (
+            'ACTIVE_WORKLOAD',
+            f"Active workload{name_str} incurred ${ct:.2f}{qty_info} in target period",
+            'CONFIRMED_BY_CUR',
+            "Active workload during target period (No preceding baseline period configured for variance comparison)."
+        )
+
+    # 1. New Workload vs Existing Resumed Workload
     if cb <= 0.0001 and ct > 0.0001:
-        if q_diff > 0:
-            qty_info = f" with {qt:,.2f}{unit_str}"
-        else:
-            qty_info = ""
+        qty_info = f" with {qt:,.2f}{unit_str}" if q_diff > 0 else ""
+        if first_seen_date and target_start_date and first_seen_date < target_start_date:
+            return (
+                'RESUMED_WORKLOAD',
+                f"Existing workload{name_str} resumed incurring charges (+${ct:.2f}{qty_info})",
+                'CONFIRMED_BY_CUR',
+                f"Resource was active earlier on {first_seen_date}; resumed billing during target period."
+            )
         return (
             'NEW_RESOURCE',
             f"Newly provisioned workload{name_str} began incurring charges (+${ct:.2f}{qty_info})",
             'CONFIRMED_BY_CUR',
-            "Resource identifier appeared in billing records for the first time in the comparison window. Operational trigger (API/IaC/AutoScaling) requires CloudTrail."
+            "Resource identifier appeared in billing records for the first time in target window."
         )
 
     # 2. Terminated or Inactive Workload (>0 baseline cost and 0 target cost)
@@ -273,13 +317,54 @@ def classify_resource_variance(
         sku_label = top_sku.split(':')[-1] if ':' in top_sku else top_sku
         return (
             'RATE_OR_DISCOUNT_CHANGE',
-            f"Reserved Instance expired on Oct 14: Compute ({sku_label}) transitioned to On-Demand billing ({diff_str})",
+            f"Reserved Instance expired: Compute ({sku_label}) transitioned to On-Demand billing ({diff_str})",
             'CONFIRMED_BY_CUR',
             "CUR documents that workload was 100% covered by Reserved Instances ($0.00 DiscountedUsage) in baseline, and incurred full On-Demand charges in target period following RI contract expiration."
         )
 
     # 3. Usage Type / Capacity / SKU Shift
     if uts_base and uts_target and uts_base != uts_target:
+        # Check EC2 instance resize
+        if 'ec2' in svc.lower() or rid.startswith('i-'):
+            base_size = _extract_compute_sku(uts_base)
+            target_size = _extract_compute_sku(uts_target)
+            if base_size and target_size and base_size != target_size:
+                action = "resized up" if diff > 0 else "resized down"
+                return (
+                    'CAPACITY_OR_SKU_CHANGE',
+                    f"EC2 server {action} from {base_size} to {target_size} ({diff_str})",
+                    'CONFIRMED_BY_CUR',
+                    f"CUR documents compute SKU transition from {base_size} to {target_size}."
+                )
+
+        # Check RDS Architecture / Instance Class change
+        if 'rds' in svc.lower() or ':db:' in rid:
+            base_multi = any('multi-az' in u.lower() for u in uts_base)
+            target_multi = any('multi-az' in u.lower() for u in uts_target)
+            if base_multi and not target_multi:
+                return (
+                    'CAPACITY_OR_SKU_CHANGE',
+                    f"Switched RDS deployment from Multi-AZ to Single-AZ (Saved -${abs(diff):.2f})",
+                    'CONFIRMED_BY_CUR',
+                    "Architecture modified from Multi-AZ High Availability to Single-AZ standalone deployment."
+                )
+            if not base_multi and target_multi:
+                return (
+                    'CAPACITY_OR_SKU_CHANGE',
+                    f"Upgraded RDS deployment to Multi-AZ High Availability ({diff_str})",
+                    'CONFIRMED_BY_CUR',
+                    "Architecture upgraded from Single-AZ to Multi-AZ High Availability."
+                )
+            base_class = _extract_compute_sku(uts_base)
+            target_class = _extract_compute_sku(uts_target)
+            if base_class and target_class and base_class != target_class:
+                return (
+                    'CAPACITY_OR_SKU_CHANGE',
+                    f"RDS DB instance class modified from {base_class} to {target_class} ({diff_str})",
+                    'CONFIRMED_BY_CUR',
+                    f"CUR documents RDS instance class modification from {base_class} to {target_class}."
+                )
+
         # Calculate cost delta per usage type to find the true financial driver
         ut_deltas = {}
         for u in (uts_base | uts_target):
@@ -503,6 +588,14 @@ def analyze_cost_root_cause(
     # Sort services by absolute financial impact
     services_summary.sort(key=lambda x: abs(x['delta_cost']), reverse=True)
 
+    # Pre-calculate earliest appearance across records
+    first_seen_map = {}
+    for r in records:
+        r_id = r.get('resource_id') or 'Unassigned'
+        r_dt = r.get('date') or ''
+        if r_dt and (r_id not in first_seen_map or r_dt < first_seen_map[r_id]):
+            first_seen_map[r_id] = r_dt
+
     # -------------------------------------------------------------
     # 2. Resource-Level Aggregation & Mathematical Root-Cause Synthesis
     # -------------------------------------------------------------
@@ -647,6 +740,9 @@ def analyze_cost_root_cause(
         ltypes = (b.get('line_types') or set()) | (t.get('line_types') or set())
         operations = list((b.get('operations') or set()) | (t.get('operations') or set()))
 
+        # Pre-compute first seen date from available records
+        first_seen_date = first_seen_map.get(rid)
+
         # Variance attribution category
         cat, explanation, evidence, op_note = classify_resource_variance(
             rid=rid, cb=cb, ct=ct, qb=qb, qt=qt, unit=unit, svc=svc,
@@ -654,7 +750,10 @@ def analyze_cost_root_cause(
             ltypes_base=b.get('line_types'),
             ltypes_target=t.get('line_types'),
             target_cost_by_type=t.get('cost_by_type'),
-            base_cost_by_type=b.get('cost_by_type')
+            base_cost_by_type=b.get('cost_by_type'),
+            has_baseline=has_valid_baseline,
+            first_seen_date=first_seen_date,
+            target_start_date=target_start
         )
 
         category_totals[cat] += diff
@@ -723,6 +822,121 @@ def analyze_cost_root_cause(
             decomposition_status = 'INSUFFICIENT_EVIDENCE'
             decomposition_note = 'Insufficient CUR evidence to attribute variance between quantity and rate.'
 
+        # Determine detail_badge and inflection events
+        detail_badge = "Usage Variance"
+        if cat == 'CAPACITY_OR_SKU_CHANGE':
+            if 'ec2' in svc.lower() or rid.startswith('i-'):
+                base_sz = _extract_compute_sku(uts_b)
+                target_sz = _extract_compute_sku(uts_t)
+                if base_sz and target_sz and base_sz != target_sz:
+                    detail_badge = f"Resized {base_sz} -> {target_sz}"
+                elif base_sz and not target_sz:
+                    detail_badge = f"Compute Stopped ({base_sz})"
+                elif not base_sz and target_sz:
+                    detail_badge = f"Compute Provisioned ({target_sz})"
+                else:
+                    detail_badge = "SKU Modified"
+            elif 'rds' in svc.lower() or ':db:' in rid:
+                base_m = any('multi-az' in u.lower() for u in uts_b)
+                target_m = any('multi-az' in u.lower() for u in uts_t)
+                if base_m and not target_m:
+                    detail_badge = "Switched Multi-AZ -> Single-AZ"
+                elif not base_m and target_m:
+                    detail_badge = "Upgraded Single-AZ -> Multi-AZ"
+                else:
+                    base_c = _extract_compute_sku(uts_b)
+                    target_c = _extract_compute_sku(uts_t)
+                    if base_c and target_c and base_c != target_c:
+                        detail_badge = f"Modified {base_c} -> {target_c}"
+                    else:
+                        detail_badge = "Storage / SKU Shift"
+            else:
+                detail_badge = "SKU Modified"
+
+            # If still generic, inspect dominant usage type delta to assign precise FinOps badge
+            if detail_badge in ("SKU Modified", "Storage / SKU Shift"):
+                all_u = uts_b | uts_t
+                ut_d = {u: t.get('cost_by_type', {}).get(u, 0.0) - b.get('cost_by_type', {}).get(u, 0.0) for u in all_u}
+                dom_u = max(ut_d.keys(), key=lambda u: abs(ut_d[u])) if ut_d else ''
+                dom_l = dom_u.lower()
+                if 'backup' in dom_l:
+                    detail_badge = "Backup Retention Surge" if diff > 0 else "Backup Retention Subsidence"
+                elif 'timedstorage' in dom_l or 'gp3' in dom_l or 'gp2' in dom_l or 'volumeusage' in dom_l:
+                    detail_badge = "Storage Volume Growth" if diff > 0 else "Storage Scaled Down"
+                elif 'requests' in dom_l or 'request' in dom_l:
+                    detail_badge = "API Requests Surge" if diff > 0 else "API Requests Subsided"
+                elif 'datatransfer' in dom_l or 'out-bytes' in dom_l or 'natgateway' in dom_l:
+                    detail_badge = "Data Transfer Egress Surge" if diff > 0 else "Data Transfer Subsided"
+                elif 'boxusage' in dom_l or 'instanceusage' in dom_l:
+                    detail_badge = f"Runtime Hours (+${diff:.2f})" if diff > 0 else f"Runtime Hours (-${abs(diff):.2f})"
+        elif cat == 'NEW_RESOURCE':
+            sz = _extract_compute_sku(uts_t)
+            detail_badge = f"New Instance ({sz})" if sz else "New Workload"
+        elif cat == 'TERMINATED_RESOURCE':
+            sz = _extract_compute_sku(uts_b)
+            detail_badge = f"Decommissioned ({sz})" if sz else "Decommissioned"
+        elif cat in ('BILLING_FEE_OR_TAX',):
+            detail_badge = "Statutory Tax"
+        elif cat in ('COMMITMENT_FEE',):
+            detail_badge = "Commitment Fee"
+        else:
+            all_u = uts_b | uts_t
+            ut_d = {u: t.get('cost_by_type', {}).get(u, 0.0) - b.get('cost_by_type', {}).get(u, 0.0) for u in all_u}
+            dom_u = max(ut_d.keys(), key=lambda u: abs(ut_d[u])) if ut_d else ''
+            dom_l = dom_u.lower()
+            if 'backup' in dom_l:
+                detail_badge = "Backup Retention Surge" if diff > 0 else "Backup Retention Subsidence"
+            elif 'timedstorage' in dom_l or 'gp3' in dom_l or 'gp2' in dom_l or 'volumeusage' in dom_l:
+                detail_badge = "Storage Volume Growth" if diff > 0 else "Storage Scaled Down"
+            elif 'requests' in dom_l or 'request' in dom_l:
+                detail_badge = "API Requests Surge" if diff > 0 else "API Requests Subsided"
+            elif 'datatransfer' in dom_l or 'out-bytes' in dom_l or 'natgateway' in dom_l:
+                detail_badge = "Data Transfer Egress Surge" if diff > 0 else "Data Transfer Subsided"
+            elif 'boxusage' in dom_l or 'instanceusage' in dom_l:
+                detail_badge = f"Runtime Hours (+${diff:.2f})" if diff > 0 else f"Runtime Hours (-${abs(diff):.2f})"
+
+        # Inflection point detection
+        inflect_date = None
+        new_uts = uts_t - uts_b
+        daily_combined = {**res_daily_base.get(rid, {}), **res_daily_target.get(rid, {})}
+        sorted_res_days = sorted(daily_combined.keys())
+        if sorted_res_days:
+            if new_uts and res_line_items.get(rid):
+                for li in res_line_items[rid]:
+                    if li.get('usage_type') in new_uts and li.get('date'):
+                        inflect_date = li.get('date')
+                        break
+            if not inflect_date and cat == 'NEW_RESOURCE':
+                for d in sorted_res_days:
+                    if daily_combined[d] > 0.0001:
+                        inflect_date = d
+                        break
+            if not inflect_date and cat == 'TERMINATED_RESOURCE':
+                act = [d for d in sorted_res_days if daily_combined[d] > 0.0001]
+                if act:
+                    inflect_date = act[-1]
+            if not inflect_date and len(sorted_res_days) >= 2:
+                max_j = 0.0
+                prv = daily_combined[sorted_res_days[0]]
+                for d in sorted_res_days[1:]:
+                    cur = daily_combined[d]
+                    j = abs(cur - prv)
+                    if j > max_j and j > 0.05:
+                        max_j = j
+                        inflect_date = d
+                    prv = cur
+
+        inflection_event = f"{_format_date_label(inflect_date)}: {detail_badge}" if inflect_date else None
+
+        daily_breakdown_list = [
+            {
+                'date': d,
+                'cost': round(daily_combined[d], 4),
+                'period': 'target' if d in res_daily_target.get(rid, {}) else 'baseline'
+            }
+            for d in sorted_res_days
+        ]
+
         resource_entry = {
             'resource_id': rid,
             'short_id': clean_resource_label(rid),
@@ -756,6 +970,10 @@ def analyze_cost_root_cause(
             'explanation': explanation,
             'evidence_status': evidence,
             'operational_note': op_note,
+            'detail_badge': detail_badge,
+            'inflection_date': inflect_date,
+            'inflection_event': inflection_event,
+            'daily_breakdown': daily_breakdown_list,
             'usage_types': sorted(list(uts_b | uts_t)),
             'operations': sorted(operations),
             'raw_records_count': (b.get('record_count', 0) + t.get('record_count', 0)),

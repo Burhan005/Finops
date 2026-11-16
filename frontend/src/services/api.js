@@ -10,6 +10,44 @@ export class SessionExpiredError extends Error {
 
 const rawFetch = typeof window !== 'undefined' ? window.fetch.bind(window) : fetch;
 
+let refreshPromise = null;
+
+async function silentlyRefreshToken() {
+  if (refreshPromise) return refreshPromise;
+
+  const refreshToken = typeof localStorage !== 'undefined' ? localStorage.getItem('finops_refresh_token') : null;
+  if (!refreshToken) {
+    return null;
+  }
+
+  refreshPromise = (async () => {
+    try {
+      const refreshRes = await rawFetch(`${API_BASE}/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: refreshToken })
+      });
+      if (!refreshRes.ok) {
+        return null;
+      }
+      const data = await refreshRes.json();
+      if (data.token) {
+        localStorage.setItem('finops_token', data.token);
+      }
+      if (data.refresh_token) {
+        localStorage.setItem('finops_refresh_token', data.refresh_token);
+      }
+      return data.token;
+    } catch (e) {
+      return null;
+    } finally {
+      refreshPromise = null;
+    }
+  })();
+
+  return refreshPromise;
+}
+
 async function authFetch(input, init = {}) {
   let res;
   try {
@@ -20,8 +58,28 @@ async function authFetch(input, init = {}) {
 
   if (res.status === 401) {
     const urlStr = typeof input === 'string' ? input : (input?.url || '');
-    if (!urlStr.includes('/auth/login') && !urlStr.includes('/auth/register')) {
+    if (!urlStr.includes('/auth/login') && !urlStr.includes('/auth/register') && !urlStr.includes('/auth/refresh')) {
+      // Production Silent JWT Refresh: attempt silent refresh before forcing logout
+      const newToken = await silentlyRefreshToken();
+      if (newToken) {
+        const newInit = { ...init };
+        newInit.headers = {
+          ...(init.headers || {}),
+          'Authorization': `Bearer ${newToken}`
+        };
+        try {
+          const retryRes = await rawFetch(input, newInit);
+          if (retryRes.status !== 401) {
+            return retryRes;
+          }
+        } catch (retryErr) {
+          // If network error during retry, fall through
+        }
+      }
+
+      // Refresh failed or session permanently revoked
       localStorage.removeItem('finops_token');
+      localStorage.removeItem('finops_refresh_token');
       localStorage.removeItem('finops_user');
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('finops_auth_expired'));
@@ -682,6 +740,9 @@ export const api = {
     const data = await res.json();
     if (data.token) {
       localStorage.setItem('finops_token', data.token);
+      if (data.refresh_token) {
+        localStorage.setItem('finops_refresh_token', data.refresh_token);
+      }
       localStorage.setItem('finops_user', JSON.stringify(data.user));
       clearClientCache();
     }
@@ -717,6 +778,9 @@ export const api = {
     const data = await res.json();
     if (data.token) {
       localStorage.setItem('finops_token', data.token);
+      if (data.refresh_token) {
+        localStorage.setItem('finops_refresh_token', data.refresh_token);
+      }
       localStorage.setItem('finops_user', JSON.stringify(data.user));
       clearClientCache();
     }
@@ -728,18 +792,25 @@ export const api = {
   },
 
   async logout() {
+    const refreshToken = typeof localStorage !== 'undefined' ? localStorage.getItem('finops_refresh_token') : null;
     try {
       await fetch(`${API_BASE}/auth/logout`, {
         method: 'POST',
-        headers: authHeaders()
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ refresh_token: refreshToken || undefined })
       });
     } catch (e) {
       // ignore
     }
     clearClientCache();
     localStorage.removeItem('finops_token');
+    localStorage.removeItem('finops_refresh_token');
     localStorage.removeItem('finops_user');
     return { success: true };
+  },
+
+  async refreshToken() {
+    return silentlyRefreshToken();
   },
 
   async forgotPassword(email) {

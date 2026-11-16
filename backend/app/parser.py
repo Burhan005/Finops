@@ -195,6 +195,8 @@ SERVICE_CANONICAL_MAP = {
     'awskms': 'AWS KMS',
     'amazoncloudfront': 'Amazon CloudFront',
     'cloudfront': 'Amazon CloudFront',
+    'cloudfrontplans': 'Amazon CloudFront',
+    'cloudfrontplan': 'Amazon CloudFront',
     'amazoncloudwatch': 'Amazon CloudWatch',
     'cloudwatch': 'Amazon CloudWatch',
     'amazonroute53': 'Amazon Route 53',

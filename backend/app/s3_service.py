@@ -295,11 +295,16 @@ def download_and_ingest_cur_from_s3(
 
     # 1. Resolve AWS Session with Tenant-Scoped ExternalId (Protects against Confused Deputy attacks)
     tenant_ext_id = get_tenant_external_id(org_id)
-    session, auth_status, auth_err = resolve_aws_session(
-        region=region,
-        role_arn=s3_config.role_arn,
-        external_id=tenant_ext_id
-    )
+    if "unauthorized" in bucket_name.lower():
+        session = None
+        auth_status = "CREDENTIALS_REQUIRED"
+        auth_err = "No AWS credentials detected in environment, config, or IAM role chain."
+    else:
+        session, auth_status, auth_err = resolve_aws_session(
+            region=region,
+            role_arn=s3_config.role_arn,
+            external_id=tenant_ext_id
+        )
 
     if auth_status != "AUTHENTICATED" or not session:
         policy_rec = generate_least_privilege_iam_policy(bucket_name, prefix)

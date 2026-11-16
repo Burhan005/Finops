@@ -874,3 +874,143 @@ html.dark button:active:not(:disabled).active-tactile,
   box-shadow: inset 0 3px 6px rgba(0, 0, 0, 0.75) !important;
   transition: transform 0.08s ease, box-shadow 0.08s ease !important;
 }
+
+/* ========================================================================= */
+/* HERO SECTION ENTRANCE & TYPOGRAPHIC ENGINE (PRESTIGE EDITION)             */
+/* ========================================================================= */
+
+@keyframes heroSoftEntrance {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 14px, 0);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes heroSpecularSweep {
+  0% {
+    background-position: 240% 0;
+  }
+  100% {
+    background-position: -240% 0;
+  }
+}
+
+@keyframes heroAuraBreath {
+  0%, 100% {
+    opacity: 0.55;
+    transform: scale(0.98);
+  }
+  50% {
+    opacity: 0.95;
+    transform: scale(1.05);
+  }
+}
+
+.hero-entrance-unified {
+  animation: heroSoftEntrance 0.8s cubic-bezier(0.16, 1, 0.3, 1) 0.08s both;
+  will-change: transform, opacity;
+  transform: translateZ(0);
+}
+
+.hero-pill-entrance {
+  animation: heroSoftEntrance 0.7s cubic-bezier(0.16, 1, 0.3, 1) 0s both;
+  will-change: transform, opacity;
+}
+
+.hero-subtitle-entrance {
+  animation: heroSoftEntrance 0.8s cubic-bezier(0.16, 1, 0.3, 1) 0.20s both;
+  will-change: transform, opacity;
+}
+
+.hero-actions-entrance {
+  animation: heroSoftEntrance 0.8s cubic-bezier(0.16, 1, 0.3, 1) 0.32s both;
+  will-change: transform, opacity;
+}
+
+.hero-trust-entrance {
+  animation: heroSoftEntrance 0.8s cubic-bezier(0.16, 1, 0.3, 1) 0.44s both;
+  will-change: transform, opacity;
+}
+
+/* Luminous Brand Accent: Warm Amber with Liquid Sunlight Specular Beam */
+.hero-spend-accent {
+  position: relative;
+  display: inline-block;
+  background: linear-gradient(
+    115deg,
+    #EC7211 0%,
+    #EC7211 38%,
+    #FFF3E0 48%,
+    #FFFFFF 50%,
+    #FFF3E0 52%,
+    #EC7211 62%,
+    #D8630A 100%
+  );
+  background-size: 260% 100%;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: heroSpecularSweep 5.5s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  will-change: background-position;
+  transition: filter 0.3s ease;
+}
+
+.hero-spend-accent:hover {
+  filter: drop-shadow(0 0 14px rgba(236, 114, 17, 0.4));
+}
+
+html.dark .hero-spend-accent,
+.dark .hero-spend-accent {
+  background: linear-gradient(
+    115deg,
+    #FF9900 0%,
+    #FF9900 38%,
+    #FFF7ED 48%,
+    #FFFFFF 50%,
+    #FFF7ED 52%,
+    #FF9900 62%,
+    #EC7211 100%
+  );
+  background-size: 260% 100%;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: heroSpecularSweep 5.5s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+/* Atmospheric Ambient Breathing Halo behind "Spend." */
+.hero-ambient-halo {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 140%;
+  height: 140%;
+  background: radial-gradient(ellipse at center, rgba(236, 114, 17, 0.16) 0%, rgba(236, 114, 17, 0.04) 45%, transparent 70%);
+  filter: blur(28px);
+  pointer-events: none;
+  z-index: -1;
+  animation: heroAuraBreath 6s ease-in-out infinite;
+}
+
+html.dark .hero-ambient-halo,
+.dark .hero-ambient-halo {
+  background: radial-gradient(ellipse at center, rgba(255, 153, 0, 0.22) 0%, rgba(236, 114, 17, 0.06) 45%, transparent 70%);
+  filter: blur(32px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-entrance-unified,
+  .hero-pill-entrance,
+  .hero-subtitle-entrance,
+  .hero-actions-entrance,
+  .hero-trust-entrance,
+  .hero-spend-accent,
+  .hero-ambient-halo {
+    animation: none !important;
+    transform: none !important;
+    opacity: 1 !important;
+  }
+}

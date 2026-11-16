@@ -923,27 +923,40 @@ export default function ResourceExplorer({
 
             {/* Structured 2-Column Breakdown */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-0.5">
-              {/* Column 1: Active Compute Databases */}
+              {/* Column 1: Active Database Instances */}
               <div className="p-3.5 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary/50 border border-zorvex-border/70 dark:border-zorvex-dark-border/70 space-y-2.5">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <span className="w-2.5 h-2.5 rounded-full bg-zorvex-forest animate-pulse"></span>
-                    <span className="text-xs font-bold text-zorvex-text dark:text-zorvex-dark-text">Active Compute DBs</span>
+                    <span className="text-xs font-bold text-zorvex-text dark:text-zorvex-dark-text">Active Database Instances</span>
                   </div>
                   <span className="px-2 py-0.5 rounded-md text-[11px] font-mono font-black bg-zorvex-forest/15 text-zorvex-forest dark:text-zorvex-forest-highlight border border-zorvex-forest/30">
                     {summary.inventory_reconciliation.active_instances} Running
                   </span>
                 </div>
                 <div className="flex flex-wrap gap-1.5 pt-1">
-                  {summary.inventory_reconciliation.active_instance_names?.map((name) => (
-                    <span
-                      key={name}
-                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono font-semibold bg-zorvex-surface dark:bg-zorvex-dark-surface text-zorvex-text dark:text-zorvex-dark-text border border-zorvex-border dark:border-zorvex-dark-border shadow-2xs"
-                    >
-                      <span className="w-1.5 h-1.5 rounded-full bg-zorvex-forest"></span>
-                      {name}
-                    </span>
-                  ))}
+                  {summary.inventory_reconciliation.active_instance_names?.map((name) => {
+                    const hasBackup = (summary.inventory_reconciliation.active_instances_with_backups || []).includes(name);
+                    return (
+                      <span
+                        key={name}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono font-semibold bg-zorvex-surface dark:bg-zorvex-dark-surface text-zorvex-text dark:text-zorvex-dark-text border border-zorvex-border dark:border-zorvex-dark-border shadow-2xs"
+                        title={hasBackup ? 'Active Database with billed automated backup storage' : 'Active Database (Read Replica / no direct backup surcharge)'}
+                      >
+                        <span className="w-1.5 h-1.5 rounded-full bg-zorvex-forest"></span>
+                        <span>{name}</span>
+                        {hasBackup ? (
+                          <span className="text-[9px] font-sans font-bold px-1.5 py-0.2 rounded bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/25">
+                            Backup Active
+                          </span>
+                        ) : (
+                          <span className="text-[9px] font-sans font-bold px-1.5 py-0.2 rounded bg-blue-500/15 text-blue-700 dark:text-blue-400 border border-blue-500/25">
+                            Read Replica
+                          </span>
+                        )}
+                      </span>
+                    );
+                  })}
                 </div>
               </div>
 
@@ -953,10 +966,10 @@ export default function ResourceExplorer({
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <span className="w-2.5 h-2.5 rounded-full bg-amber-500"></span>
-                      <span className="text-xs font-bold text-zorvex-text dark:text-zorvex-dark-text">Retained Backup Storage Only</span>
+                      <span className="text-xs font-bold text-zorvex-text dark:text-zorvex-dark-text">Retained Automated Backups</span>
                     </div>
                     <span className="px-2 py-0.5 rounded-md text-[11px] font-mono font-black bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/30">
-                      {summary.inventory_reconciliation.retained_backups} Terminated Compute
+                      {summary.inventory_reconciliation.retained_backups} Decommissioned DBs
                     </span>
                   </div>
                   <div className="flex flex-wrap gap-1.5 pt-1">
@@ -964,7 +977,7 @@ export default function ResourceExplorer({
                       <span
                         key={name}
                         className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono font-semibold bg-zorvex-surface dark:bg-zorvex-dark-surface text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary border border-zorvex-border dark:border-zorvex-dark-border shadow-2xs"
-                        title="Historical automated backup storage. Instance compute has been terminated."
+                        title="Historical automated backup storage. Instance compute has been decommissioned."
                       >
                         <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
                         {name}
@@ -1008,20 +1021,33 @@ export default function ResourceExplorer({
                           ? 'Dedicated petabyte-scale columnar warehouse cluster with provisioned compute nodes, managed RMS storage tier, and S3 data lake queries.'
                           : 'Distributed multi-node OpenSearch domain separated into dedicated search/indexing nodes, quorum managers, and managed storage.'}
                       </p>
-                      {((cn.data_nodes?.cost > 0) || (cn.master_nodes?.cost > 0)) && (
+                      {cn.on_demand_badge ? (
                         <div className="mt-2.5 p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between text-xs text-amber-800 dark:text-amber-300">
                           <div className="flex items-center gap-2">
                             <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0" />
                             <span>
-                              <strong>RI Expired on Oct 14:</strong> Cluster compute transitioned to On-Demand billing. 
-                              <strong> ${((cn.data_nodes?.cost || 0) + (cn.master_nodes?.cost || 0)).toFixed(2)}</strong> unreserved compute billed between Oct 14–16.
+                              <strong>{cn.on_demand_badge.is_new_launch ? 'Newly Provisioned Domain:' : 'On-Demand Compute Active:'}</strong> {cn.on_demand_badge.tooltip} 
+                              <strong> ${cn.on_demand_badge.cost?.toFixed(2)}</strong> unreserved compute billed.
                             </span>
                           </div>
                           <span className="font-mono font-bold px-2 py-0.5 rounded bg-amber-500/20 text-[10px] whitespace-nowrap">
-                            Post-Expiry On-Demand
+                            {cn.on_demand_badge.is_new_launch ? 'New Workload' : 'On-Demand Compute'}
                           </span>
                         </div>
-                      )}
+                      ) : ((cn.data_nodes?.cost > 0) || (cn.master_nodes?.cost > 0)) ? (
+                        <div className="mt-2.5 p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between text-xs text-amber-800 dark:text-amber-300">
+                          <div className="flex items-center gap-2">
+                            <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0" />
+                            <span>
+                              <strong>On-Demand Compute Active:</strong> Unreserved compute billed. 
+                              <strong> ${((cn.data_nodes?.cost || 0) + (cn.master_nodes?.cost || 0)).toFixed(2)}</strong> total compute.
+                            </span>
+                          </div>
+                          <span className="font-mono font-bold px-2 py-0.5 rounded bg-amber-500/20 text-[10px] whitespace-nowrap">
+                            On-Demand Compute
+                          </span>
+                        </div>
+                      ) : null}
                     </div>
                   </div>
                   <div className="flex sm:flex-col items-center sm:items-end justify-between sm:justify-center font-mono flex-shrink-0 pl-13 sm:pl-0">
@@ -1061,7 +1087,7 @@ export default function ResourceExplorer({
                           </span>
                         ) : (
                           <span className="inline-flex items-center gap-1 text-amber-800 dark:text-amber-300 font-bold bg-amber-500/15 px-1.5 py-0.5 rounded border border-amber-500/30">
-                            <AlertTriangle className="w-2.5 h-2.5 text-amber-600" /> On-Demand since Oct 14 (${cn.data_nodes.cost ? cn.data_nodes.cost.toFixed(2) : '0.00'})
+                            <AlertTriangle className="w-2.5 h-2.5 text-amber-600" /> {cn.on_demand_badge?.label || `On-Demand ($${cn.data_nodes.cost ? cn.data_nodes.cost.toFixed(2) : '0.00'})`}
                           </span>
                         )}
                         <span className="font-mono text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary font-semibold">Active Node</span>
@@ -1096,7 +1122,7 @@ export default function ResourceExplorer({
                           </span>
                         ) : (
                           <span className="inline-flex items-center gap-1 text-amber-800 dark:text-amber-300 font-bold bg-amber-500/15 px-1.5 py-0.5 rounded border border-amber-500/30">
-                            <AlertTriangle className="w-2.5 h-2.5 text-amber-600" /> On-Demand since Oct 14 (${cn.master_nodes.cost ? cn.master_nodes.cost.toFixed(2) : '0.00'})
+                            <AlertTriangle className="w-2.5 h-2.5 text-amber-600" /> {cn.on_demand_badge?.label || `On-Demand ($${cn.master_nodes.cost ? cn.master_nodes.cost.toFixed(2) : '0.00'})`}
                           </span>
                         )}
                         <span className="font-mono text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary font-semibold">Active Quorum</span>
@@ -2235,7 +2261,7 @@ export default function ResourceExplorer({
                               )}
                               <span>
                                 {isExpired
-                                  ? `${subCount} Expired Contracts (Expired Oct 14) • View Breakdown`
+                                  ? `${subCount} Expired Contracts • View Breakdown`
                                   : `${subCount} Active Contract${subCount !== 1 ? 's' : ''} Bundled • View Breakdown`
                                 }
                               </span>
@@ -2267,10 +2293,10 @@ export default function ResourceExplorer({
                           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                           <span>Active</span>
                         </span>
-                      ) : item.lifecycle_status === 'TERMINATED_INSTANCE' ? (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[9px] font-mono font-bold surface-recessed text-slate-500 dark:text-slate-400 border border-slate-400/30 dark:border-slate-600/30" title={`Terminated workload. Compute usage stopped on ${item.last_seen?.split(' ')[0] || item.first_seen}.`}>
+                      ) : item.lifecycle_status === 'STOPPED_INSTANCE' || item.lifecycle_status === 'TERMINATED_INSTANCE' ? (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[9px] font-mono font-bold surface-recessed text-slate-500 dark:text-slate-400 border border-slate-400/30 dark:border-slate-600/30" title={`Compute runtime inactive since ${item.last_seen?.split(' ')[0] || item.first_seen} (Stopped or Terminated in AWS).`}>
                           <span className="w-1.5 h-1.5 rounded-full bg-slate-400 dark:bg-slate-500" />
-                          <span>Terminated</span>
+                          <span>Stopped / Inactive</span>
                         </span>
                       ) : item.lifecycle_status === 'RETAINED_BACKUP_STORAGE' ? (
                         <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[9px] font-mono font-bold surface-recessed text-amber-700 dark:text-amber-400 border border-amber-500/30" title="Historical automated backup storage. Instance compute has been deleted.">
@@ -2293,12 +2319,17 @@ export default function ResourceExplorer({
                           <Server className="w-2.5 h-2.5" />
                           <span>{item.cluster_nodes.summary_label}</span>
                         </span>
-                        {((item.cluster_nodes.data_nodes?.cost > 0) || (item.cluster_nodes.master_nodes?.cost > 0)) && (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-500/15 text-amber-800 dark:text-amber-300 border border-amber-500/30" title="Reserved Instance expired on Oct 14. Cluster transitioned to unreserved On-Demand compute.">
+                        {item.cluster_nodes.on_demand_badge ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-500/15 text-amber-800 dark:text-amber-300 border border-amber-500/30" title={item.cluster_nodes.on_demand_badge.tooltip}>
                             <AlertTriangle className="w-2.5 h-2.5 text-amber-600" />
-                            <span>On-Demand since Oct 14 (${((item.cluster_nodes.data_nodes?.cost || 0) + (item.cluster_nodes.master_nodes?.cost || 0)).toFixed(2)} compute)</span>
+                            <span>{item.cluster_nodes.on_demand_badge.label}</span>
                           </span>
-                        )}
+                        ) : (((item.cluster_nodes.data_nodes?.cost || 0) + (item.cluster_nodes.master_nodes?.cost || 0)) > 0) ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-500/15 text-amber-800 dark:text-amber-300 border border-amber-500/30" title="Unreserved On-Demand compute.">
+                            <AlertTriangle className="w-2.5 h-2.5 text-amber-600" />
+                            <span>On-Demand (${((item.cluster_nodes.data_nodes?.cost || 0) + (item.cluster_nodes.master_nodes?.cost || 0)).toFixed(2)} compute)</span>
+                          </span>
+                        ) : null}
                       </div>
                     )}
                   </td>
@@ -2579,8 +2610,8 @@ export default function ResourceExplorer({
                 <div className="p-3 rounded-xl bg-zorvex-secondary/40 dark:bg-zorvex-dark-secondary border border-zorvex-border/50">
                   <span className="text-zorvex-text-muted block text-[10px] font-bold uppercase">Lifecycle Status</span>
                   <span className={`text-xs font-black block break-words ${
-                    (detailData?.lifecycle_status || selectedResource.lifecycle_status || '').includes('TERMINATED') || (detailData?.lifecycle_status || selectedResource.lifecycle_status || '').includes('DELETED')
-                      ? 'text-rose-600 dark:text-rose-400'
+                    (detailData?.lifecycle_status || selectedResource.lifecycle_status || '').includes('STOPPED') || (detailData?.lifecycle_status || selectedResource.lifecycle_status || '').includes('TERMINATED') || (detailData?.lifecycle_status || selectedResource.lifecycle_status || '').includes('DELETED')
+                      ? 'text-slate-600 dark:text-slate-400'
                       : 'text-zorvex-forest dark:text-zorvex-forest-highlight'
                   }`} title={detailData?.lifecycle_label || selectedResource.lifecycle_label || selectedResource.lifecycle_status || 'Active'}>
                     {detailData?.lifecycle_label || selectedResource.lifecycle_label || selectedResource.lifecycle_status || 'Active'}
@@ -2617,7 +2648,9 @@ export default function ResourceExplorer({
                       <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
                       <div className="text-xs leading-relaxed">
                         <span className="font-extrabold block mb-0.5">⚠️ Unreserved On-Demand Compute Charges Active</span>
-                        Cluster transitioned to On-Demand billing (${((selectedResource.cluster_nodes.data_nodes?.cost || 0) + (selectedResource.cluster_nodes.master_nodes?.cost || 0)).toFixed(2)} billed) following Reserved Instance expiration on Oct 14.
+                        {selectedResource.cluster_nodes.on_demand_badge
+                          ? selectedResource.cluster_nodes.on_demand_badge.tooltip
+                          : `Cluster transitioned to On-Demand billing ($${((selectedResource.cluster_nodes.data_nodes?.cost || 0) + (selectedResource.cluster_nodes.master_nodes?.cost || 0)).toFixed(2)} billed).`}
                       </div>
                     </div>
                   )}

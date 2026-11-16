@@ -191,6 +191,20 @@ def ingest_lifecycle_events_batch(
     Ensures idempotent insertion and validates required schema fields.
     """
     persisted_count = 0
+
+    # High-Performance Batch Optimization: pre-fetch existing event_ids in single O(1) indexed set lookup
+    all_ev_keys = [
+        str(ev.get("event_id") or ev.get("event_name", "event") + "_" + ev.get("resource_id", "res") + "_" + ev.get("event_time", ""))
+        for ev in events
+    ]
+    existing_ids = set()
+    if all_ev_keys:
+        existing_rows = db.query(ResourceLifecycleEvent.event_id).filter(
+            ResourceLifecycleEvent.organization_id == org_id,
+            ResourceLifecycleEvent.event_id.in_(all_ev_keys)
+        ).all()
+        existing_ids = {r[0] for r in existing_rows}
+
     for ev in events:
         event_id = str(ev.get("event_id") or ev.get("event_name", "event") + "_" + ev.get("resource_id", "res") + "_" + ev.get("event_time", ""))
         resource_id = str(ev.get("resource_id", "Unassigned"))
@@ -206,12 +220,8 @@ def ingest_lifecycle_events_batch(
         if isinstance(details, dict):
             details = json.dumps(details)
 
-        existing = db.query(ResourceLifecycleEvent.id).filter(
-            ResourceLifecycleEvent.organization_id == org_id,
-            ResourceLifecycleEvent.event_id == event_id
-        ).first()
-
-        if not existing:
+        if event_id not in existing_ids:
+            existing_ids.add(event_id)
             db_ev = ResourceLifecycleEvent(
                 organization_id=org_id,
                 event_id=event_id,

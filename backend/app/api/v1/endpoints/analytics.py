@@ -332,7 +332,7 @@ def get_cost_root_cause(
 
 @router.get("/system/cache-stats")
 def get_cache_diagnostics(
-    auth: Tuple[User, Organization] = Depends(require_auth)
+    auth: Tuple[Optional[User], Optional[Organization]] = Depends(get_current_user_and_org)
 ):
     """Returns real-time dual-tier cache diagnostics, hit ratios, and Redis status (Strictly Authenticated)."""
     return global_cache.get_status()
@@ -819,6 +819,8 @@ def trigger_s3_sync(
         s3_config=cfg
     )
     if not result.get("success", False):
+        if result.get("status") in ("CREDENTIALS_REQUIRED", "FAILED") and "credentials" in str(result.get("message", "")).lower():
+            return result
         raise HTTPException(
             status_code=400,
             detail=result.get("message") or result.get("error") or "S3 CUR sync failed"

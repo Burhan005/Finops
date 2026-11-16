@@ -56,7 +56,7 @@ POSTGRES_DDL_STATEMENTS = [
           AND (p_start_date IS NULL OR usage_date >= p_start_date)
           AND (p_end_date IS NULL OR usage_date <= p_end_date)
           AND (p_account_id IS NULL OR account_id = p_account_id)
-          AND (p_service IS NULL OR service = p_service);
+          AND (p_service IS NULL OR service = p_service OR REPLACE(service, ' ', '') = REPLACE(p_service, ' ', ''));
 
         v_net := v_gross + v_credits + v_refunds + v_taxes;
         v_is_reconciled := (ABS((v_gross + v_credits + v_refunds + v_taxes) - v_net) < 0.01);

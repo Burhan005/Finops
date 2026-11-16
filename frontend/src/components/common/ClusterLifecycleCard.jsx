@@ -1,174 +1,153 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
+import {
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  BarElement,
+  Title,
+  Tooltip,
+  Legend,
+  Filler
+} from 'chart.js';
+import { Line } from 'react-chartjs-2';
 import {
   Server,
-  Layers,
   Clock,
   AlertTriangle,
-  TrendingUp,
   Cpu,
   Calendar,
   Search,
-  ShieldAlert,
   ArrowUpRight,
-  Sliders,
-  ChevronRight,
-  Activity,
+  ShieldCheck,
   CheckCircle2,
-  Database
+  Check,
+  RotateCcw,
+  Activity,
+  Layers,
+  Sparkles,
+  Zap,
+  TrendingDown,
+  Moon
 } from 'lucide-react';
-import AwsServiceIcon from './AwsServiceIcon';
 
-// Authentic Architectural Presets matching the interactive EKS & ECS Demo
-const CLUSTER_PRESETS = {
-  EKS: {
-    dev: {
-      id: 'dev',
-      name: 'dev-eks-01 (Managed Node Group)',
-      scopeLabel: 'DEV',
-      controlPlaneSpend: 2.40,
-      hourlyRatePerNode: 0.096, // m5.large
-      instanceType: 'm5.large (2 vCPU · 8 GiB)',
-      scheduleStart: 9,
-      scheduleEnd: 18,
-      activeHoursPattern: [0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 3, 4, 4, 5, 5, 4, 3, 3, 3, 3, 3, 2, 0, 0],
-      churnIn: 8,
-      churnOut: 6,
-      terminatedNodes: [
-        { id: 'i-09df18a2bc417e', launch: '09:00', term: '14:30', hrs: 5.5, cost: 0.53, reason: 'Cluster Autoscaler Scaled Down' },
-        { id: 'i-0aa43b819f72c0', launch: '09:00', term: '15:10', hrs: 6.2, cost: 0.60, reason: 'Spot Interruption / Replaced' },
-        { id: 'i-011e4f93ca00bb', launch: '11:15', term: '17:00', hrs: 5.75, cost: 0.55, reason: 'Build Job Pods Completed' },
-        { id: 'i-078a9c21ef45da', launch: '09:00', term: '18:00', hrs: 9.0, cost: 0.86, reason: 'Scheduled Node Group Shrink' },
-        { id: 'i-033d8a1766ff31', launch: '13:00', term: '18:15', hrs: 5.25, cost: 0.50, reason: 'Scale In Policy Triggered' },
-        { id: 'i-055f10bb87cc92', launch: '14:00', term: '19:00', hrs: 5.0, cost: 0.48, reason: 'Idle Node Drained' }
-      ],
-      activeNodes: [
-        { id: 'i-0c91ba42ef9901', name: 'dev-eks-node-01', launched: '09:00', age: '11h 15m', cost: 1.08, ip: '10.0.12.45', status: 'RUNNING', type: 'm5.large', isNew: false, isTerm: false },
-        { id: 'i-088f21ca6633dd', name: 'dev-eks-node-02', launched: '14:30', age: '5h 45m', cost: 0.55, ip: '10.0.12.89', status: 'RUNNING', type: 'm5.large', isNew: true, isTerm: false },
-        { id: 'i-0ee4189ac3710b', name: 'dev-eks-node-03', launched: '15:10', age: '5h 05m', cost: 0.49, ip: '10.0.12.112', status: 'RUNNING', type: 'm5.large', isNew: true, isTerm: false }
-      ],
-      sampleEvents: [
-        { id: 'i-09df18a2bc417e', name: 'dev-eks-node-04', type: 'm5.large', event: 'TERMINATED', window: '09:00 → 14:30 UTC', cost: 0.53, isOvertime: false, reason: 'Cluster Autoscaler Scaled Down' },
-        { id: 'i-0c91ba42ef9901', name: 'dev-eks-node-01', type: 'm5.large', event: 'OVERTIME_RUNNING', window: '18:00 → 23:00 UTC', cost: 1.08, isOvertime: true, reason: 'Active Past 18:00 Cutoff' },
-        { id: 'i-088f21ca6633dd', name: 'dev-eks-node-02', type: 'm5.large', event: 'OVERTIME_RUNNING', window: '18:00 → 23:00 UTC', cost: 0.55, isOvertime: true, reason: 'Active Past 18:00 Cutoff' },
-        { id: 'i-0ee4189ac3710b', name: 'dev-eks-node-03', type: 'm5.large', event: 'SPAWNED', window: '15:10 UTC', cost: 0.49, isOvertime: false, reason: 'Cluster Autoscaler Scale-Out' },
-        { id: 'i-0aa43b819f72c0', name: 'dev-eks-node-05', type: 'm5.large', event: 'TERMINATED', window: '09:00 → 15:10 UTC', cost: 0.60, isOvertime: false, reason: 'Spot Interruption / Replaced' },
-        { id: 'i-078a9c21ef45da', name: 'dev-eks-node-06', type: 'm5.large', event: 'LAUNCHED', window: '09:00 UTC', cost: 0.86, isOvertime: false, reason: 'Scheduled Fleet Boot' }
-      ]
-    },
-    staging: {
-      id: 'staging',
-      name: 'staging-eks-02 (QA & Automation)',
-      scopeLabel: 'STAGING',
-      controlPlaneSpend: 2.40,
-      hourlyRatePerNode: 0.192, // m5.xlarge
-      instanceType: 'm5.xlarge (4 vCPU · 16 GiB)',
-      scheduleStart: 8,
-      scheduleEnd: 19,
-      activeHoursPattern: [0, 0, 0, 0, 0, 0, 0, 0, 4, 4, 4, 6, 6, 6, 5, 4, 4, 4, 4, 4, 0, 0, 0, 0],
-      churnIn: 6,
-      churnOut: 6,
-      terminatedNodes: [
-        { id: 'i-0stg18a2bc417e', launch: '08:00', term: '19:00', hrs: 11.0, cost: 2.11, reason: 'Automated Nightly Shutdown' },
-        { id: 'i-0stg43b819f72c', launch: '11:00', term: '16:00', hrs: 5.0, cost: 0.96, reason: 'E2E Cypress Test Suite Complete' },
-        { id: 'i-0stg9c21ef45da', launch: '08:00', term: '19:00', hrs: 11.0, cost: 2.11, reason: 'Automated Nightly Shutdown' }
-      ],
-      activeNodes: [
-        { id: 'i-0stg99active01', name: 'stg-qa-node-01', launched: '08:00', age: '12h 10m', cost: 2.33, ip: '10.0.24.11', status: 'RUNNING', type: 'm5.xlarge', isNew: false, isTerm: false },
-        { id: 'i-0stg99active02', name: 'stg-qa-node-02', launched: '08:00', age: '12h 10m', cost: 2.33, ip: '10.0.24.12', status: 'RUNNING', type: 'm5.xlarge', isNew: false, isTerm: false },
-        { id: 'i-0stg99active03', name: 'stg-qa-node-03', launched: '08:00', age: '12h 10m', cost: 2.33, ip: '10.0.24.13', status: 'RUNNING', type: 'm5.xlarge', isNew: false, isTerm: false },
-        { id: 'i-0stg99active04', name: 'stg-qa-node-04', launched: '08:00', age: '12h 10m', cost: 2.33, ip: '10.0.24.14', status: 'RUNNING', type: 'm5.xlarge', isNew: false, isTerm: false }
-      ],
-      sampleEvents: [
-        { id: 'i-0stg18a2bc417e', name: 'stg-qa-node-01', type: 'm5.xlarge', event: 'TERMINATED', window: '08:00 → 19:00 UTC', cost: 2.11, isOvertime: false, reason: 'Automated Nightly Shutdown' },
-        { id: 'i-0stg43b819f72c', name: 'stg-qa-node-02', type: 'm5.xlarge', event: 'TERMINATED', window: '11:00 → 16:00 UTC', cost: 0.96, isOvertime: false, reason: 'E2E Cypress Test Suite Complete' },
-        { id: 'i-0stg99active01', name: 'stg-qa-node-03', type: 'm5.xlarge', event: 'ACTIVE', window: '08:00 → 19:00 UTC', cost: 2.33, isOvertime: false, reason: 'Standard Business Hours' },
-        { id: 'i-0stg99active02', name: 'stg-qa-node-04', type: 'm5.xlarge', event: 'ACTIVE', window: '08:00 → 19:00 UTC', cost: 2.33, isOvertime: false, reason: 'Standard Business Hours' },
-        { id: 'i-0stg9c21ef45da', name: 'stg-qa-node-05', type: 'm5.xlarge', event: 'TERMINATED', window: '08:00 → 19:00 UTC', cost: 2.11, isOvertime: false, reason: 'Automated Nightly Shutdown' }
-      ]
-    },
-    prod: {
-      id: 'prod',
-      name: 'prod-eks-03 (High Availability 24/7)',
-      scopeLabel: 'PROD',
-      controlPlaneSpend: 2.40,
-      hourlyRatePerNode: 0.192,
-      instanceType: 'c5.2xlarge + r5.xlarge',
-      scheduleStart: 0,
-      scheduleEnd: 24,
-      activeHoursPattern: [10, 10, 10, 10, 10, 11, 12, 12, 14, 15, 16, 16, 16, 15, 15, 14, 13, 13, 12, 12, 11, 10, 10, 10],
-      churnIn: 18,
-      churnOut: 16,
-      terminatedNodes: [
-        { id: 'i-0prd01termin88', launch: '02:00', term: '08:00', hrs: 6.0, cost: 1.15, reason: 'Karpenter Bin-Packing Consolidation' },
-        { id: 'i-0prd02termin99', launch: '06:00', term: '14:00', hrs: 8.0, cost: 1.54, reason: 'Spot 2-Minute Termination Warning' }
-      ],
-      activeNodes: [
-        { id: 'i-0prdactive901', name: 'prod-k8s-core-01', launched: '00:00', age: '20h 30m', cost: 3.94, ip: '10.0.100.22', status: 'RUNNING', type: 'c5.2xlarge', isNew: false, isTerm: false },
-        { id: 'i-0prdactive902', name: 'prod-k8s-core-02', launched: '00:00', age: '20h 30m', cost: 3.94, ip: '10.0.100.23', status: 'RUNNING', type: 'c5.2xlarge', isNew: false, isTerm: false },
-        { id: 'i-0prdactive903', name: 'prod-k8s-core-03', launched: '04:00', age: '16h 30m', cost: 3.17, ip: '10.0.100.24', status: 'RUNNING', type: 'r5.xlarge', isNew: true, isTerm: false }
-      ],
-      sampleEvents: [
-        { id: 'i-0prd01termin88', name: 'prod-k8s-core-01', type: 'c5.2xlarge', event: 'TERMINATED', window: '02:00 → 08:00 UTC', cost: 1.15, isOvertime: false, reason: 'Karpenter Bin-Packing Consolidation' },
-        { id: 'i-0prd02termin99', name: 'prod-k8s-core-02', type: 'c5.2xlarge', event: 'TERMINATED', window: '06:00 → 14:00 UTC', cost: 1.54, isOvertime: false, reason: 'Spot 2-Minute Termination Warning' },
-        { id: 'i-0prdactive901', name: 'prod-k8s-core-03', type: 'c5.2xlarge', event: 'ACTIVE', window: '00:00 → 24:00 UTC', cost: 3.94, isOvertime: false, reason: '24/7 Production Ingress Fleet' },
-        { id: 'i-0prdactive902', name: 'prod-k8s-core-04', type: 'c5.2xlarge', event: 'ACTIVE', window: '00:00 → 24:00 UTC', cost: 3.94, isOvertime: false, reason: '24/7 Production Ingress Fleet' },
-        { id: 'i-0prdactive903', name: 'prod-k8s-core-05', type: 'r5.xlarge', event: 'SPAWNED', window: '04:00 UTC', cost: 3.17, isOvertime: false, reason: 'High-Memory Job Scale-Out' }
-      ]
-    }
-  },
-  ECS: {
-    dev: {
-      id: 'dev',
-      name: 'checkout-ecs-cluster (EC2 Launch Type)',
-      scopeLabel: 'DEV',
-      controlPlaneSpend: 0.00,
-      hourlyRatePerNode: 0.083,
-      instanceType: 't3.xlarge Container Instances',
-      scheduleStart: 9,
-      scheduleEnd: 18,
-      activeHoursPattern: [0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 3, 3, 4, 4, 3, 2, 2, 2, 2, 1, 0, 0, 0],
-      churnIn: 5,
-      churnOut: 4,
-      terminatedNodes: [
-        { id: 'i-0ecsdev9911', launch: '09:00', term: '17:00', hrs: 8.0, cost: 0.66, reason: 'ECS Capacity Provider Scale-In' }
-      ],
-      activeNodes: [
-        { id: 'i-0ecsactv881', name: 'checkout-ecs-host-01', launched: '09:00', age: '11h 00m', cost: 0.91, ip: '10.2.1.8', status: 'RUNNING', type: 't3.xlarge', isNew: false, isTerm: false },
-        { id: 'i-0ecsactv882', name: 'checkout-ecs-host-02', launched: '11:00', age: '9h 00m', cost: 0.75, ip: '10.2.1.9', status: 'RUNNING', type: 't3.xlarge', isNew: false, isTerm: false }
-      ],
-      sampleEvents: [
-        { id: 'i-0ecsdev9911', name: 'checkout-ecs-host-03', type: 't3.xlarge', event: 'TERMINATED', window: '09:00 → 17:00 UTC', cost: 0.66, isOvertime: false, reason: 'ECS Capacity Provider Scale-In' },
-        { id: 'i-0ecsactv881', name: 'checkout-ecs-host-01', type: 't3.xlarge', event: 'OVERTIME_RUNNING', window: '18:00 → 21:00 UTC', cost: 0.91, isOvertime: true, reason: 'Active Past 18:00 Cutoff' },
-        { id: 'i-0ecsactv882', name: 'checkout-ecs-host-02', type: 't3.xlarge', event: 'OVERTIME_RUNNING', window: '18:00 → 20:00 UTC', cost: 0.75, isOvertime: true, reason: 'Active Past 18:00 Cutoff' }
-      ]
-    },
-    prod: {
-      id: 'prod',
-      name: 'payment-gateway-ecs (Fargate Serverless)',
-      scopeLabel: 'PROD',
-      controlPlaneSpend: 0.00,
-      hourlyRatePerNode: 0.052,
-      instanceType: 'Fargate vCPU: 1.0 · RAM: 2GB',
-      scheduleStart: 0,
-      scheduleEnd: 24,
-      activeHoursPattern: [8, 8, 8, 8, 9, 11, 14, 16, 18, 19, 20, 20, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 8],
-      churnIn: 24,
-      churnOut: 22,
-      terminatedNodes: [
-        { id: 'task/pay-gw-task-9182', launch: '08:00', term: '14:00', hrs: 6.0, cost: 0.31, reason: 'Task Completed & De-registered' }
-      ],
-      activeNodes: [
-        { id: 'task/pay-gw-task-1001', name: 'pay-gw-task-1001', launched: '00:00', age: '22h 10m', cost: 1.15, ip: '172.16.8.21', status: 'RUNNING', type: 'Fargate Task', isNew: false, isTerm: false },
-        { id: 'task/pay-gw-task-1002', name: 'pay-gw-task-1002', launched: '06:00', age: '16h 10m', cost: 0.84, ip: '172.16.8.22', status: 'RUNNING', type: 'Fargate Task', isNew: false, isTerm: false }
-      ],
-      sampleEvents: [
-        { id: 'task/pay-gw-task-9182', name: 'pay-gw-task-9182', type: 'Fargate Task', event: 'TERMINATED', window: '08:00 → 14:00 UTC', cost: 0.31, isOvertime: false, reason: 'Task Completed & De-registered' },
-        { id: 'task/pay-gw-task-1001', name: 'pay-gw-task-1001', type: 'Fargate Task', event: 'ACTIVE', window: '00:00 → 24:00 UTC', cost: 1.15, isOvertime: false, reason: '24/7 Payment Service Worker' },
-        { id: 'task/pay-gw-task-1002', name: 'pay-gw-task-1002', type: 'Fargate Task', event: 'ACTIVE', window: '06:00 → 24:00 UTC', cost: 0.84, isOvertime: false, reason: '24/7 Payment Service Worker' }
-      ]
-    }
-  }
+ChartJS.register(
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  BarElement,
+  Title,
+  Tooltip,
+  Legend,
+  Filler
+);
+import AwsServiceIcon from './AwsServiceIcon';
+import ClusterMeshIcon from './ClusterMeshIcon';
+import ServerlessLambdaIcon from './ServerlessLambdaIcon';
+import ClayDatePicker from './ClayDatePicker';
+
+const DAYS_OF_WEEK = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const FULL_DAYS = {
+  Sun: 'Sunday',
+  Mon: 'Monday',
+  Tue: 'Tuesday',
+  Wed: 'Wednesday',
+  Thu: 'Thursday',
+  Fri: 'Friday',
+  Sat: 'Saturday'
 };
+
+// Format IST "HH:MM" (e.g. "10:30") to readable 12-hour label: "10:30 AM IST"
+function formatTime12h(timeStr) {
+  if (!timeStr) return '';
+  const match = timeStr.match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return timeStr;
+  const h = parseInt(match[1], 10);
+  const m = parseInt(match[2], 10);
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return `${String(h12).padStart(2, '0')}:${String(m).padStart(2, '0')} ${ampm} IST`;
+}
+
+// Convert IST "HH:MM" to UTC string: "05:00 UTC"
+function istToUtcStr(timeStr) {
+  if (!timeStr) return '';
+  const match = timeStr.match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return timeStr;
+  const h = parseInt(match[1], 10);
+  const m = parseInt(match[2], 10);
+  const totalIstMins = h * 60 + m;
+  const utcTotal = (totalIstMins - 330 + 1440) % 1440;
+  const utcH = Math.floor(utcTotal / 60);
+  const utcM = utcTotal % 60;
+  return `${String(utcH).padStart(2, '0')}:${String(utcM).padStart(2, '0')} UTC`;
+}
+
+// Convert UTC "HH:MM" (e.g. "04:00") to short IST label "09:30 AM"
+function formatUtcShortIST(utcHourStr) {
+  if (!utcHourStr) return '';
+  const match = utcHourStr.match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return utcHourStr;
+  const h = parseInt(match[1], 10);
+  const m = parseInt(match[2], 10);
+  const totalMins = (h * 60 + m + 330) % 1440;
+  const istH = Math.floor(totalMins / 60);
+  const istM = totalMins % 60;
+  const ampm = istH >= 12 ? 'PM' : 'AM';
+  const h12 = istH % 12 === 0 ? 12 : istH % 12;
+  return `${String(h12).padStart(2, '0')}:${String(istM).padStart(2, '0')} ${ampm}`;
+}
+
+// Format Date string "YYYY-MM-DD" to "DD MMM YYYY (DayName)" in IST
+function formatDateWithDayIST(dateStr) {
+  if (!dateStr || dateStr === 'Today' || dateStr === 'Live') return dateStr || 'Live';
+  if (/^\d{4}-\d{2}-\d{2}/.test(dateStr)) {
+    const parts = dateStr.split('-');
+    const d = new Date(Date.UTC(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10)));
+    const dayName = DAYS_OF_WEEK[d.getUTCDay()];
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const mIdx = parseInt(parts[1], 10) - 1;
+    return `${parts[2]} ${months[mIdx] || parts[1]} ${parts[0]} (${FULL_DAYS[dayName] || dayName})`;
+  }
+  return `${dateStr} (IST)`;
+}
+
+// Convert IST "HH:MM" to UTC total minutes (0 to 1439)
+function istTimeToUtcMins(istTimeStr) {
+  if (!istTimeStr) return 0;
+  const [h, m] = istTimeStr.split(':').map(Number);
+  const totalIst = (h || 0) * 60 + (m || 0);
+  return (totalIst - 330 + 1440) % 1440;
+}
+
+// Mathematical helper to evaluate whether an hourly UTC bucket is outside the user's custom window
+function evaluateUtcHourOvertime(utcHourInt, startUtcMins, stopUtcMins) {
+  if (startUtcMins === stopUtcMins) {
+    return { isOvertime: false, fraction: 0, reason: '' };
+  }
+
+  // Midpoint of the hour in UTC minutes (Hour 4 mid = 04:30 UTC / 10:00 AM IST; Hour 11 mid = 11:30 UTC / 05:00 PM IST)
+  const hourMidMins = utcHourInt * 60 + 30;
+
+  // Window does not wrap around UTC midnight (e.g. 04:30 UTC to 11:30 UTC for 10:00 AM to 05:00 PM IST)
+  if (startUtcMins < stopUtcMins) {
+    if (hourMidMins > stopUtcMins + 15) {
+      return { isOvertime: true, fraction: 1.0, reason: 'Ran Past Scheduled Cutoff Time' };
+    }
+    if (hourMidMins < startUtcMins - 15) {
+      return { isOvertime: true, fraction: 1.0, reason: 'Ran Before Scheduled Boot Time' };
+    }
+    return { isOvertime: false, fraction: 0, reason: 'Within Scheduled Operating Window' };
+  }
+
+  // Window wraps around UTC midnight (e.g. overnight shifts)
+  if (hourMidMins > stopUtcMins + 15 && hourMidMins < startUtcMins - 15) {
+    return { isOvertime: true, fraction: 1.0, reason: 'Outside Scheduled Operating Window' };
+  }
+  return { isOvertime: false, fraction: 0, reason: 'Within Scheduled Operating Window' };
+}
 
 export default function ClusterLifecycleCard({
   clusterData,
@@ -176,181 +155,469 @@ export default function ClusterLifecycleCard({
   selectedDate,
   availableDates = [],
   onDateChange,
-  cutoffHour = '18:00',
-  onCutoffChange,
+  selectedCluster,
+  onSelectCluster,
   onSelectResource,
-  forexRate = 95.32,
   serviceName = 'Amazon EKS'
 }) {
-  // Determine if service is EKS or ECS
   const serviceKey = useMemo(() => {
     const s = (serviceName || clusterData?.orchestrator || '').toLowerCase();
     if (s.includes('ecs')) return 'ECS';
     return 'EKS';
   }, [serviceName, clusterData]);
 
+  // Authentic Check: Does the active CUR dataset contain real nodes?
   const hasLiveCurCluster = useMemo(() => {
     return Boolean(clusterData && clusterData.nodes && clusterData.nodes.length > 0);
   }, [clusterData]);
 
-  // Selected cluster tab: 'live_cur' if real nodes exist and chosen, or 'dev' / 'staging' / 'prod'
-  const [selectedClusterKey, setSelectedClusterKey] = useState(hasLiveCurCluster ? 'live_cur' : 'dev');
   const [hoveredHour, setHoveredHour] = useState(null);
   const [nodeSearch, setNodeSearch] = useState('');
+  const [fleetFilter, setFleetFilter] = useState('ALL'); // 'ALL' | 'RUNNING' | 'TERMINATED'
+  const [timelineViewMode, setTimelineViewMode] = useState('GANTT'); // 'GANTT' | 'WAVE' | 'TABLE'
 
-  // Update selected cluster if live data becomes available or disappears
-  React.useEffect(() => {
-    if (hasLiveCurCluster && selectedClusterKey !== 'live_cur') {
-      setSelectedClusterKey('live_cur');
+  // User-Controlled Operational Schedule State
+  const [scheduleMode, setScheduleMode] = useState('CUSTOM'); // 'CUSTOM' | '24_7'
+  const [selectedDays, setSelectedDays] = useState(['Mon', 'Tue', 'Wed', 'Thu', 'Fri']);
+  const [startTimeIST, setStartTimeIST] = useState('10:00'); // 10:00 AM IST
+  const [stopTimeIST, setStopTimeIST] = useState('17:00'); // 05:00 PM IST
+
+  // Smart Cluster Persona Presets (Auto-adapts to cluster type without locking the user out of manual edits)
+  useEffect(() => {
+    if (!selectedCluster) return;
+    const lower = selectedCluster.toLowerCase();
+    if (lower.includes('prod')) {
+      setScheduleMode('24_7');
+    } else if (lower.includes('staging') || lower.includes('qa')) {
+      setScheduleMode('CUSTOM');
+      setStartTimeIST('08:30');
+      setStopTimeIST('20:00');
+      setSelectedDays(['Mon', 'Tue', 'Wed', 'Thu', 'Fri']);
+    } else if (lower.includes('ml') || lower.includes('batch') || lower.includes('gpu')) {
+      setScheduleMode('CUSTOM');
+      setStartTimeIST('21:30');
+      setStopTimeIST('04:30');
+      setSelectedDays(['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']);
+    } else if (lower.includes('dev')) {
+      setScheduleMode('CUSTOM');
+      setStartTimeIST('10:00');
+      setStopTimeIST('17:00');
+      setSelectedDays(['Mon', 'Tue', 'Wed', 'Thu', 'Fri']);
     }
-  }, [hasLiveCurCluster]);
+  }, [selectedCluster]);
 
-  const isLiveCur = selectedClusterKey === 'live_cur' && hasLiveCurCluster;
-  const activePreset = CLUSTER_PRESETS[serviceKey]?.[selectedClusterKey] || CLUSTER_PRESETS[serviceKey]?.dev;
+  // Evaluate the Day of Week for selected date in IST
+  const effectiveDate = selectedDate || clusterData?.target_date || availableDates?.[0] || '';
+  const currentDayOfWeek = useMemo(() => {
+    if (!effectiveDate || !/^\d{4}-\d{2}-\d{2}/.test(effectiveDate)) return 'Fri';
+    const parts = effectiveDate.split('-');
+    const d = new Date(Date.UTC(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10)));
+    return DAYS_OF_WEEK[d.getUTCDay()] || 'Fri';
+  }, [effectiveDate]);
 
-  // Compute effective timeline and stats based on active selection and overtime simulator
+  // Is the currently viewed day an unscheduled off-day (e.g. Weekend or Unselected Day)?
+  const isTodayOffDay = useMemo(() => {
+    if (scheduleMode === '24_7') return false;
+    return !selectedDays.includes(currentDayOfWeek);
+  }, [scheduleMode, selectedDays, currentDayOfWeek]);
+
+  // Calculate UTC boundary minutes for custom schedule
+  const startUtcMins = useMemo(() => istTimeToUtcMins(startTimeIST), [startTimeIST]);
+  const stopUtcMins = useMemo(() => istTimeToUtcMins(stopTimeIST), [stopTimeIST]);
+
+  // Toggle individual day chip
+  const toggleDay = (day) => {
+    setSelectedDays(prev => {
+      if (prev.includes(day)) {
+        return prev.filter(d => d !== day);
+      }
+      return [...prev, day];
+    });
+  };
+
+  // Compute effective timeline and stats based on user schedule and live CUR
   const clusterView = useMemo(() => {
-    if (isLiveCur) {
+    if (hasLiveCurCluster) {
       const kpis = clusterData.kpis || {};
-      const timeline = clusterData.hourly_timeline || [];
+      const rawTimeline = clusterData.hourly_timeline || [];
       const nodes = clusterData.nodes || [];
-      const cpSpend = kpis.total_cluster_spend > 0 ? (kpis.total_cluster_spend * 0.15) : 2.40;
-      const nodeSpend = kpis.spend_today || 0;
+      const cpSpend = kpis.control_plane_spend_today !== undefined 
+        ? kpis.control_plane_spend_today 
+        : (serviceKey === 'ECS' ? 0.0 : 2.40);
 
-      return {
-        name: `${clusterData.orchestrator || 'EKS Production'} (${clusterData.dataset_name || 'Live CUR Dataset'})`,
-        controlPlaneSpend: cpSpend,
-        totalComputeSpend: nodeSpend,
-        trueTotalSpend: cpSpend + nodeSpend,
-        peakNodes: kpis.peak_hourly_nodes || nodes.length,
-        instanceType: 'm5.large / c5.xlarge (Live CUR Nodes)',
-        overtimeCost: kpis.overtime_spend_today || 0,
-        overtimeHours: kpis.overtime_hours_detected || 0,
-        churnIn: kpis.nodes_launched_today || 0,
-        churnOut: kpis.nodes_terminated_today || 0,
-        hourlyTimeline: timeline,
-        terminatedNodes: nodes.filter(n => n.is_terminated_today).map(n => ({
-          id: n.resource_id,
-          launch: '09:00',
-          term: n.last_seen_date || '18:00',
-          hrs: 8.0,
-          cost: n.spend_today || 0.85,
-          reason: 'Node Group Scale Down'
-        })),
-        activeNodes: nodes.map(n => ({
+      // Re-evaluate hourly timeline with User Custom Schedule in IST
+      let computeSpendToday = 0;
+      let overtimeCost = 0;
+      let overtimeHours = 0;
+      let peakNodes = 0;
+
+      const hourlyTimeline = rawTimeline.map((item, hIdx) => {
+        const cnt = item.node_count || 0;
+        const cost = Number(item.cost || 0);
+        computeSpendToday += cost;
+        if (cnt > peakNodes) peakNodes = cnt;
+
+        let isOt = false;
+        let otReason = '';
+
+        if (scheduleMode === 'CUSTOM') {
+          if (isTodayOffDay) {
+            isOt = cnt > 0;
+            otReason = `Weekend / Off-Day Run (${FULL_DAYS[currentDayOfWeek]} Unscheduled)`;
+            if (isOt) {
+              overtimeCost += cost;
+              overtimeHours += 1;
+            }
+          } else {
+            const otEval = evaluateUtcHourOvertime(hIdx, startUtcMins, stopUtcMins);
+            isOt = (cnt > 0) && otEval.isOvertime;
+            otReason = otEval.reason;
+            if (isOt) {
+              overtimeCost += (cost * otEval.fraction);
+              overtimeHours += 1;
+            }
+          }
+        }
+
+        return {
+          hour: item.hour,
+          istLabel: formatUtcShortIST(item.hour),
+          node_count: cnt,
+          cost: cost,
+          is_overtime: isOt,
+          otReason: otReason,
+          active_instances: item.active_instances || []
+        };
+      });
+
+      const allFleet = nodes.map(n => {
+        const isTerm = n.status !== 'RUNNING' || Boolean(n.is_terminated_today);
+        const isFargate = (n.instance_type || '').toLowerCase().includes('fargate') || (n.resource_id || '').includes('task/');
+        
+        let nodeScheduleStatus = '24/7 Production Baseline';
+        let isNodeOvertime = false;
+
+        if (scheduleMode === 'CUSTOM') {
+          if (isTodayOffDay) {
+            const hasHours = (n.active_hours || []).length > 0;
+            nodeScheduleStatus = hasHours ? `Weekend / Off-Day Run (${FULL_DAYS[currentDayOfWeek]})` : 'Inactive Today';
+            isNodeOvertime = hasHours;
+          } else {
+            // Check if this specific node operated during any overtime/cutoff hour
+            const hasOvertimeHour = (n.active_hours || []).some(hStr => {
+              const hInt = parseInt(hStr.split(':')[0], 10);
+              return evaluateUtcHourOvertime(hInt, startUtcMins, stopUtcMins).isOvertime;
+            });
+
+            if (hasOvertimeHour) {
+              nodeScheduleStatus = `Active Past Scheduled Cutoff (${stopTimeIST} IST)`;
+              isNodeOvertime = true;
+            } else if (isTerm) {
+              nodeScheduleStatus = n.reason || 'Autoscaler Scaled Down / Drained';
+            } else {
+              nodeScheduleStatus = `On Schedule (Within ${startTimeIST} - ${stopTimeIST} IST)`;
+            }
+          }
+        }
+
+        return {
+          ...n,
           id: n.resource_id,
           name: n.resource_name || n.resource_id,
-          launched: n.first_seen_date || '09:00',
-          age: `${n.active_days || 1}d uptime`,
-          cost: n.spend_today,
-          ip: '10.0.x.x',
-          status: n.status || 'RUNNING',
-          type: n.instance_type || 'EC2 Instance',
-          isNew: n.is_launched_today,
-          isTerm: n.is_terminated_today
-        })),
-        auditEvents: nodes.map(n => {
-          const isOt = Boolean(n.is_overtime && cutoffHour !== '24:00');
-          return {
-            id: n.resource_id,
-            name: n.resource_name || n.resource_id,
-            type: n.instance_type || 'm5.large',
-            event: n.event || (isOt ? 'OVERTIME_RUNNING' : (cutoffHour === '24:00' ? 'RUNNING_24X7' : 'ACTIVE')),
-            window: n.window || (cutoffHour === '24:00' ? '00:00 → 24:00 UTC (24/7 Baseline)' : 'Active Today'),
-            reason: n.reason || (cutoffHour === '24:00' ? '24x7 Core Cluster Fleet' : 'Managed Node Group'),
-            cost: n.spend_today || 0,
-            isOvertime: isOt,
-            classification: n.classification || (cutoffHour === '24:00' ? '✓ 24/7 Production Fleet' : (isOt ? '⚠️ Avoidable Overtime' : '✓ Business Hours'))
-          };
-        }),
-        allInventory: nodes
-      };
-    }
+          type: n.instance_type || (isFargate ? 'AWS Fargate (vCPU)' : 'm5.large'),
+          isFargate,
+          isRunning: !isTerm,
+          isTerminated: isTerm,
+          launch: n.first_seen_date || '09:00',
+          launchIST: formatDateWithDayIST(n.first_seen_date),
+          term: isTerm ? (n.last_seen_date || '18:00') : 'Live Uptime',
+          cost: n.spend_today || 0,
+          totalCost: n.total_spend || n.spend_today || 0,
+          reason: nodeScheduleStatus,
+          isNodeOvertime
+        };
+      });
 
-    // Preset cluster with authentic schedule cutoff logic
-    const c = activePreset;
-    const cutoffInt = parseInt((cutoffHour || '18:00').split(':')[0], 10) || 18;
-    const effectivePattern = [...c.activeHoursPattern];
+      const clusterDisplayName = clusterData.active_cluster?.display_name 
+        || clusterData.active_cluster?.cluster_name
+        || clusterData.cluster_display_name
+        || clusterData.orchestrator
+        || (serviceKey === 'ECS' ? 'Amazon ECS Cluster' : 'Amazon EKS Cluster');
 
-    const totalNodeHours = effectivePattern.reduce((a, b) => a + b, 0);
-    const totalComputeSpend = totalNodeHours * c.hourlyRatePerNode;
-    const trueTotalSpend = c.controlPlaneSpend + totalComputeSpend;
-
-    let overtimeHours = 0;
-    let overtimeNodeHours = 0;
-    if (c.scheduleEnd < 24) {
-      for (let h = cutoffInt; h < 24; h++) {
-        if (effectivePattern[h] > 0) {
-          overtimeHours++;
-          overtimeNodeHours += effectivePattern[h];
-        }
-      }
-    }
-    const overtimeCost = overtimeNodeHours * c.hourlyRatePerNode;
-    const peakNodes = Math.max(...effectivePattern);
-
-    // Build 24-hour timeline objects
-    const hourlyTimeline = effectivePattern.map((cnt, h) => {
-      const isOt = c.scheduleEnd < 24 && h >= cutoffInt && cnt > 0;
       return {
-        hour: `${String(h).padStart(2, '0')}:00`,
-        node_count: cnt,
-        cost: cnt * c.hourlyRatePerNode,
-        is_overtime: isOt,
-        active_instances: cnt > 0 ? c.activeNodes.slice(0, cnt).map(n => n.id) : []
+        name: clusterDisplayName,
+        datasetName: clusterData.dataset_name || 'Active Dataset',
+        controlPlaneSpend: cpSpend,
+        totalComputeSpend: computeSpendToday,
+        trueTotalSpend: cpSpend + computeSpendToday,
+        peakNodes: peakNodes || nodes.length,
+        instanceType: serviceKey === 'ECS' ? 'AWS Fargate Tasks + EC2 Hosts' : 'Amazon EC2 Worker Nodes',
+        overtimeCost: overtimeCost,
+        overtimeHours: overtimeHours,
+        churnIn: kpis.nodes_launched_today || 0,
+        churnOut: kpis.nodes_terminated_today || 0,
+        hourlyTimeline: hourlyTimeline,
+        allInventory: allFleet
       };
-    });
+    }
 
+    // Fallback: Simulator mode ONLY if dataset has zero cluster nodes
     return {
-      name: c.name,
-      controlPlaneSpend: c.controlPlaneSpend,
-      totalComputeSpend: totalComputeSpend,
-      trueTotalSpend: trueTotalSpend,
-      peakNodes: peakNodes,
-      instanceType: c.instanceType,
-      overtimeCost: overtimeCost,
-      overtimeHours: overtimeHours,
-      churnIn: c.churnIn,
-      churnOut: c.churnOut,
-      hourlyTimeline: hourlyTimeline,
-      terminatedNodes: c.terminatedNodes,
-      activeNodes: c.activeNodes,
-      auditEvents: c.sampleEvents || [],
-      allInventory: c.activeNodes.map(n => ({
-        resource_id: n.id,
-        resource_name: n.name,
-        status: n.status,
-        first_seen_date: selectedDate || 'Today',
-        last_seen_date: selectedDate || 'Today',
-        spend_today: n.cost,
-        overtime_spend_today: n.cost * 0.3,
-        total_spend: n.cost,
-        is_launched_today: n.isNew,
-        is_terminated_today: n.isTerm
-      }))
+      name: `${serviceKey} Simulation Cluster (No Live CUR Cluster Found)`,
+      datasetName: 'Simulation Mode',
+      controlPlaneSpend: serviceKey === 'ECS' ? 0.0 : 2.40,
+      totalComputeSpend: 0,
+      trueTotalSpend: serviceKey === 'ECS' ? 0.0 : 2.40,
+      peakNodes: 0,
+      instanceType: 'Demo Instances',
+      overtimeCost: 0,
+      overtimeHours: 0,
+      churnIn: 0,
+      churnOut: 0,
+      hourlyTimeline: Array.from({ length: 24 }).map((_, idx) => ({
+        hour: `${String(idx).padStart(2, '0')}:00`,
+        istLabel: formatUtcShortIST(`${String(idx).padStart(2, '0')}:00`),
+        node_count: 0,
+        cost: 0,
+        is_overtime: false,
+        otReason: '',
+        active_instances: []
+      })),
+      allInventory: []
     };
-  }, [isLiveCur, clusterData, activePreset, cutoffHour, selectedDate]);
+  }, [
+    hasLiveCurCluster,
+    clusterData,
+    serviceKey,
+    scheduleMode,
+    isTodayOffDay,
+    currentDayOfWeek,
+    startUtcMins,
+    stopUtcMins,
+    startTimeIST,
+    stopTimeIST
+  ]);
 
-  const maxTimelineNodes = useMemo(() => {
-    return Math.max(...clusterView.hourlyTimeline.map(h => h.node_count || 0), 1);
+  const totalActiveNodesToday = useMemo(() => {
+    return (clusterView.hourlyTimeline || []).reduce((acc, h) => acc + (h.node_count || 0), 0);
   }, [clusterView]);
 
-  const filteredInventory = useMemo(() => {
-    if (!nodeSearch.trim()) return clusterView.allInventory;
-    const q = nodeSearch.toLowerCase();
-    return clusterView.allInventory.filter(
-      n => (n.resource_id || '').toLowerCase().includes(q) || (n.resource_name || '').toLowerCase().includes(q)
-    );
-  }, [clusterView, nodeSearch]);
+  const runningCount = useMemo(() => {
+    return (clusterView.allInventory || []).filter(n => n.isRunning).length;
+  }, [clusterView.allInventory]);
+
+  const terminatedCount = useMemo(() => {
+    return (clusterView.allInventory || []).filter(n => n.isTerminated).length;
+  }, [clusterView.allInventory]);
+
+  const filteredFleet = useMemo(() => {
+    const list = clusterView.allInventory || [];
+    return list.filter(n => {
+      if (fleetFilter === 'RUNNING' && !n.isRunning) return false;
+      if (fleetFilter === 'TERMINATED' && !n.isTerminated) return false;
+      if (nodeSearch.trim()) {
+        const q = nodeSearch.toLowerCase();
+        const idMatch = (n.resource_id || n.id || '').toLowerCase().includes(q);
+        const nameMatch = (n.resource_name || n.name || '').toLowerCase().includes(q);
+        const typeMatch = (n.instance_type || n.type || '').toLowerCase().includes(q);
+        if (!idMatch && !nameMatch && !typeMatch) return false;
+      }
+      return true;
+    });
+  }, [clusterView.allInventory, fleetFilter, nodeSearch]);
 
   const activeHourInfo = hoveredHour !== null ? clusterView.hourlyTimeline[hoveredHour] : null;
+  const isDark = typeof document !== 'undefined' && document.documentElement.classList.contains('dark');
+
+  // Executive Verdict Logic (Instant plain-language clarity)
+  const verdict = useMemo(() => {
+    if (totalActiveNodesToday === 0) {
+      return {
+        type: 'CLEAN_SHUTDOWN',
+        title: 'Cluster Cleanly Shut Down (0 Active Worker Nodes)',
+        description: `All worker nodes were stopped on ${formatDateWithDayIST(effectiveDate)}. EC2 compute cost today was $0.00 (Only the fixed EKS control plane fee of $2.40/day was billed).`,
+        costStr: '$0.00 Overtime Waste',
+        badge: 'CLEAN SHUTDOWN',
+        badgeBg: 'bg-blue-500/15 text-blue-700 dark:text-blue-300 border-blue-500/30',
+        cardBg: 'bg-blue-500/5 border-blue-500/25',
+        icon: Moon
+      };
+    }
+
+    if (scheduleMode === '24_7') {
+      return {
+        type: 'PROD_BASELINE',
+        title: '24/7 Always-On Mission-Critical Baseline',
+        description: `Production cluster operates 24 hours across all 7 days with zero schedule penalties or false overtime alerts.`,
+        costStr: '$0.00 Overtime Penalty',
+        badge: '24/7 PRODUCTION SLA',
+        badgeBg: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30',
+        cardBg: 'bg-emerald-500/5 border-emerald-500/25',
+        icon: ShieldCheck
+      };
+    }
+
+    if (isTodayOffDay) {
+      const activeFleetCount = (clusterView.allInventory || []).filter(n => (n.active_hours || []).length > 0).length;
+      return {
+        type: 'OFF_DAY_LEAK',
+        title: `Unscheduled Off-Day Run (${FULL_DAYS[currentDayOfWeek]})`,
+        description: `${activeFleetCount} worker node(s) ran on an unscheduled weekend/off-day. All compute runtime today is tracked as overtime leak.`,
+        costStr: `+$${clusterView.overtimeCost.toFixed(2)} Off-Day Leak`,
+        badge: 'OFF-DAY LEAK',
+        badgeBg: 'bg-rose-500/15 text-rose-700 dark:text-rose-300 border-rose-500/30',
+        cardBg: 'bg-rose-500/5 border-rose-500/30',
+        icon: AlertTriangle
+      };
+    }
+
+    if (clusterView.overtimeCost > 0) {
+      const lastActiveItem = [...clusterView.hourlyTimeline].reverse().find(h => h.is_overtime && h.node_count > 0);
+      const latestStopStr = lastActiveItem ? `${lastActiveItem.istLabel} IST` : `${stopTimeIST} IST`;
+      const leakingCount = (clusterView.allInventory || []).filter(n => n.isNodeOvertime).length;
+
+      return {
+        type: 'OVERTIME_LEAK',
+        title: `Overtime Detected: ${leakingCount} Node(s) Ran Past ${formatTime12h(stopTimeIST)} Cutoff`,
+        description: `Worker nodes remained running until ${latestStopStr} (+${clusterView.overtimeHours}.0 hrs extra runtime past cutoff). Overtime compute spend: $${clusterView.overtimeCost.toFixed(2)} today (~$${(clusterView.overtimeCost * 30).toFixed(2)}/mo projected).`,
+        costStr: `+$${clusterView.overtimeCost.toFixed(2)} Overtime Waste`,
+        badge: 'OVERTIME LEAK',
+        badgeBg: 'bg-amber-500/15 text-amber-800 dark:text-amber-300 border-amber-500/30',
+        cardBg: 'bg-amber-500/5 border-amber-500/30',
+        icon: AlertTriangle
+      };
+    }
+
+    return {
+      type: 'ON_SCHEDULE',
+      title: `100% On Schedule: Clean Shutdown by ${formatTime12h(stopTimeIST)}`,
+      description: `All ${clusterView.allInventory.length} worker nodes operated within ${formatTime12h(startTimeIST)} – ${formatTime12h(stopTimeIST)} IST and shut down cleanly on time.`,
+      costStr: '$0.00 Overtime Waste',
+      badge: '100% ON SCHEDULE',
+      badgeBg: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30',
+      cardBg: 'bg-emerald-500/5 border-emerald-500/25',
+      icon: CheckCircle2
+    };
+  }, [totalActiveNodesToday, scheduleMode, isTodayOffDay, clusterView, effectiveDate, currentDayOfWeek, stopTimeIST, startTimeIST]);
+
+  // Area Wave Curve Data
+  const areaWaveData = useMemo(() => {
+    const labels = (clusterView.hourlyTimeline || []).map(item => item.istLabel);
+    const scheduledData = (clusterView.hourlyTimeline || []).map(item => item.is_overtime ? 0 : item.node_count);
+    const overtimeData = (clusterView.hourlyTimeline || []).map(item => item.is_overtime ? item.node_count : 0);
+
+    return {
+      labels,
+      datasets: [
+        {
+          label: scheduleMode === '24_7' ? '24/7 Production Nodes' : `Scheduled (${startTimeIST} – ${stopTimeIST} IST)`,
+          data: scheduledData,
+          borderColor: '#10B981',
+          backgroundColor: 'rgba(16, 185, 129, 0.22)',
+          borderWidth: 2.5,
+          fill: true,
+          tension: 0.36,
+          pointRadius: 2.5,
+          pointHoverRadius: 6,
+          pointBackgroundColor: '#10B981'
+        },
+        {
+          label: isTodayOffDay ? `Off-Day Run (${FULL_DAYS[currentDayOfWeek]})` : 'Overtime / Unscheduled Run',
+          data: overtimeData,
+          borderColor: '#EA580C',
+          backgroundColor: 'rgba(234, 88, 12, 0.28)',
+          borderWidth: 2.5,
+          fill: true,
+          tension: 0.36,
+          pointRadius: 2.5,
+          pointHoverRadius: 6,
+          pointBackgroundColor: '#EA580C'
+        }
+      ]
+    };
+  }, [clusterView, scheduleMode, startTimeIST, stopTimeIST, isTodayOffDay, currentDayOfWeek]);
+
+  const areaWaveOptions = useMemo(() => {
+    const maxNodes = Math.max(...(clusterView.hourlyTimeline || []).map(h => h.node_count || 0), 1);
+    return {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: { duration: 250, easing: 'easeOutQuart' },
+      layout: { padding: { top: 6, bottom: 2, left: 0, right: 8 } },
+      onHover: (event, elements) => {
+        if (elements && elements.length > 0) setHoveredHour(elements[0].index);
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          enabled: true,
+          backgroundColor: 'rgba(15, 23, 42, 0.95)',
+          titleColor: '#F8FAFC',
+          bodyColor: '#E2E8F0',
+          borderColor: 'rgba(255, 255, 255, 0.12)',
+          borderWidth: 1,
+          padding: 10,
+          callbacks: {
+            title: (items) => {
+              const idx = items[0].dataIndex;
+              const item = clusterView.hourlyTimeline[idx];
+              return `${item?.istLabel || ''} IST (${item?.hour || ''} UTC)`;
+            },
+            label: (ctx) => {
+              const idx = ctx.dataIndex;
+              const item = clusterView.hourlyTimeline[idx];
+              const totalNodes = item?.node_count || 0;
+              const costStr = `$${Number(item?.cost || 0).toFixed(4)}`;
+              if (totalNodes === 0) return '0 Active Nodes (Cluster Shut Down)';
+              return `${totalNodes} Active Node${totalNodes > 1 ? 's' : ''} · ${costStr}/hr`;
+            },
+            afterLabel: (ctx) => {
+              const idx = ctx.dataIndex;
+              const item = clusterView.hourlyTimeline[idx];
+              if (item?.is_overtime) return `Overtime: ${item?.otReason || 'Outside scheduled SLA'}`;
+              if ((item?.node_count || 0) > 0) return `On Schedule (${startTimeIST} – ${stopTimeIST} IST)`;
+              return '';
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          grid: { display: false },
+          ticks: {
+            color: isDark ? '#94A3B8' : '#64748B',
+            font: { family: 'IBM Plex Mono', size: 9, weight: 600 },
+            maxRotation: 0,
+            autoSkip: true,
+            maxTicksLimit: 12
+          }
+        },
+        y: {
+          min: 0,
+          max: Math.max(maxNodes + 1, 4),
+          grid: {
+            color: isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.06)',
+            borderDash: [3, 3]
+          },
+          ticks: {
+            stepSize: 1,
+            color: isDark ? '#94A3B8' : '#64748B',
+            font: { family: 'IBM Plex Mono', size: 10, weight: 600 },
+            callback: (val) => `${val}n`
+          }
+        }
+      }
+    };
+  }, [clusterView, isDark, startTimeIST, stopTimeIST]);
+
+  const VerdictIcon = verdict.icon;
 
   return (
-    <div className="clay-card p-5 sm:p-6 rounded-3xl space-y-6 border border-zorvex-border/60 dark:border-zorvex-dark-border/60 transition-all">
-      {/* ==================== 1. HEADER & INTERACTIVE CLUSTER SCOPE RIBBON ==================== */}
+    <div className="clay-card p-5 sm:p-6 rounded-3xl space-y-5 border border-zorvex-border/60 dark:border-zorvex-dark-border/60 transition-all">
+      {/* ==================== 1. COMPACT TOP HEADER ==================== */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-zorvex-border/40 dark:border-zorvex-dark-border/40">
         <div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2.5 flex-wrap">
             <AwsServiceIcon service={serviceKey === 'ECS' ? 'Amazon ECS' : 'Amazon EKS'} size="sm" className="w-6 h-6" />
             <h2 className="text-base sm:text-lg font-black tracking-tight text-zorvex-text dark:text-zorvex-dark-text">
               Amazon {serviceKey} Cluster Lifecycle & Overtime Tracker
@@ -358,578 +625,791 @@ export default function ClusterLifecycleCard({
             <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider bg-zorvex-forest-soft text-zorvex-forest dark:bg-zorvex-forest-dark dark:text-emerald-300">
               {serviceKey === 'ECS' ? 'Fargate / Container Fleet' : 'Kubernetes Fleet'}
             </span>
-            {!hasLiveCurCluster && (
+            {hasLiveCurCluster ? (
+              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                <span>Live CUR Onboarded ({clusterView.allInventory.length} Nodes)</span>
+              </span>
+            ) : (
               <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider bg-amber-500/15 text-amber-800 dark:text-amber-300 border border-amber-500/20">
-                Interactive Simulator Mode
+                Simulator Mode
               </span>
             )}
           </div>
           <p className="text-xs text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary mt-1">
-            Correlating control planes with dynamic EC2 worker nodes, hourly pod churn, and overtime schedule spend leakage.
+            Correlating control plane with worker nodes and custom shutdown SLA timings in IST.
           </p>
         </div>
 
-        {/* Date & Standard Cutoff Selectors */}
-        <div className="flex flex-wrap items-center gap-2.5 self-start lg:self-center">
-          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-clay-pill clay-input text-xs font-semibold">
-            <Calendar className="w-3.5 h-3.5 text-zorvex-forest dark:text-zorvex-forest-highlight" />
-            <span className="text-[11px] text-zorvex-text-secondary mr-1">Date:</span>
-            <select
-              value={selectedDate || clusterData?.target_date || '2026-10-15'}
-              onChange={(e) => onDateChange && onDateChange(e.target.value)}
-              className="bg-transparent text-xs font-bold font-mono text-zorvex-text dark:text-zorvex-dark-text focus:outline-none cursor-pointer"
-            >
-              {(availableDates && availableDates.length > 0 ? availableDates : [clusterData?.target_date || selectedDate || '2026-10-15']).map(d => (
-                <option key={d} value={d} className="bg-zorvex-card dark:bg-zorvex-dark-surface text-zorvex-text dark:text-zorvex-dark-text">
-                  {d}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-clay-pill clay-input text-xs font-semibold">
-            <Clock className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
-            <span className="text-[11px] text-zorvex-text-secondary mr-1">Cutoff:</span>
-            <select
-              value={cutoffHour || '18:00'}
-              onChange={(e) => onCutoffChange && onCutoffChange(e.target.value)}
-              className="bg-transparent text-xs font-bold font-mono text-zorvex-text dark:text-zorvex-dark-text focus:outline-none cursor-pointer"
-            >
-              <option value="24:00" className="bg-zorvex-card dark:bg-zorvex-dark-surface text-zorvex-text dark:text-zorvex-dark-text">24/7 Production (No Cutoff / Zero Overtime)</option>
-              <option value="17:00" className="bg-zorvex-card dark:bg-zorvex-dark-surface text-zorvex-text dark:text-zorvex-dark-text">17:00 (5:00 PM - Early Dev)</option>
-              <option value="18:00" className="bg-zorvex-card dark:bg-zorvex-dark-surface text-zorvex-text dark:text-zorvex-dark-text">18:00 (6:00 PM - Standard Cutoff)</option>
-              <option value="19:00" className="bg-zorvex-card dark:bg-zorvex-dark-surface text-zorvex-text dark:text-zorvex-dark-text">19:00 (7:00 PM - Extended Dev)</option>
-              <option value="20:00" className="bg-zorvex-card dark:bg-zorvex-dark-surface text-zorvex-text dark:text-zorvex-dark-text">20:00 (8:00 PM - Staging Cutoff)</option>
-              <option value="21:00" className="bg-zorvex-card dark:bg-zorvex-dark-surface text-zorvex-text dark:text-zorvex-dark-text">21:00 (9:00 PM - Extended Staging)</option>
-              <option value="22:00" className="bg-zorvex-card dark:bg-zorvex-dark-surface text-zorvex-text dark:text-zorvex-dark-text">22:00 (10:00 PM - Batch Night Cutoff)</option>
-            </select>
-          </div>
+        {/* Calendar Date Picker */}
+        <div className="self-start lg:self-center">
+          <ClayDatePicker
+            value={effectiveDate}
+            onChange={(val) => onDateChange && onDateChange(val)}
+            availableDates={availableDates}
+          />
         </div>
       </div>
 
-      {/* ==================== 2. CLUSTER SELECTOR RIBBON ==================== */}
-      <div className="clay-card p-3 sm:p-4 rounded-2xl flex flex-col md:flex-row md:items-center justify-between gap-3 bg-zorvex-secondary/40 dark:bg-zorvex-dark-secondary/30">
+      {/* ==================== 2. CLUSTER SELECTOR & INLINE SCHEDULE BAR ==================== */}
+      <div className="clay-card p-3.5 sm:p-4 rounded-2xl flex flex-col xl:flex-row xl:items-center justify-between gap-3 bg-zorvex-secondary/30 dark:bg-zorvex-dark-secondary/30 border border-zorvex-border/50">
+        {/* Cluster Selector Pills */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex items-center gap-1.5 mr-1 text-[11px] font-black uppercase tracking-wider text-zorvex-text-secondary">
+            <ClusterMeshIcon className="w-4 h-4 text-emerald-600" />
+            <span>Cluster:</span>
+          </div>
+
+          {(clusterData?.clusters && clusterData.clusters.length > 0) ? (
+            clusterData.clusters.map((cl) => {
+              const isSelected = (selectedCluster === cl.cluster_name) || (clusterView.name === cl.cluster_name);
+              return (
+                <button
+                  key={cl.cluster_name}
+                  type="button"
+                  onClick={() => onSelectCluster && onSelectCluster(cl.cluster_name)}
+                  className={`px-3 py-1.5 rounded-clay-pill transition-all cursor-pointer flex items-center gap-1.5 text-xs border ${
+                    isSelected
+                      ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm font-black'
+                      : 'bg-zorvex-surface dark:bg-zorvex-dark-surface text-zorvex-text-secondary hover:text-zorvex-text hover:border-zorvex-forest border-zorvex-border dark:border-zorvex-dark-border font-bold'
+                  }`}
+                  title={`Switch to ${cl.display_name || cl.cluster_name}`}
+                >
+                  <span>{cl.display_name || cl.cluster_name}</span>
+                  <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono ${
+                    isSelected ? 'bg-white/20 text-white font-bold' : 'bg-zorvex-surface-secondary text-zorvex-text-secondary'
+                  }`}>
+                    {cl.total_nodes}n
+                  </span>
+                </button>
+              );
+            })
+          ) : (
+            <div className="px-3 py-1.5 rounded-clay-pill bg-zorvex-forest-soft text-zorvex-forest dark:bg-emerald-500/15 dark:text-emerald-300 font-extrabold text-xs">
+              {clusterView.name}
+            </div>
+          )}
+        </div>
+
+        {/* Direct Inline Operating Schedule Controls (No hidden menus!) */}
+        <div className="flex flex-wrap items-center gap-2.5 pt-2 xl:pt-0 border-t xl:border-t-0 border-zorvex-border/40">
+          {/* Mode Toggle */}
+          <div className="flex items-center p-0.5 rounded-xl bg-zorvex-surface dark:bg-zorvex-dark-surface border border-zorvex-border dark:border-zorvex-dark-border text-xs font-bold">
+            <button
+              type="button"
+              onClick={() => setScheduleMode('CUSTOM')}
+              className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer ${
+                scheduleMode === 'CUSTOM'
+                  ? 'bg-amber-600 text-white shadow-2xs font-black'
+                  : 'text-zorvex-text-secondary hover:text-zorvex-text'
+              }`}
+            >
+              Custom SLA
+            </button>
+            <button
+              type="button"
+              onClick={() => setScheduleMode('24_7')}
+              className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer ${
+                scheduleMode === '24_7'
+                  ? 'bg-emerald-600 text-white shadow-2xs font-black'
+                  : 'text-zorvex-text-secondary hover:text-zorvex-text'
+              }`}
+            >
+              24/7 Always-On
+            </button>
+          </div>
+
+          {/* If Custom: Days & Direct Time Inputs */}
+          {scheduleMode === 'CUSTOM' && (
+            <div className="flex items-center gap-2 flex-wrap">
+              {/* Day Chips */}
+              <div className="flex items-center gap-1">
+                {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(day => {
+                  const isSel = selectedDays.includes(day);
+                  const isTod = currentDayOfWeek === day;
+                  return (
+                    <button
+                      key={day}
+                      type="button"
+                      onClick={() => toggleDay(day)}
+                      className={`w-6 h-6 rounded-md text-[10px] font-mono font-bold transition-all flex items-center justify-center cursor-pointer border ${
+                        isSel
+                          ? 'bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border-emerald-500/40 font-black'
+                          : 'bg-zorvex-surface dark:bg-zorvex-dark-surface text-zinc-400 border-transparent hover:border-zinc-300'
+                      } ${isTod ? 'ring-1 ring-amber-500' : ''}`}
+                      title={`${day} (${isSel ? 'Active' : 'Off-day'})`}
+                    >
+                      {day[0]}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Start & Stop Inputs */}
+              <div className="flex items-center gap-1 text-xs">
+                <div className="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-zorvex-surface dark:bg-zorvex-dark-surface border border-zorvex-border dark:border-zorvex-dark-border">
+                  <span className="text-[10px] uppercase font-bold text-zorvex-text-secondary">Start:</span>
+                  <input
+                    type="time"
+                    value={startTimeIST}
+                    onChange={(e) => e.target.value && setStartTimeIST(e.target.value)}
+                    className="font-mono font-black text-xs bg-transparent border-none focus:outline-none cursor-pointer text-zorvex-text dark:text-zorvex-dark-text"
+                  />
+                  <span className="text-[9px] font-bold text-emerald-600">IST</span>
+                </div>
+
+                <span className="text-zinc-400 font-bold">→</span>
+
+                <div className={`flex items-center gap-1 px-2.5 py-1 rounded-xl bg-zorvex-surface dark:bg-zorvex-dark-surface border ${
+                  clusterView.overtimeCost > 0 ? 'border-amber-500/60 shadow-2xs' : 'border-zorvex-border dark:border-zorvex-dark-border'
+                }`}>
+                  <span className="text-[10px] uppercase font-bold text-amber-600 dark:text-amber-400">Cutoff:</span>
+                  <input
+                    type="time"
+                    value={stopTimeIST}
+                    onChange={(e) => e.target.value && setStopTimeIST(e.target.value)}
+                    className="font-mono font-black text-xs bg-transparent border-none focus:outline-none cursor-pointer text-amber-700 dark:text-amber-300"
+                  />
+                  <span className="text-[9px] font-bold text-amber-600">IST</span>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ==================== 3. EXECUTIVE VERDICT BANNER (ZERO-CONFUSION) ==================== */}
+      <div className={`p-4 rounded-2xl border ${verdict.cardBg} flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-in fade-in duration-150`}>
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-xl bg-emerald-600/10 dark:bg-emerald-500/20 flex items-center justify-center font-bold text-emerald-700 dark:text-emerald-400 border border-emerald-600/20">
-            <Layers className="w-4 h-4" />
+          <div className="w-10 h-10 rounded-xl bg-zorvex-surface/80 dark:bg-zorvex-dark-surface/80 flex items-center justify-center flex-shrink-0 shadow-2xs">
+            <VerdictIcon className={`w-5 h-5 ${
+              verdict.type === 'ON_SCHEDULE' ? 'text-emerald-600' :
+              verdict.type === 'OVERTIME_LEAK' ? 'text-amber-600' :
+              verdict.type === 'OFF_DAY_LEAK' ? 'text-rose-600' : 'text-blue-600'
+            }`} />
           </div>
           <div>
-            <span className="text-[10px] font-black uppercase tracking-wider text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary block">
-              Active Cluster Target
-            </span>
-            <span className="text-xs sm:text-sm font-extrabold text-zorvex-text dark:text-zorvex-dark-text">
-              {clusterView.name}
-            </span>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="font-black text-sm text-zorvex-text dark:text-zorvex-dark-text">
+                {verdict.title}
+              </span>
+              <span className={`px-2 py-0.5 rounded-full text-[9px] font-mono font-black border ${verdict.badgeBg}`}>
+                {verdict.badge}
+              </span>
+            </div>
+            <p className="text-xs text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary mt-0.5">
+              {verdict.description}
+            </p>
           </div>
         </div>
 
-        {/* Dynamic Cluster Buttons */}
-        <div className="flex flex-wrap items-center gap-2 text-xs font-bold">
-          {hasLiveCurCluster && (
-            <button
-              type="button"
-              onClick={() => setSelectedClusterKey('live_cur')}
-              className={`px-3 py-1.5 rounded-clay-pill transition-all cursor-pointer flex items-center gap-1.5 ${
-                selectedClusterKey === 'live_cur'
-                  ? 'clay-pill-active'
-                  : 'bg-zorvex-surface dark:bg-zorvex-dark-surface text-zorvex-text-secondary hover:text-zorvex-text border border-zorvex-border dark:border-zorvex-dark-border'
-              }`}
-            >
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-              <span>LIVE CUR CLUSTER ({clusterData.nodes.length} Nodes)</span>
-            </button>
-          )}
-
-          {Object.entries(CLUSTER_PRESETS[serviceKey] || {}).map(([key, c]) => (
-            <button
-              key={key}
-              type="button"
-              onClick={() => setSelectedClusterKey(key)}
-              className={`px-3 py-1.5 rounded-clay-pill transition-all cursor-pointer flex items-center gap-1.5 ${
-                selectedClusterKey === key
-                  ? 'clay-pill-active'
-                  : 'bg-zorvex-surface dark:bg-zorvex-dark-surface text-zorvex-text-secondary hover:text-zorvex-text border border-zorvex-border dark:border-zorvex-dark-border'
-              }`}
-            >
-              <span>{c.scopeLabel}: {c.name.split(' ')[0]}</span>
-            </button>
-          ))}
+        <div className="sm:text-right flex-shrink-0 font-mono pl-1">
+          <span className="text-[10px] uppercase font-bold text-zorvex-text-secondary block">
+            Impact Verdict
+          </span>
+          <span className={`text-base font-black ${
+            verdict.type === 'ON_SCHEDULE' || verdict.type === 'CLEAN_SHUTDOWN' || verdict.type === 'PROD_BASELINE'
+              ? 'text-emerald-700 dark:text-emerald-400'
+              : 'text-[#EA580C]'
+          }`}>
+            {verdict.costStr}
+          </span>
         </div>
       </div>
 
-      {/* ==================== 3. 4 KEY EXECUTIVE METRIC PILLARS ==================== */}
+      {/* ==================== 4. 4 EXECUTIVE METRIC PILLARS ==================== */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-        {/* Pillar 1: True Cluster Spend */}
-        <div className="clay-card p-5 space-y-1 rounded-2xl flex flex-col justify-between">
+        {/* Pillar 1: True Spend */}
+        <div className="clay-card p-4 space-y-1 rounded-2xl flex flex-col justify-between">
           <span className="text-[11px] font-black uppercase tracking-wider text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">
             True Cluster Spend (24h)
           </span>
-          <div className="text-3xl font-black font-mono text-zorvex-forest dark:text-zorvex-forest-highlight my-1">
+          <div className="text-2xl sm:text-3xl font-black font-mono text-zorvex-forest dark:text-zorvex-forest-highlight my-1">
             ${Number(clusterView.trueTotalSpend || 0).toFixed(2)}
           </div>
-          <div className="text-[11px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary font-mono flex items-center gap-1">
-            <span className="text-zorvex-text dark:text-zorvex-dark-text font-bold">
-              ${Number(clusterView.controlPlaneSpend || 0).toFixed(2)}
-            </span>
-            <span>Control Plane +</span>
-            <span className="text-zorvex-text dark:text-zorvex-dark-text font-bold">
-              ${Number(clusterView.totalComputeSpend || 0).toFixed(2)}
-            </span>
-            <span>Nodes</span>
+          <div className="text-[11px] text-zorvex-text-secondary font-mono">
+            ${Number(clusterView.controlPlaneSpend || 0).toFixed(2)} CP + ${Number(clusterView.totalComputeSpend || 0).toFixed(2)} Nodes
           </div>
         </div>
 
-        {/* Pillar 2: Peak Fleet Capacity */}
-        <div className="clay-card p-5 space-y-1 rounded-2xl flex flex-col justify-between">
+        {/* Pillar 2: Fleet Capacity */}
+        <div className="clay-card p-4 space-y-1 rounded-2xl flex flex-col justify-between">
           <span className="text-[11px] font-black uppercase tracking-wider text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">
             Peak Fleet Capacity
           </span>
-          <div className="text-3xl font-black font-mono text-emerald-600 dark:text-emerald-400 my-1">
-            {clusterView.peakNodes} {serviceKey === 'ECS' && clusterView.name.includes('Fargate') ? 'Tasks' : 'EC2 Nodes'}
+          <div className="text-2xl sm:text-3xl font-black font-mono text-emerald-600 dark:text-emerald-400 my-1">
+            {clusterView.peakNodes} {serviceKey === 'ECS' && clusterView.name.includes('Fargate') ? 'Tasks' : 'Nodes'}
           </div>
-          <div className="text-[11px] font-medium text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary truncate" title={clusterView.instanceType}>
+          <div className="text-[11px] font-medium text-zorvex-text-secondary truncate">
             {clusterView.instanceType}
           </div>
         </div>
 
-        {/* Pillar 3: Overtime Schedule Leak */}
-        <div className="clay-card p-5 space-y-1 rounded-2xl flex flex-col justify-between border-l-4 border-l-[#C85A32]">
+        {/* Pillar 3: Overtime Waste */}
+        <div className={`clay-card p-4 space-y-1 rounded-2xl flex flex-col justify-between border-l-4 ${
+          clusterView.overtimeCost > 0 ? 'border-l-[#EA580C]' : 'border-l-emerald-500'
+        }`}>
           <div className="flex items-center justify-between">
-            <span className="text-[11px] font-black uppercase tracking-wider text-[#C85A32]">
-              Overtime Schedule Leak
+            <span className={`text-[11px] font-black uppercase tracking-wider ${
+              clusterView.overtimeCost > 0 ? 'text-[#EA580C]' : 'text-emerald-700 dark:text-emerald-400'
+            }`}>
+              {scheduleMode === '24_7' ? '24/7 Production SLA' : isTodayOffDay ? 'Off-Day Run' : 'Overtime Waste'}
             </span>
-            {clusterView.overtimeHours > 0 && (
-              <span className="px-2 py-0.5 rounded-full text-[9px] font-black bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20">
-                ALERT
-              </span>
-            )}
           </div>
-          <div className="text-3xl font-black font-mono text-[#C85A32] my-1">
+          <div className={`text-2xl sm:text-3xl font-black font-mono my-1 ${
+            clusterView.overtimeCost > 0 ? 'text-[#EA580C]' : 'text-emerald-600 dark:text-emerald-400'
+          }`}>
             {clusterView.overtimeCost > 0 ? `+$${clusterView.overtimeCost.toFixed(2)}` : '$0.00'}
           </div>
-          <div className="text-[11px] font-semibold text-[#C85A32]">
-            {clusterView.overtimeHours > 0 ? `+${clusterView.overtimeHours}.0 hrs past ${cutoffHour} cutoff` : '● Strict Cutoff (Zero Overtime)'}
+          <div className="text-[11px] font-semibold text-zorvex-text-secondary">
+            {scheduleMode === '24_7' ? (
+              <span className="text-emerald-700 dark:text-emerald-400 flex items-center gap-1">
+                <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
+                <span>Zero Schedule Overtime</span>
+              </span>
+            ) : isTodayOffDay ? (
+              <span className="text-rose-600 flex items-center gap-1">
+                <AlertTriangle className="w-3.5 h-3.5 text-rose-500" />
+                <span>Unscheduled {FULL_DAYS[currentDayOfWeek]}</span>
+              </span>
+            ) : clusterView.overtimeCost > 0 ? (
+              <span className="text-[#EA580C] flex items-center gap-1">
+                <AlertTriangle className="w-3.5 h-3.5 text-[#EA580C]" />
+                <span>+{clusterView.overtimeHours}.0h past {stopTimeIST} IST</span>
+              </span>
+            ) : (
+              <span className="text-emerald-700 dark:text-emerald-400 flex items-center gap-1">
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
+                <span>100% On Schedule</span>
+              </span>
+            )}
           </div>
         </div>
 
         {/* Pillar 4: Daily Churn */}
-        <div className="clay-card p-5 space-y-1 rounded-2xl flex flex-col justify-between">
+        <div className="clay-card p-4 space-y-1 rounded-2xl flex flex-col justify-between">
           <span className="text-[11px] font-black uppercase tracking-wider text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">
             Daily Node Churn
           </span>
-          <div className="text-3xl font-black font-mono text-zorvex-text dark:text-zorvex-dark-text my-1">
+          <div className="text-2xl sm:text-3xl font-black font-mono text-zorvex-text dark:text-zorvex-dark-text my-1">
             {clusterView.churnIn} In / {clusterView.churnOut} Out
           </div>
-          <div className="text-[11px] font-medium text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">
-            {clusterView.churnIn} spawned · {clusterView.churnOut} terminated today
+          <div className="text-[11px] font-medium text-zorvex-text-secondary">
+            {clusterView.churnIn} spawned · {clusterView.churnOut} terminated
           </div>
         </div>
       </div>
 
-      {/* ==================== 5. 24-HOUR ACTIVE NODE COUNT TIMELINE BAR CHART ==================== */}
+      {/* ==================== 5. UNIFIED TIMELINE HORIZON & NODE SWIMLANES ==================== */}
       <div className="clay-card p-5 sm:p-6 rounded-2xl space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-zorvex-border/40 dark:border-zorvex-dark-border/40">
-          <div>
-            <h3 className="text-sm sm:text-base font-black text-zorvex-text dark:text-zorvex-dark-text">
-              24-Hour Active Node Count Timeline
-            </h3>
-            <p className="text-xs text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary mt-0.5">
-              Hover over any hour bar to inspect physical running instance IDs and exact hourly spend.
+        {/* FinOps Ground Truth Banner (Strict Zero Double Counting) */}
+        <div className="p-3.5 rounded-xl bg-zorvex-forest-soft/30 dark:bg-zorvex-forest-dark-soft/20 border border-zorvex-forest/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+          <div className="flex items-center gap-2.5">
+            <ShieldCheck className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+            <p className="text-[11px] text-zorvex-text-secondary leading-relaxed">
+              AWS bills <strong>${Number(clusterView.controlPlaneSpend || 2.40).toFixed(2)}/day</strong> under Amazon EKS for the Control Plane. Compute worker nodes ({runningCount} running, {terminatedCount} terminated) are billed under Amazon EC2 and correlated here for fleet lifecycle without double-counting account spend.
             </p>
           </div>
-
-          <div className="flex items-center gap-4 text-xs font-bold">
-            <div className="flex items-center gap-1.5">
-              <span className="w-3 h-3 rounded-md bg-emerald-600 dark:bg-emerald-500" />
-              <span className="text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">
-                Scheduled Hours (09:00 - 18:00)
-              </span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span className="w-3 h-3 rounded-md bg-[#C85A32]" />
-              <span className="text-[#C85A32]">Overtime / Extended Leak</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Timeline Bar Chart Canvas */}
-        <div className="h-44 flex items-end gap-1.5 sm:gap-2 pt-6 pb-2 border-b border-zorvex-border/40 dark:border-zorvex-dark-border/40">
-          {clusterView.hourlyTimeline.map((h, hourIdx) => {
-            const cnt = h.node_count;
-            const isOt = h.is_overtime;
-            const isHovered = hoveredHour === hourIdx;
-            const heightPct = maxTimelineNodes > 0 ? (cnt / maxTimelineNodes) * 100 : 0;
-
-            return (
-              <div
-                key={h.hour}
-                onMouseEnter={() => setHoveredHour(hourIdx)}
-                onMouseLeave={() => setHoveredHour(null)}
-                className="flex-1 flex flex-col items-center justify-end h-full group relative cursor-pointer"
-              >
-                {/* Visual Bar */}
-                <div
-                  style={{ height: `${Math.max(4, heightPct)}%` }}
-                  className={`w-full rounded-md transition-all duration-200 ${
-                    isOt
-                      ? isHovered
-                        ? 'bg-[#B04E2B] ring-2 ring-[#C85A32] shadow-sm'
-                        : 'bg-[#C85A32] hover:bg-[#B04E2B]'
-                      : cnt > 0
-                      ? isHovered
-                        ? 'bg-emerald-700 dark:bg-emerald-400 ring-2 ring-emerald-500'
-                        : 'bg-emerald-600 dark:bg-emerald-500 hover:brightness-110'
-                      : 'bg-zorvex-border/40 dark:bg-zorvex-dark-border/40'
-                  }`}
-                />
-              </div>
-            );
-          })}
-        </div>
-
-        {/* Timeline Hour Labels */}
-        <div className="flex justify-between text-[10px] font-mono text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary px-1">
-          <span>00:00</span>
-          <span>04:00</span>
-          <span>08:00</span>
-          <span className="font-extrabold text-emerald-600 dark:text-emerald-400">09:00 (Env Start)</span>
-          <span>12:00</span>
-          <span className="font-extrabold text-[#C85A32]">18:00 (Target Stop)</span>
-          <span>20:00</span>
-          <span>23:00</span>
-        </div>
-
-        {/* Hover Inspector Tooltip Strip */}
-        {activeHourInfo && (
-          <div className="p-3 rounded-xl bg-zorvex-surface dark:bg-zorvex-dark-surface border border-zorvex-border dark:border-zorvex-dark-border flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs transition-all">
-            <div className="flex items-center gap-2">
-              <span className="font-mono font-bold text-sm text-zorvex-text dark:text-zorvex-dark-text">
-                Hour {activeHourInfo.hour} UTC
-              </span>
-              <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${
-                activeHourInfo.is_overtime
-                  ? 'bg-amber-500/20 text-[#C85A32] dark:text-amber-300'
-                  : 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
-              }`}>
-                {activeHourInfo.is_overtime ? 'Overtime Leakage Window' : 'Standard Scheduled Window'}
-              </span>
-            </div>
-            <div className="flex items-center gap-4 text-xs font-mono">
-              <div>
-                <span className="text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">Active Fleet: </span>
-                <span className="font-bold text-zorvex-text dark:text-zorvex-dark-text">{activeHourInfo.node_count} Nodes</span>
-              </div>
-              <div>
-                <span className="text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">Hourly Spend: </span>
-                <span className="font-bold text-zorvex-text dark:text-zorvex-dark-text">${Number(activeHourInfo?.cost || 0).toFixed(3)}</span>
-              </div>
-              {activeHourInfo.active_instances?.length > 0 && (
-                <div className="hidden md:block text-[11px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">
-                  Instances: {activeHourInfo.active_instances.slice(0, 3).join(', ')}
-                  {activeHourInfo.active_instances.length > 3 ? ` +${activeHourInfo.active_instances.length - 3}` : ''}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* ==================== 6. EPHEMERAL NODE LIFECYCLE AUDIT (DEMO DESIGN) ==================== */}
-      <div className="clay-card p-5 space-y-3 rounded-2xl">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-zorvex-border/40 dark:border-zorvex-dark-border/40">
-          <div className="flex items-center gap-2">
-            <Layers className="w-4 h-4 text-zorvex-forest dark:text-emerald-400" />
-            <h3 className="text-sm font-extrabold text-zorvex-text dark:text-zorvex-dark-text tracking-tight">
-              Ephemeral EC2 Node Lifecycle Audit (Today)
-            </h3>
-          </div>
-          <span className="text-xs font-mono font-bold text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">
-            {(clusterView.auditEvents || []).length} ephemeral node events audited
+          <span className="font-mono font-black text-zorvex-forest text-xs whitespace-nowrap pl-1">
+            EKS Fee: ${Number(clusterView.controlPlaneSpend || 2.40).toFixed(2)}/day
           </span>
         </div>
 
-        <div className="overflow-x-auto rounded-xl border border-zorvex-border/50 dark:border-zorvex-dark-border/50">
-          <table className="w-full text-left text-xs font-mono">
-            <thead className="bg-zorvex-surface dark:bg-zorvex-dark-surface/80 text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary uppercase text-[10px] tracking-wider border-b border-zorvex-border dark:border-zorvex-dark-border font-bold">
-              <tr>
-                <th className="py-2.5 px-3">Physical Instance ID</th>
-                <th className="py-2.5 px-3">Type</th>
-                <th className="py-2.5 px-3">Lifecycle Event</th>
-                <th className="py-2.5 px-3">Window & Reason</th>
-                <th className="py-2.5 px-3 text-right">Billed Run Cost</th>
-                <th className="py-2.5 px-3">Classification</th>
-                <th className="py-2.5 px-3 text-center">Action</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-zorvex-border/30 dark:divide-zorvex-dark-border/30">
-              {(!clusterView.auditEvents || clusterView.auditEvents.length === 0) ? (
-                <tr>
-                  <td colSpan={7} className="py-6 text-center text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">
-                    Zero ephemeral lifecycle events recorded today.
-                  </td>
-                </tr>
-              ) : (
-                clusterView.auditEvents.map((ev, eIdx) => {
-                  const isTerm = ev.event && ev.event.includes('TERMINATED');
-                  const isOt = ev.isOvertime || (ev.event && ev.event.includes('OVERTIME'));
-                  const badgeColor = isTerm
-                    ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20'
-                    : isOt
-                    ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30'
-                    : 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/20';
+        {/* Toolbar: View Switcher, Status Tabs & Search */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1 pb-2 border-b border-zorvex-border/40 dark:border-zorvex-dark-border/40">
+          <div className="flex flex-wrap items-center gap-2">
+            {/* View Mode Switcher */}
+            <div className="flex items-center p-0.5 rounded-xl bg-zorvex-surface-secondary/80 dark:bg-zorvex-dark-surface-secondary/80 border border-zorvex-border/50 text-xs font-bold">
+              <button
+                type="button"
+                onClick={() => setTimelineViewMode('GANTT')}
+                className={`px-3 py-1 rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
+                  timelineViewMode === 'GANTT'
+                    ? 'bg-emerald-600 text-white shadow-2xs font-black'
+                    : 'text-zorvex-text-secondary hover:text-zorvex-text'
+                }`}
+              >
+                <Layers className="w-3.5 h-3.5" />
+                <span>Node Gantt</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setTimelineViewMode('WAVE')}
+                className={`px-3 py-1 rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
+                  timelineViewMode === 'WAVE'
+                    ? 'bg-emerald-600 text-white shadow-2xs font-black'
+                    : 'text-zorvex-text-secondary hover:text-zorvex-text'
+                }`}
+              >
+                <Activity className="w-3.5 h-3.5" />
+                <span>Capacity Wave</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setTimelineViewMode('TABLE')}
+                className={`px-3 py-1 rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
+                  timelineViewMode === 'TABLE'
+                    ? 'bg-emerald-600 text-white shadow-2xs font-black'
+                    : 'text-zorvex-text-secondary hover:text-zorvex-text'
+                }`}
+              >
+                <span>Inventory Table</span>
+              </button>
+            </div>
 
-                  return (
-                    <tr
-                      key={ev.id + eIdx}
-                      className="hover:bg-zorvex-surface/60 dark:hover:bg-zorvex-dark-surface/60 transition-colors"
-                    >
-                      {/* 1. Physical Instance ID */}
-                      <td className="py-2.5 px-3 font-bold text-zorvex-text dark:text-zorvex-dark-text whitespace-nowrap">
-                        <button
-                          type="button"
-                          onClick={() => onSelectResource && onSelectResource({
-                            resource_id: ev.id,
-                            service: 'Amazon EC2',
-                            resource_name: ev.name || ev.id,
-                            name: ev.name || ev.id,
-                            total_cost: typeof ev.cost === 'number' ? ev.cost : parseFloat(String(ev.cost || '0').replace('$', '')) || 0,
-                            cost: typeof ev.cost === 'number' ? ev.cost : parseFloat(String(ev.cost || '0').replace('$', '')) || 0,
-                            active_days: 1,
-                            type: ev.type || 'm5.large',
-                            category: 'EC2_INSTANCE',
-                            category_label: 'EC2 Instance',
-                            primary_usage_type: `${ev.type || 'm5.large'} BoxUsage`
-                          })}
-                          className="flex items-center gap-1.5 hover:underline text-zorvex-text dark:text-zorvex-dark-text text-left cursor-pointer group"
-                          title="Click to open Resource Detail Drawer"
-                        >
-                          <Cpu className={`w-3.5 h-3.5 ${isTerm ? 'text-rose-500' : isOt ? 'text-amber-500' : 'text-emerald-500'}`} />
-                          <span className="group-hover:text-zorvex-forest dark:group-hover:text-emerald-400 font-extrabold">{ev.id}</span>
-                          {ev.name && ev.name !== ev.id && (
-                            <span className="text-[10px] text-zorvex-text-secondary font-normal truncate max-w-[140px]">
-                              ({ev.name})
-                            </span>
-                          )}
-                        </button>
-                      </td>
-
-                      {/* 2. Type */}
-                      <td className="py-2.5 px-3 text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary whitespace-nowrap">
-                        {ev.type || 'm5.large'}
-                      </td>
-
-                      {/* 3. Lifecycle Event Badge */}
-                      <td className="py-2.5 px-3 whitespace-nowrap">
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${badgeColor}`}>
-                          {ev.event}
-                        </span>
-                      </td>
-
-                      {/* 4. Window & Reason */}
-                      <td className="py-2.5 px-3 text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary whitespace-nowrap">
-                        <div className="font-semibold text-zorvex-text dark:text-zorvex-dark-text text-[11px]">
-                          {ev.window}
-                        </div>
-                        {ev.reason && (
-                          <div className={`text-[10px] ${isOt ? 'text-amber-600 dark:text-amber-400 font-medium' : isTerm ? 'text-rose-600 dark:text-rose-400' : 'text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary'}`}>
-                            {ev.reason}
-                          </div>
-                        )}
-                      </td>
-
-                      {/* 5. Billed Run Cost */}
-                      <td className="py-2.5 px-3 text-right font-extrabold text-zorvex-text dark:text-zorvex-dark-text whitespace-nowrap">
-                        ${typeof ev.cost === 'number' ? ev.cost.toFixed(2) : String(ev.cost).replace('$', '')}
-                      </td>
-
-                      {/* 6. Classification */}
-                      <td className="py-2.5 px-3 whitespace-nowrap">
-                        {isOt ? (
-                          <span className="inline-flex items-center gap-1 text-[11px] font-bold text-[#C85A32] dark:text-amber-300">
-                            <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
-                            Avoidable Overtime
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 dark:text-emerald-400">
-                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                            {ev.classification || (cutoffHour === '24:00' ? '24/7 Production Fleet' : 'Business Hours')}
-                          </span>
-                        )}
-                      </td>
-
-                      {/* 7. Action */}
-                      <td className="py-2.5 px-3 text-center whitespace-nowrap">
-                        <button
-                          type="button"
-                          onClick={() => onSelectResource && onSelectResource({
-                            resource_id: ev.id,
-                            service: 'Amazon EC2',
-                            resource_name: ev.name || ev.id,
-                            name: ev.name || ev.id,
-                            total_cost: typeof ev.cost === 'number' ? ev.cost : parseFloat(String(ev.cost || '0').replace('$', '')) || 0,
-                            cost: typeof ev.cost === 'number' ? ev.cost : parseFloat(String(ev.cost || '0').replace('$', '')) || 0,
-                            active_days: 1,
-                            type: ev.type || 'm5.large',
-                            category: 'EC2_INSTANCE',
-                            category_label: 'EC2 Instance',
-                            primary_usage_type: `${ev.type || 'm5.large'} BoxUsage`
-                          })}
-                          className="px-2.5 py-1 rounded-md text-[10px] font-bold clay-button text-zorvex-text dark:text-zorvex-dark-text inline-flex items-center gap-1 hover:text-zorvex-forest dark:hover:text-emerald-400"
-                        >
-                          <span>Inspect</span>
-                          <ArrowUpRight className="w-2.5 h-2.5" />
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* ==================== 7. CLUSTER COMPUTE NODE INVENTORY TABLE ==================== */}
-      <div className="clay-card p-4 sm:p-5 rounded-2xl space-y-3">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div>
-            <h3 className="text-xs sm:text-sm font-black text-zorvex-text dark:text-zorvex-dark-text">
-              Cluster Compute Node Inventory ({filteredInventory.length} Instances)
-            </h3>
-            <p className="text-[11px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">
-              Actual compute instances and container tasks discovered from CUR unblended telemetry.
-            </p>
+            {/* Filter Pills */}
+            <button
+              type="button"
+              onClick={() => setFleetFilter('ALL')}
+              className={`px-2.5 py-1 rounded-clay-pill text-xs font-bold transition-all cursor-pointer ${
+                fleetFilter === 'ALL' ? 'clay-pill-active' : 'text-zorvex-text-secondary hover:text-zorvex-text'
+              }`}
+            >
+              All ({clusterView.allInventory.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setFleetFilter('RUNNING')}
+              className={`px-2.5 py-1 rounded-clay-pill text-xs font-bold transition-all cursor-pointer flex items-center gap-1 ${
+                fleetFilter === 'RUNNING' ? 'bg-emerald-600 text-white font-black' : 'text-emerald-700 dark:text-emerald-400'
+              }`}
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              <span>Running ({runningCount})</span>
+            </button>
+            {terminatedCount > 0 && (
+              <button
+                type="button"
+                onClick={() => setFleetFilter('TERMINATED')}
+                className={`px-2.5 py-1 rounded-clay-pill text-xs font-bold transition-all cursor-pointer ${
+                  fleetFilter === 'TERMINATED' ? 'bg-rose-600 text-white font-black' : 'text-rose-700 dark:text-rose-400'
+                }`}
+              >
+                Terminated ({terminatedCount})
+              </button>
+            )}
           </div>
-          <div className="relative w-full sm:w-64">
+
+          {/* Node Search Bar */}
+          <div className="relative w-full sm:w-56">
             <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-zorvex-text-secondary" />
             <input
               type="text"
+              placeholder="Filter node ID..."
               value={nodeSearch}
               onChange={(e) => setNodeSearch(e.target.value)}
-              placeholder="Search instance ID or name..."
-              className="w-full pl-9 pr-3 py-1.5 rounded-clay-pill clay-input text-xs font-medium focus:outline-none"
+              className="w-full pl-8 pr-3 py-1.5 text-xs rounded-xl clay-input text-zorvex-text dark:text-zorvex-dark-text placeholder:text-zorvex-text-secondary/60 focus:outline-none"
             />
           </div>
         </div>
 
-        <div className="overflow-x-auto rounded-xl border border-zorvex-border/50 dark:border-zorvex-dark-border/50">
-          <table className="w-full text-left text-xs">
-            <thead className="bg-zorvex-surface dark:bg-zorvex-dark-surface/80 border-b border-zorvex-border dark:border-zorvex-dark-border text-[11px] font-bold text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary uppercase tracking-wider">
-              <tr>
-                <th className="py-2.5 px-3">Instance / Node ID</th>
-                <th className="py-2.5 px-3">Workload Name</th>
-                <th className="py-2.5 px-3">Status</th>
-                <th className="py-2.5 px-3">Lifecycle Window</th>
-                <th className="py-2.5 px-3 text-right">Spend on {selectedDate || 'Today'}</th>
-                <th className="py-2.5 px-3 text-right">Overtime Spend</th>
-                <th className="py-2.5 px-3 text-right">Total Spend</th>
-                <th className="py-2.5 px-3 text-center">Action</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-zorvex-border/30 dark:divide-zorvex-dark-border/30">
-              {filteredInventory.length === 0 ? (
-                <tr>
-                  <td colSpan={8} className="py-6 text-center text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">
-                    No cluster compute nodes found matching "{nodeSearch}".
-                  </td>
-                </tr>
-              ) : (
-                filteredInventory.map((n) => (
-                  <tr
-                    key={n.resource_id}
-                    className="hover:bg-zorvex-surface/60 dark:hover:bg-zorvex-dark-surface/60 transition-colors"
+        {/* View Mode 1: SLEEK CONTINUOUS NODE GANTT SWIMLANES */}
+        {timelineViewMode === 'GANTT' && (
+          <div className="space-y-3 pt-1">
+            {/* Master 24-Hour Horizon Ruler (Aligned with exact 24-column timeline below) */}
+            <div className="rounded-2xl bg-zorvex-surface/90 dark:bg-zorvex-dark-surface/90 p-3.5 border border-zorvex-border/50 shadow-xs space-y-2.5">
+              {/* Row 1: Operating SLA Badges & Legend (Clean SVG Icons, Zero Emojis) */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2.5 border-b border-zorvex-border/30 text-xs">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-zorvex-text-secondary">
+                    Operating Policy:
+                  </span>
+                  {scheduleMode === '24_7' ? (
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-mono font-extrabold bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
+                      <ShieldCheck className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
+                      <span>24/7 Always-On Baseline</span>
+                    </span>
+                  ) : (
+                    <>
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-mono font-extrabold bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                        <span>Boot SLA: {formatTime12h(startTimeIST)}</span>
+                      </span>
+                      <span className="text-zinc-400 text-xs font-bold">→</span>
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-mono font-extrabold bg-amber-500/15 text-amber-800 dark:text-amber-300 border border-amber-500/30">
+                        <Clock className="w-3 h-3 text-amber-600 dark:text-amber-400" />
+                        <span>Cutoff SLA: {formatTime12h(stopTimeIST)}</span>
+                      </span>
+                    </>
+                  )}
+                </div>
+
+                {/* Micro-Legend */}
+                <div className="flex items-center gap-3 text-[11px] font-semibold text-zorvex-text-secondary">
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-3 h-3 rounded-md bg-gradient-to-r from-emerald-500 to-teal-500 shadow-2xs" />
+                    <span>On Schedule</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-3 h-3 rounded-md bg-[repeating-linear-gradient(45deg,#EA580C,#EA580C_3px,#C2410C_3px,#C2410C_6px)] shadow-2xs" />
+                    <span className="text-[#EA580C]">Overtime Leak</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Row 2: Clean 24-Hour Milestones with clear AM/PM (Zero Confusion!) */}
+              <div className="flex items-center justify-between text-xs font-mono font-bold text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary pt-1 px-1">
+                <div className="flex flex-col items-start">
+                  <span className="text-[11px] text-zinc-500 dark:text-zinc-400 font-bold">05:30 AM</span>
+                  <span className="text-[9px] text-zinc-400 font-sans">Day Start</span>
+                </div>
+
+                <div className="flex flex-col items-center">
+                  <span className="px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 text-[11px] font-black flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                    <span>{formatTime12h(startTimeIST)} Boot</span>
+                  </span>
+                </div>
+
+                <div className="flex flex-col items-center hidden sm:flex">
+                  <span className="text-[11px] text-zinc-400 font-bold">01:00 PM</span>
+                  <span className="text-[9px] text-zinc-400 font-sans">Midday</span>
+                </div>
+
+                <div className="flex flex-col items-center">
+                  <span className="px-2 py-0.5 rounded-md bg-amber-500/15 text-amber-800 dark:text-amber-300 border border-amber-500/30 text-[11px] font-black flex items-center gap-1">
+                    <Clock className="w-3 h-3 text-amber-600 dark:text-amber-400" />
+                    <span>{formatTime12h(stopTimeIST)} Cutoff</span>
+                  </span>
+                </div>
+
+                <div className="flex flex-col items-center hidden md:flex">
+                  <span className="text-[11px] text-zinc-400 font-bold">10:30 PM</span>
+                  <span className="text-[9px] text-zinc-400 font-sans">Night</span>
+                </div>
+
+                <div className="flex flex-col items-end">
+                  <span className="text-[11px] text-zinc-500 dark:text-zinc-400 font-bold">04:30 AM</span>
+                  <span className="text-[9px] text-zinc-400 font-sans">Day End</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Node Rows */}
+            {filteredFleet.length === 0 ? (
+              <div className="py-12 text-center text-zorvex-text-secondary border border-dashed border-zorvex-border rounded-2xl">
+                No cluster compute nodes found matching "{nodeSearch || fleetFilter}".
+              </div>
+            ) : (
+              filteredFleet.map((node, nIdx) => {
+                const isRunning = node.isRunning;
+                const isFargate = node.isFargate;
+                const activeHours = node.active_hours || [];
+                const totalNodeCost = Number(node.spend_today || node.cost || 0);
+
+                // Map 24 hours for this node
+                const nodeHours = clusterView.hourlyTimeline.map((hItem) => {
+                  const isActive = activeHours.length > 0 
+                    ? activeHours.includes(hItem.hour)
+                    : (hItem.active_instances || []).includes(node.resource_id);
+                  
+                  return {
+                    isActive,
+                    isOvertime: isActive && hItem.is_overtime,
+                    hour: hItem.hour,
+                    istLabel: hItem.istLabel
+                  };
+                });
+
+                const activeCount = nodeHours.filter(x => x.isActive).length;
+                const overtimeCount = nodeHours.filter(x => x.isOvertime).length;
+                const hasOvertime = overtimeCount > 0;
+
+                // Find boot and stop hour labels in IST
+                const firstActiveIdx = nodeHours.findIndex(x => x.isActive);
+                const lastActiveIdx = nodeHours.map(x => x.isActive).lastIndexOf(true);
+                const bootHourIST = firstActiveIdx !== -1 ? clusterView.hourlyTimeline[firstActiveIdx]?.istLabel : null;
+                const stopHourIST = lastActiveIdx !== -1 ? clusterView.hourlyTimeline[lastActiveIdx]?.istLabel : null;
+
+                return (
+                  <div
+                    key={(node.resource_id || node.id) + nIdx}
+                    className="p-3.5 sm:p-4 rounded-2xl bg-zorvex-surface/80 dark:bg-zorvex-dark-surface/80 border border-zorvex-border/60 hover:border-emerald-500/40 transition-all space-y-2 hover:shadow-2xs"
                   >
-                    {/* Instance ID */}
-                    <td className="py-2.5 px-3 font-mono font-bold text-zorvex-text dark:text-zorvex-dark-text whitespace-nowrap">
-                      <div className="flex items-center gap-1.5">
-                        <Cpu className="w-3.5 h-3.5 text-zorvex-forest dark:text-emerald-400" />
-                        <span>{n.resource_id}</span>
-                        {n.is_launched_today && (
-                          <span className="px-1.5 py-0.2 rounded text-[9px] font-extrabold bg-emerald-500/20 text-emerald-700 dark:text-emerald-300">
-                            NEW
+                    {/* Header: Node ID & Verdict */}
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <button
+                          type="button"
+                          onClick={() => onSelectResource && onSelectResource({
+                            resource_id: node.resource_id || node.id,
+                            service: isFargate ? 'Amazon ECS' : 'Amazon EC2',
+                            resource_name: node.resource_name || node.name || node.resource_id || node.id,
+                            name: node.resource_name || node.name || node.resource_id || node.id,
+                            total_cost: Number(node.totalCost || node.total_spend || node.cost || 0),
+                            cost: Number(node.cost || node.spend_today || 0),
+                            active_days: 1,
+                            type: node.instance_type || node.type || 'm5.large',
+                            category: isFargate ? 'ECS_TASK' : 'EC2_INSTANCE',
+                            category_label: isFargate ? 'Fargate Task' : 'EC2 Instance',
+                            primary_usage_type: `${node.instance_type || node.type || 'm5.large'} Compute`
+                          })}
+                          className="font-mono font-black text-xs text-zorvex-text dark:text-zorvex-dark-text hover:text-zorvex-forest dark:hover:text-emerald-400 flex items-center gap-1.5 cursor-pointer group"
+                          title={`Click to open drawer for ${node.resource_id || node.id}`}
+                        >
+                          <Cpu className={`w-3.5 h-3.5 ${isRunning ? 'text-emerald-500' : 'text-zinc-400'}`} />
+                          <span>{node.resource_id || node.id}</span>
+                          <ArrowUpRight className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity text-zorvex-forest" />
+                        </button>
+
+                        {node.resource_name && node.resource_name !== (node.resource_id || node.id) && (
+                          <span className="text-[11px] font-sans font-medium text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary">
+                            ({node.resource_name})
                           </span>
                         )}
-                        {n.is_terminated_today && (
-                          <span className="px-1.5 py-0.2 rounded text-[9px] font-extrabold bg-amber-500/20 text-amber-700 dark:text-amber-300">
-                            TERMINATED
+
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-zorvex-surface-secondary text-zorvex-text-secondary border border-zorvex-border dark:border-zorvex-dark-border">
+                          {node.instance_type || node.type || 'm5.large'}
+                        </span>
+
+                        {isRunning ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-extrabold bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                            <span>RUNNING</span>
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-zinc-500/15 text-zinc-500">
+                            STOPPED
                           </span>
                         )}
                       </div>
-                    </td>
 
-                    {/* Name */}
-                    <td className="py-2.5 px-3 font-medium text-zorvex-text dark:text-zorvex-dark-text whitespace-nowrap max-w-[200px] truncate" title={n.resource_name}>
-                      {n.resource_name || n.resource_id}
-                    </td>
+                      {/* Right: Plain-English Verdict & Cost (Zero Emojis!) */}
+                      <div className="flex items-center gap-2.5 text-xs">
+                        {activeCount === 0 ? (
+                          <span className="text-[11px] font-bold text-zinc-400 flex items-center gap-1">
+                            <Moon className="w-3.5 h-3.5 text-zinc-400" />
+                            <span>Clean Shutdown (0h · $0.00)</span>
+                          </span>
+                        ) : scheduleMode === '24_7' ? (
+                          <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+                            <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
+                            <span>24/7 Production SLA</span>
+                          </span>
+                        ) : isTodayOffDay ? (
+                          <span className="text-[11px] font-bold text-rose-600 dark:text-rose-400 flex items-center gap-1">
+                            <AlertTriangle className="w-3.5 h-3.5 text-rose-500" />
+                            <span>Off-Day Run (+{activeCount}h leak)</span>
+                          </span>
+                        ) : hasOvertime ? (
+                          <span className="text-[11px] font-black text-[#EA580C] flex items-center gap-1">
+                            <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
+                            <span>Stopped at {stopHourIST} IST (+{overtimeCount}h Overtime)</span>
+                          </span>
+                        ) : (
+                          <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
+                            <span>On Schedule ({bootHourIST} – {stopHourIST} IST)</span>
+                          </span>
+                        )}
 
-                    {/* Status */}
-                    <td className="py-2.5 px-3 whitespace-nowrap">
-                      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                        n.status === 'RUNNING'
-                          ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
-                          : 'bg-zorvex-border/50 text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary'
-                      }`}>
-                        <span className={`w-1.5 h-1.5 rounded-full ${n.status === 'RUNNING' ? 'bg-emerald-500' : 'bg-gray-400'}`} />
-                        {n.status || 'RUNNING'}
-                      </span>
-                    </td>
-
-                    {/* Lifecycle Window */}
-                    <td className="py-2.5 px-3 font-mono text-[11px] text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary whitespace-nowrap">
-                      {n.first_seen_date || '2026-10-01'} &rarr; {n.last_seen_date || '2026-10-16'}
-                    </td>
-
-                    {/* Spend Today */}
-                    <td className="py-2.5 px-3 text-right font-mono font-bold text-zorvex-text dark:text-zorvex-dark-text whitespace-nowrap">
-                      ${Number(n.spend_today || 0).toFixed(2)}
-                    </td>
-
-                    {/* Overtime Spend */}
-                    <td className="py-2.5 px-3 text-right font-mono whitespace-nowrap">
-                      {Number(n.overtime_spend_today || 0) > 0 ? (
-                        <span className="font-bold text-[#C85A32]">
-                          ${Number(n.overtime_spend_today || 0).toFixed(2)}
+                        <span className="font-mono font-black text-xs text-zorvex-forest dark:text-emerald-400 border-l border-zorvex-border/60 pl-2">
+                          ${totalNodeCost.toFixed(3)}
                         </span>
-                      ) : (
-                        <span className="text-zorvex-text-secondary">
-                          $0.00
-                        </span>
-                      )}
-                    </td>
+                      </div>
+                    </div>
 
-                    {/* Total Spend */}
-                    <td className="py-2.5 px-3 text-right font-mono text-zorvex-text dark:text-zorvex-dark-text whitespace-nowrap">
-                      ${Number(n.total_spend || n.spend_today || 0).toFixed(2)}
-                    </td>
+                    {/* Smooth Continuous Gantt Bar (Sleek Clay Recessed Channel + Styled Gradients) */}
+                    <div 
+                      className="w-full h-8 rounded-xl p-1 bg-zinc-100/90 dark:bg-zinc-900/70 border border-zorvex-border/50 shadow-inner overflow-hidden relative"
+                      style={{ display: 'grid', gridTemplateColumns: 'repeat(24, minmax(0, 1fr))' }}
+                    >
+                      {nodeHours.map((h, hIdx) => {
+                        let cellBg = 'bg-transparent';
+                        const isPrevActive = hIdx > 0 && nodeHours[hIdx - 1]?.isActive;
+                        const isNextActive = hIdx < 23 && nodeHours[hIdx + 1]?.isActive;
+                        const isFirstActive = h.isActive && !isPrevActive;
+                        const isLastActive = h.isActive && !isNextActive;
+                        const isTransition = h.isActive && isNextActive && !h.isOvertime && nodeHours[hIdx + 1]?.isOvertime;
 
-                    {/* Action */}
-                    <td className="py-2.5 px-3 text-center whitespace-nowrap">
-                      <button
-                        type="button"
-                        onClick={() => onSelectResource && onSelectResource({
-  resource_id: n.resource_id,
-  service: serviceName || 'Amazon EC2',
-  resource_name: n.resource_name,
-  name: n.resource_name || n.resource_id,
-  total_cost: Number(n.total_spend || n.spend_today || 0),
-  cost: Number(n.spend_today || 0),
-  active_days: n.active_days || 1,
-  category: 'EC2_INSTANCE',
-  category_label: 'EC2 Instance',
-  primary_usage_type: `${n.instance_type || 'm5.large'} BoxUsage`
-})}
-                        className="px-2.5 py-1 rounded-md text-[10px] font-bold clay-button text-zorvex-text dark:text-zorvex-dark-text inline-flex items-center gap-1 hover:text-zorvex-forest dark:hover:text-emerald-400"
-                      >
-                        <span>Inspect</span>
-                        <ArrowUpRight className="w-2.5 h-2.5" />
-                      </button>
+                        if (h.isActive) {
+                          cellBg = h.isOvertime 
+                            ? 'bg-[repeating-linear-gradient(45deg,#EA580C,#EA580C_4px,#C2410C_4px,#C2410C_8px)] shadow-xs' 
+                            : 'bg-gradient-to-r from-emerald-500 to-teal-500 shadow-xs';
+                        }
+
+                        const isHov = hoveredHour === hIdx;
+
+                        return (
+                          <div
+                            key={hIdx}
+                            onMouseEnter={() => setHoveredHour(hIdx)}
+                            onMouseLeave={() => setHoveredHour(null)}
+                            className={`h-full transition-all cursor-pointer relative ${cellBg} ${
+                              isFirstActive ? 'rounded-l-lg' : ''
+                            } ${
+                              isLastActive ? 'rounded-r-lg' : ''
+                            } ${
+                              isTransition ? 'border-r-2 border-white/80' : ''
+                            } ${
+                              isHov ? 'brightness-125 ring-2 ring-white/95 scale-[1.04] z-20 shadow-md' : ''
+                            }`}
+                            title={`${clusterView.hourlyTimeline[hIdx]?.istLabel} IST (${clusterView.hourlyTimeline[hIdx]?.hour} UTC): ${
+                              h.isActive 
+                                ? (h.isOvertime ? 'Overtime Leak Outside Scheduled SLA' : 'Scheduled Active Window') 
+                                : 'Inactive / Dormant'
+                            }`}
+                          />
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        )}
+
+        {/* View Mode 2: DATADOG STYLE CAPACITY WAVE */}
+        {timelineViewMode === 'WAVE' && (
+          <div className="relative h-56 sm:h-64 w-full pt-1 pb-1">
+            {totalActiveNodesToday === 0 && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center p-4 bg-zorvex-surface/85 dark:bg-zorvex-dark-surface/85 backdrop-blur-xs rounded-xl border border-dashed border-zorvex-border z-10 text-center animate-in fade-in duration-200">
+                <div className="w-10 h-10 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 flex items-center justify-center mb-1 shadow-2xs">
+                  <Moon className="w-5 h-5" />
+                </div>
+                <h4 className="text-xs font-black text-zorvex-text dark:text-zorvex-dark-text uppercase tracking-wide">
+                  Cluster Cleanly Shut Down (0 Active Worker Nodes)
+                </h4>
+                <p className="text-[11px] text-zorvex-text-secondary mt-0.5 max-w-lg leading-relaxed">
+                  No EC2 worker nodes ran on this date ({formatDateWithDayIST(effectiveDate)}). Only the EKS Control Plane fee was billed ($2.40/day).
+                </p>
+              </div>
+            )}
+            <Line data={areaWaveData} options={areaWaveOptions} />
+          </div>
+        )}
+
+        {/* View Mode 3: DETAILED INVENTORY TABLE */}
+        {timelineViewMode === 'TABLE' && (
+          <div className="overflow-x-auto rounded-2xl border border-zorvex-border/50 dark:border-zorvex-dark-border/50">
+            <table className="w-full text-left text-xs font-mono">
+              <thead className="bg-zorvex-surface dark:bg-zorvex-dark-surface/80 border-b border-zorvex-border text-[10px] font-bold text-zorvex-text-secondary uppercase tracking-wider">
+                <tr>
+                  <th className="py-3 px-3.5">{serviceKey === 'ECS' ? 'Task ID' : 'Worker Node / Instance ID'}</th>
+                  <th className="py-3 px-3.5">Workload Name</th>
+                  <th className="py-3 px-3.5">Instance Specs</th>
+                  <th className="py-3 px-3.5">Status</th>
+                  <th className="py-3 px-3.5">Operating Verdict</th>
+                  <th className="py-3 px-3.5 text-right">Billed Cost</th>
+                  <th className="py-3 px-3.5 text-center">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zorvex-border/30 dark:divide-zorvex-dark-border/30">
+                {filteredFleet.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="py-8 text-center text-zorvex-text-secondary">
+                      No cluster compute nodes found matching "{nodeSearch || fleetFilter}".
                     </td>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
+                ) : (
+                  filteredFleet.map((n, idx) => {
+                    const isRunning = n.isRunning;
+                    const isFargate = n.isFargate;
+
+                    return (
+                      <tr
+                        key={(n.resource_id || n.id) + idx}
+                        className="hover:bg-zorvex-surface/60 dark:hover:bg-zorvex-dark-surface/60 transition-colors"
+                      >
+                        <td className="py-3 px-3.5 font-bold text-zorvex-text dark:text-zorvex-dark-text whitespace-nowrap">
+                          <button
+                            type="button"
+                            onClick={() => onSelectResource && onSelectResource({
+                              resource_id: n.resource_id || n.id,
+                              service: isFargate ? 'Amazon ECS' : 'Amazon EC2',
+                              resource_name: n.resource_name || n.name || n.resource_id || n.id,
+                              name: n.resource_name || n.name || n.resource_id || n.id,
+                              total_cost: Number(n.totalCost || n.total_spend || n.cost || 0),
+                              cost: Number(n.cost || n.spend_today || 0),
+                              active_days: 1,
+                              type: n.instance_type || n.type || 'm5.large',
+                              category: isFargate ? 'ECS_TASK' : 'EC2_INSTANCE',
+                              category_label: isFargate ? 'Fargate Task' : 'EC2 Instance',
+                              primary_usage_type: `${n.instance_type || n.type || 'm5.large'} Compute`
+                            })}
+                            className="flex items-center gap-1.5 hover:underline text-left cursor-pointer group"
+                            title="Inspect in Resource Drawer"
+                          >
+                            {isFargate ? (
+                              <ServerlessLambdaIcon className="w-3.5 h-3.5 text-amber-500" />
+                            ) : (
+                              <Cpu className={`w-3.5 h-3.5 ${isRunning ? 'text-emerald-500' : 'text-zinc-400'}`} />
+                            )}
+                            <span className="group-hover:text-zorvex-forest font-extrabold font-mono text-zorvex-text dark:text-zorvex-dark-text">
+                              {n.resource_id || n.id}
+                            </span>
+                          </button>
+                        </td>
+
+                        <td className="py-3 px-3.5 whitespace-nowrap">
+                          <div className="font-semibold text-zorvex-text dark:text-zorvex-dark-text text-[11px] truncate max-w-[220px]">
+                            {n.resource_name || n.name || n.resource_id || n.id}
+                          </div>
+                          <div className="text-[10px] text-zorvex-text-secondary font-sans font-medium">
+                            {isFargate ? 'AWS Fargate Task' : 'Managed EC2 Node Group'}
+                          </div>
+                        </td>
+
+                        <td className="py-3 px-3.5 text-zorvex-text-secondary whitespace-nowrap font-sans text-xs font-semibold">
+                          {n.instance_type || n.type || 'm5.large'}
+                        </td>
+
+                        <td className="py-3 px-3.5 whitespace-nowrap">
+                          {isRunning ? (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
+                              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                              <span>RUNNING</span>
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-zinc-500/15 text-zinc-600 dark:text-zinc-400">
+                              <span>STOPPED</span>
+                            </span>
+                          )}
+                        </td>
+
+                        <td className="py-3 px-3.5 whitespace-nowrap">
+                          <span className={`text-[11px] font-bold ${
+                            n.isNodeOvertime ? 'text-[#EA580C]' : 'text-emerald-700 dark:text-emerald-400'
+                          }`}>
+                            {n.reason}
+                          </span>
+                        </td>
+
+                        <td className="py-3 px-3.5 text-right font-black text-zorvex-forest dark:text-emerald-400 whitespace-nowrap">
+                          ${Number(n.cost || 0).toFixed(3)}
+                        </td>
+
+                        <td className="py-3 px-3.5 text-center whitespace-nowrap">
+                          <button
+                            type="button"
+                            onClick={() => onSelectResource && onSelectResource({
+                              resource_id: n.resource_id || n.id,
+                              service: isFargate ? 'Amazon ECS' : 'Amazon EC2',
+                              resource_name: n.resource_name || n.name || n.resource_id || n.id,
+                              name: n.resource_name || n.name || n.resource_id || n.id,
+                              total_cost: Number(n.totalCost || n.total_spend || n.cost || 0),
+                              cost: Number(n.cost || n.spend_today || 0),
+                              active_days: 1,
+                              type: n.instance_type || n.type || 'm5.large',
+                              category: isFargate ? 'ECS_TASK' : 'EC2_INSTANCE',
+                              category_label: isFargate ? 'Fargate Task' : 'EC2 Instance',
+                              primary_usage_type: `${n.instance_type || n.type || 'm5.large'} Compute`
+                            })}
+                            className="p-1.5 rounded-lg text-zorvex-text-secondary hover:text-zorvex-text hover:bg-zorvex-surface-secondary transition-all cursor-pointer inline-flex items-center justify-center"
+                            title="Inspect in Resource Drawer"
+                          >
+                            <ArrowUpRight className="w-3.5 h-3.5" />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -44,6 +44,7 @@ class TestPhase7RootCauseAndCache(unittest.TestCase):
     def setUp(self):
         # Reset local cache instance for deterministic unit testing
         self.test_cache = ZorvexDualTierCache(max_memory_entries=50)
+        self.test_cache.clear()
 
     def test_01_root_cause_variance_decomposition(self):
         """Verifies Day-over-Day variance attribution decomposes into exact categories."""

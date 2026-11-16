@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import {
   Server,
@@ -36,6 +36,7 @@ import {
 import { api } from '../services/api';
 import ClayDropdown from './common/ClayDropdown';
 import ClusterLifecycleCard from './common/ClusterLifecycleCard';
+import ClusterMeshIcon from './common/ClusterMeshIcon';
 import AwsServiceIcon from './common/AwsServiceIcon';
 import { getAwsServiceColor } from '../utils/awsServiceColors';
 import {
@@ -66,14 +67,14 @@ const KNOWN_SERVICES_META = {
   'Amazon EKS': {
     title: 'Amazon EKS',
     subtitle: 'Managed Kubernetes Clusters',
-    icon: Layers,
+    icon: ClusterMeshIcon,
     defaultCategory: 'ALL',
     description: 'Managed Kubernetes control planes, container worker nodes, and pod telemetry.'
   },
   'AmazonEKS': {
     title: 'Amazon EKS',
     subtitle: 'Managed Kubernetes Clusters',
-    icon: Layers,
+    icon: ClusterMeshIcon,
     defaultCategory: 'ALL',
     description: 'Managed Kubernetes control planes, container worker nodes, and pod telemetry.'
   },
@@ -401,7 +402,9 @@ export default function ServiceExplorer({
   const [clusterData, setClusterData] = useState(null);
   const [clusterLoading, setClusterLoading] = useState(false);
   const [clusterDate, setClusterDate] = useState('');
-  const [clusterCutoff, setClusterCutoff] = useState('18:00');
+  const [clusterCutoff, setClusterCutoff] = useState('24:00');
+  const [selectedClusterName, setSelectedClusterName] = useState('dev-eks-cluster');
+  const lastFetchedClusterParamsRef = useRef('');
   const [accountFilter, setAccountFilter] = useState(selectedAccount || 'all');
   const [regionFilter, setRegionFilter] = useState('all');
   const [minCost, setMinCost] = useState('');
@@ -501,9 +504,26 @@ export default function ServiceExplorer({
   // Total Portfolio Spend
   const totalPortfolioSpend = overview?.total_cost || overview?.net_cost || 0;
   const rawServices = overview?.services || {};
-  const effectiveServices = (rawServices && Object.keys(rawServices).length > 1)
-    ? rawServices
-    : (masterServiceCosts && Object.keys(masterServiceCosts).length > 0 ? masterServiceCosts : rawServices);
+  const effectiveServices = useMemo(() => {
+    const merged = { ...(masterServiceCosts || {}) };
+    if (rawServices && typeof rawServices === 'object') {
+      Object.keys(rawServices).forEach(k => {
+        const val = rawServices[k];
+        merged[k] = val;
+        merged[k.replace(/\s+/g, '')] = val;
+        merged[k.replace(/([a-z])([A-Z])/g, '$1 $2')] = val;
+        if (k.toLowerCase().includes('eks')) {
+          merged['Amazon EKS'] = val;
+          merged['AmazonEKS'] = val;
+        }
+        if (k.toLowerCase().includes('ecs')) {
+          merged['Amazon ECS'] = val;
+          merged['AmazonECS'] = val;
+        }
+      });
+    }
+    return merged;
+  }, [masterServiceCosts, rawServices]);
 
   // Comprehensive, Dynamic Service Catalog from real CUR Telemetry
   const serviceCatalog = useMemo(() => {
@@ -567,6 +587,20 @@ export default function ServiceExplorer({
         description: `Authoritative CUR billing telemetry for ${sName}.`
       };
 
+      let svcSpend = effectiveServices[sName];
+      if (svcSpend === undefined) svcSpend = effectiveServices[meta.title];
+      if (svcSpend === undefined) svcSpend = effectiveServices[sName.replace(/\s+/g, '')];
+
+      // If user selected this specific service in global filters, spend must never exceed or desync from totalPortfolioSpend
+      const isFilteredMatch = selectedService && selectedService !== 'All' && (
+        selectedService.toLowerCase() === sName.toLowerCase() ||
+        selectedService.toLowerCase() === (meta.title || '').toLowerCase() ||
+        selectedService.replace(/\s+/g, '').toLowerCase() === sName.replace(/\s+/g, '').toLowerCase()
+      );
+      if (isFilteredMatch && totalPortfolioSpend > 0 && (svcSpend === undefined || svcSpend === 0 || svcSpend > totalPortfolioSpend)) {
+        svcSpend = totalPortfolioSpend;
+      }
+
       dynamicItems.push({
         key: sName.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, ''),
         title: meta.title,
@@ -574,7 +608,7 @@ export default function ServiceExplorer({
         icon: meta.icon,
         backendService: sName,
         defaultCategory: meta.defaultCategory,
-        spend: effectiveServices[sName] || 0,
+        spend: svcSpend || 0,
         description: meta.description
       });
     });
@@ -645,20 +679,33 @@ export default function ServiceExplorer({
   useEffect(() => {
     if (!isClusterEligibleService) return;
 
+    const svc = activeService?.backendService || activeService?.title || 'Amazon EKS';
+    const cName = selectedClusterName || 'dev-eks-cluster';
+    const cCut = clusterCutoff || '24:00';
+    const dId = activeDataset || '';
+    const paramsKey = `${svc}_${cName}_${clusterDate}_${cCut}_${dId}`;
+
+    // Optimization: Skip redundant duplicate network call if params haven't changed
+    if (lastFetchedClusterParamsRef.current === paramsKey) return;
+
     let isMounted = true;
     setClusterLoading(true);
 
     api
       .getClusterTelemetry({
-        service: activeService?.backendService || activeService?.title || 'Amazon EKS',
+        service: svc,
+        clusterName: cName,
         targetDate: clusterDate || undefined,
-        cutoffHour: clusterCutoff || '18:00',
-        datasetId: activeDataset || undefined
+        cutoffHour: cCut,
+        datasetId: dId || undefined
       })
       .then((data) => {
         if (!isMounted) return;
+        lastFetchedClusterParamsRef.current = paramsKey;
         setClusterData(data);
         if (!clusterDate && data.target_date) {
+          // Pre-populate ref so that setting clusterDate does not cause a second duplicate network fetch
+          lastFetchedClusterParamsRef.current = `${svc}_${cName}_${data.target_date}_${cCut}_${dId}`;
           setClusterDate(data.target_date);
         }
       })
@@ -672,7 +719,7 @@ export default function ServiceExplorer({
     return () => {
       isMounted = false;
     };
-  }, [isClusterEligibleService, activeServiceKey, activeService, clusterDate, clusterCutoff, activeDataset]);
+  }, [isClusterEligibleService, activeServiceKey, activeService, clusterDate, clusterCutoff, activeDataset, selectedClusterName]);
 
   // Two-way synchronization with external selectedService
   useEffect(() => {
@@ -815,6 +862,7 @@ export default function ServiceExplorer({
       ? resItem.cost
       : parseFloat(String(resItem.cost || resItem.spend_today || '0').replace('$', '')) || 0;
 
+    const fallbackDate = resItem.last_seen ? resItem.last_seen.split(' ')[0] : (resItem.first_seen ? resItem.first_seen.split(' ')[0] : (resItem.date || ''));
     const safeItem = {
       resource_id: resItem.resource_id,
       service: resItem.service || 'Amazon EC2',
@@ -830,7 +878,7 @@ export default function ServiceExplorer({
       category: resItem.category || 'EC2_INSTANCE',
       category_label: resItem.category_label || (resItem.service === 'Amazon EKS' ? 'EKS Cluster Control Plane' : 'EC2 Instance'),
       primary_usage_type: resItem.primary_usage_type || `${resItem.type || 'm5.large'} BoxUsage`,
-      daily_costs: resItem.daily_costs || { '2026-10-15': safeCost },
+      daily_costs: resItem.daily_costs || (fallbackDate ? { [fallbackDate]: safeCost } : {}),
       ...resItem
     };
 
@@ -864,13 +912,13 @@ export default function ServiceExplorer({
         lifecycle_status: 'RUNNING',
         lifecycle_label: 'Active Compute Instance',
         primary_usage_type: safeItem.primary_usage_type,
-        daily_costs: Object.keys(safeItem.daily_costs || {}).length > 0 ? safeItem.daily_costs : { '2026-10-15': safeCost },
+        daily_costs: Object.keys(safeItem.daily_costs || {}).length > 0 ? safeItem.daily_costs : (fallbackDate ? { [fallbackDate]: safeCost } : {}),
         usage_breakdown: [
           { usage_type: safeItem.primary_usage_type, cost: safeCost }
         ],
         line_items: [
           {
-            date: '2026-10-15',
+            date: fallbackDate || 'Usage',
             line_item_type: 'Usage',
             usage_type: safeItem.primary_usage_type,
             operation: 'RunInstances',
@@ -981,7 +1029,7 @@ export default function ServiceExplorer({
   const finOpsOpportunity = useMemo(() => getFinOpsOpportunity(activeService), [activeService]);
   const activeServiceColor = useMemo(() => getAwsServiceColor(activeService.title || activeService.key), [activeService]);
 
-  const serviceChartData = {
+  const serviceChartData = useMemo(() => ({
     labels: trendDates.map((d) => d.slice(5)),
     datasets: [
       {
@@ -989,7 +1037,8 @@ export default function ServiceExplorer({
         data: serviceDailySpend.length > 0 ? serviceDailySpend : trendDates.map(() => 0),
         borderColor: activeServiceColor,
         backgroundColor: (context) => {
-          const ctx = context.chart.ctx;
+          const ctx = context.chart?.ctx;
+          if (!ctx) return `${activeServiceColor}15`;
           const gradient = ctx.createLinearGradient(0, 0, 0, 220);
           gradient.addColorStop(0, `${activeServiceColor}33`);
           gradient.addColorStop(1, `${activeServiceColor}03`);
@@ -1004,9 +1053,9 @@ export default function ServiceExplorer({
         pointHoverRadius: 6
       }
     ]
-  };
+  }), [trendDates, serviceDailySpend, activeService.title, activeServiceColor, chartBg]);
 
-  const serviceChartOptions = {
+  const serviceChartOptions = useMemo(() => ({
     responsive: true,
     maintainAspectRatio: false,
     devicePixelRatio: Math.min(typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1, 2),
@@ -1045,7 +1094,7 @@ export default function ServiceExplorer({
         }
       }
     }
-  };
+  }), [isDark]);
 
   // Discovered Accounts & Regions
   const rawAccounts = Object.keys(overview?.accounts || {});
@@ -1296,7 +1345,10 @@ export default function ServiceExplorer({
           clusterData={clusterData}
           loading={clusterLoading}
           selectedDate={clusterDate}
+          availableDates={clusterData?.available_dates}
           onDateChange={setClusterDate}
+          selectedCluster={selectedClusterName || clusterData?.active_cluster?.cluster_name || 'dev-eks-cluster'}
+          onSelectCluster={(name) => setSelectedClusterName(name)}
           cutoffHour={clusterCutoff}
           onCutoffChange={setClusterCutoff}
           onSelectResource={openResourceDetail}
@@ -1641,27 +1693,40 @@ export default function ServiceExplorer({
 
           {/* Structured 2-Column Breakdown */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-0.5">
-            {/* Column 1: Active Compute Databases */}
+            {/* Column 1: Active Database Instances */}
             <div className="p-3.5 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary/50 border border-zorvex-border/70 dark:border-zorvex-dark-border/70 space-y-2.5">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <span className="w-2.5 h-2.5 rounded-full bg-zorvex-forest animate-pulse"></span>
-                  <span className="text-xs font-bold text-zorvex-text dark:text-zorvex-dark-text">Active Compute DBs</span>
+                  <span className="text-xs font-bold text-zorvex-text dark:text-zorvex-dark-text">Active Database Instances</span>
                 </div>
                 <span className="px-2 py-0.5 rounded-md text-[11px] font-mono font-black bg-zorvex-forest/15 text-zorvex-forest dark:text-zorvex-forest-highlight border border-zorvex-forest/30">
                   {resourceData.summary.inventory_reconciliation.active_instances} Running
                 </span>
               </div>
               <div className="flex flex-wrap gap-1.5 pt-1">
-                {resourceData.summary.inventory_reconciliation.active_instance_names?.map((name) => (
-                  <span
-                    key={name}
-                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono font-semibold bg-zorvex-surface dark:bg-zorvex-dark-surface text-zorvex-text dark:text-zorvex-dark-text border border-zorvex-border dark:border-zorvex-dark-border shadow-2xs"
-                  >
-                    <span className="w-1.5 h-1.5 rounded-full bg-zorvex-forest"></span>
-                    {name}
-                  </span>
-                ))}
+                {resourceData.summary.inventory_reconciliation.active_instance_names?.map((name) => {
+                  const hasBackup = (resourceData.summary.inventory_reconciliation.active_instances_with_backups || []).includes(name);
+                  return (
+                    <span
+                      key={name}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono font-semibold bg-zorvex-surface dark:bg-zorvex-dark-surface text-zorvex-text dark:text-zorvex-dark-text border border-zorvex-border dark:border-zorvex-dark-border shadow-2xs"
+                      title={hasBackup ? 'Active Database with billed automated backup storage' : 'Active Database (Read Replica / no direct backup surcharge)'}
+                    >
+                      <span className="w-1.5 h-1.5 rounded-full bg-zorvex-forest"></span>
+                      <span>{name}</span>
+                      {hasBackup ? (
+                        <span className="text-[9px] font-sans font-bold px-1.5 py-0.2 rounded bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/25">
+                          Backup Active
+                        </span>
+                      ) : (
+                        <span className="text-[9px] font-sans font-bold px-1.5 py-0.2 rounded bg-blue-500/15 text-blue-700 dark:text-blue-400 border border-blue-500/25">
+                          Read Replica
+                        </span>
+                      )}
+                    </span>
+                  );
+                })}
               </div>
             </div>
 
@@ -1671,10 +1736,10 @@ export default function ServiceExplorer({
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <span className="w-2.5 h-2.5 rounded-full bg-amber-500"></span>
-                    <span className="text-xs font-bold text-zorvex-text dark:text-zorvex-dark-text">Retained Backup Storage Only</span>
+                    <span className="text-xs font-bold text-zorvex-text dark:text-zorvex-dark-text">Retained Automated Backups</span>
                   </div>
                   <span className="px-2 py-0.5 rounded-md text-[11px] font-mono font-black bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/30">
-                    {resourceData.summary.inventory_reconciliation.retained_backups} Terminated Compute
+                    {resourceData.summary.inventory_reconciliation.retained_backups} Decommissioned DBs
                   </span>
                 </div>
                 <div className="flex flex-wrap gap-1.5 pt-1">
@@ -1682,7 +1747,7 @@ export default function ServiceExplorer({
                     <span
                       key={name}
                       className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono font-semibold bg-zorvex-surface dark:bg-zorvex-dark-surface text-zorvex-text-secondary dark:text-zorvex-dark-text-secondary border border-zorvex-border dark:border-zorvex-dark-border shadow-2xs"
-                      title="Historical automated backup storage. Instance compute has been terminated."
+                      title="Historical automated backup storage. Instance compute has been decommissioned."
                     >
                       <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
                       {name}
@@ -1777,7 +1842,7 @@ export default function ServiceExplorer({
                             )}
                             <span>
                               {isExpired
-                                ? `${subCount} Expired Contracts (Expired Oct 14) • View Breakdown`
+                                ? `${subCount} Expired Contracts • View Breakdown`
                                 : `${subCount} Active Contracts Bundled • View Breakdown`
                               }
                             </span>
@@ -1795,12 +1860,17 @@ export default function ServiceExplorer({
                           <Server className="w-2.5 h-2.5" />
                           <span>{item.cluster_nodes.summary_label}</span>
                         </span>
-                        {((item.cluster_nodes.data_nodes?.cost > 0) || (item.cluster_nodes.master_nodes?.cost > 0)) && (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-500/15 text-amber-800 dark:text-amber-300 border border-amber-500/30" title="Reserved Instance expired on Oct 14. Cluster transitioned to unreserved On-Demand compute.">
+                        {item.cluster_nodes.on_demand_badge ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-500/15 text-amber-800 dark:text-amber-300 border border-amber-500/30" title={item.cluster_nodes.on_demand_badge.tooltip}>
                             <AlertTriangle className="w-2.5 h-2.5 text-amber-600" />
-                            <span>On-Demand since Oct 14 (${((item.cluster_nodes.data_nodes?.cost || 0) + (item.cluster_nodes.master_nodes?.cost || 0)).toFixed(2)} compute)</span>
+                            <span>{item.cluster_nodes.on_demand_badge.label}</span>
                           </span>
-                        )}
+                        ) : (((item.cluster_nodes.data_nodes?.cost || 0) + (item.cluster_nodes.master_nodes?.cost || 0)) > 0) ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-500/15 text-amber-800 dark:text-amber-300 border border-amber-500/30" title="Unreserved On-Demand compute.">
+                            <AlertTriangle className="w-2.5 h-2.5 text-amber-600" />
+                            <span>On-Demand (${((item.cluster_nodes.data_nodes?.cost || 0) + (item.cluster_nodes.master_nodes?.cost || 0)).toFixed(2)} compute)</span>
+                          </span>
+                        ) : null}
                       </div>
                     )}
                   </td>
@@ -2047,8 +2117,8 @@ export default function ServiceExplorer({
                 <div className="p-3 rounded-xl bg-zorvex-surface-secondary/40 dark:bg-zorvex-dark-surface-secondary border border-zorvex-border/50">
                   <span className="text-zorvex-text-secondary block text-[10px] font-bold uppercase">Lifecycle Status</span>
                   <span className={`text-xs font-black block break-words ${
-                    (detailData?.lifecycle_status || selectedResource?.lifecycle_status || '').includes('TERMINATED') || (detailData?.lifecycle_status || selectedResource?.lifecycle_status || '').includes('DELETED')
-                      ? 'text-rose-600 dark:text-rose-400'
+                    (detailData?.lifecycle_status || selectedResource?.lifecycle_status || '').includes('STOPPED') || (detailData?.lifecycle_status || selectedResource?.lifecycle_status || '').includes('TERMINATED') || (detailData?.lifecycle_status || selectedResource?.lifecycle_status || '').includes('DELETED')
+                      ? 'text-slate-600 dark:text-slate-400'
                       : 'text-zorvex-forest dark:text-zorvex-forest-highlight'
                   }`} title={detailData?.lifecycle_label || selectedResource?.lifecycle_label || selectedResource?.lifecycle_status || 'Active'}>
                     {detailData?.lifecycle_label || selectedResource?.lifecycle_label || selectedResource?.lifecycle_status || 'Active'}
@@ -2140,7 +2210,9 @@ export default function ServiceExplorer({
                       <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
                       <div className="text-xs leading-relaxed">
                         <span className="font-extrabold block mb-0.5">⚠️ Unreserved On-Demand Compute Charges Active</span>
-                        Cluster transitioned to On-Demand billing (${((selectedResource.cluster_nodes.data_nodes?.cost || 0) + (selectedResource.cluster_nodes.master_nodes?.cost || 0)).toFixed(2)} billed) following Reserved Instance expiration on Oct 14.
+                        {selectedResource.cluster_nodes.on_demand_badge
+                          ? selectedResource.cluster_nodes.on_demand_badge.tooltip
+                          : `Cluster transitioned to On-Demand billing ($${((selectedResource.cluster_nodes.data_nodes?.cost || 0) + (selectedResource.cluster_nodes.master_nodes?.cost || 0)).toFixed(2)} billed).`}
                       </div>
                     </div>
                   )}

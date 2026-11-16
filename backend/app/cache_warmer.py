@@ -68,15 +68,32 @@ class CacheWarmerService:
         ds_key = get_dataset_cache_key(d_rec, repo)
         warmed = []
 
-        # 1. Overview Dashboard
-        ov_key = global_cache.build_key(org_id, ds_key, "overview", s=None, e=None, svc=None, acc=None)
+        # 1. Overview Dashboard (Master Global View)
+        ov_key = global_cache.build_key(org_id, ds_key, "overview_v3", s=None, e=None, svc=None, acc=None)
         def _compute_ov():
             res = repo.get_overview()
             res['data_source'] = 'database'
             res['filename'] = d_rec.filename
             return res
-        global_cache.get_or_compute(ov_key, _compute_ov, ttl=1800)
+        master_ov = global_cache.get_or_compute(ov_key, _compute_ov, ttl=1800)
         warmed.append('overview')
+
+        # 1B. Pre-warm Overview for Top 3 Cloud Services
+        if master_ov and isinstance(master_ov, dict):
+            top_services = [s for s in list(master_ov.get('services', {}).keys())[:3] if s not in ('all', '')]
+            for svc_name in top_services:
+                svc_key = global_cache.build_key(org_id, ds_key, "overview_v3", s=None, e=None, svc=svc_name, acc=None)
+                global_cache.get_or_compute(svc_key, lambda s=svc_name: repo.get_overview(service=s), ttl=1800)
+                warmed.append(f'overview_{svc_name}')
+
+            # 1C. Pre-warm Default Comparison Variance
+            comp_def = master_ov.get('default_comparison') or {}
+            b_date = comp_def.get('baseline_date')
+            t_date = comp_def.get('target_date')
+            if b_date and t_date:
+                comp_key = global_cache.build_key(org_id, ds_key, "compare_spending", b=b_date, t=t_date, acc=None)
+                global_cache.get_or_compute(comp_key, lambda: repo.compare_dates(b_date, t_date, account_id=None), ttl=1800)
+                warmed.append('default_compare_spending')
 
         # 2. Trends Analysis
         trends_key = global_cache.build_key(org_id, ds_key, "trends", s=None, e=None)
